@@ -1,10 +1,337 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.17763.0</TargetFramework>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <nexoSdkBinPath>C:\Users\tomasz.bloch\SDKnexo\nexoSDK_58.0.2.8985\Bin\</nexoSdkBinPath>
+    <nexoSdkNarzedziaPath>C:\Users\tomasz.bloch\SDKnexo\nexoSDK_58.0.2.8985\Narzedzia\</nexoSdkNarzedziaPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <UseWPF>true</UseWPF>
+	<UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
-
+  <ItemGroup>
+    <None Include="Konfiguracja.xml" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="DotNetEnv" Version="3.1.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="Google.Apis.Calendar.v3">
+      <HintPath>NexoDLLs\Google.Apis.Calendar.v3.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Devices.Server.Client.WebAPI">
+      <HintPath>NexoDLLs\InsERT.Devices.Server.Client.WebAPI.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Devices.Server.WebAPI.Core">
+      <HintPath>NexoDLLs\InsERT.Devices.Server.WebAPI.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Moria.API">
+      <HintPath>NexoDLLs\InsERT.Moria.API.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Moria.Components.UI">
+      <HintPath>NexoDLLs\InsERT.Moria.Components.UI.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Moria.Components.UI.Configuration">
+      <HintPath>NexoDLLs\InsERT.Moria.Components.UI.Configuration.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Moria.Dokumenty.SQL">
+      <HintPath>NexoDLLs\InsERT.Moria.Dokumenty.SQL.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Moria.DokumentyDoKsiegowania">
+      <HintPath>NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Moria.DokumentyDoKsiegowania.Configuration">
+      <HintPath>NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.Configuration.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Moria.DokumentyDoKsiegowania.UI">
+      <HintPath>NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.UI.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Moria.DokumentyDoKsiegowania.UI.Configuration">
+      <HintPath>NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.UI.Configuration.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Moria.DokumentyDoKsiegowania.Wspomaganie">
+      <HintPath>NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.Wspomaganie.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Moria.DokumentyDoKsiegowania.Wspomaganie.UI">
+      <HintPath>NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.Wspomaganie.UI.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Moria.ModelDanych">
+      <HintPath>NexoDLLs\InsERT.Moria.ModelDanych.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Moria.Sfera">
+      <HintPath>NexoDLLs\InsERT.Moria.Sfera.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Mox.Core">
+      <HintPath>NexoDLLs\InsERT.Mox.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Mox.EntityFramework.Core">
+      <HintPath>NexoDLLs\InsERT.Mox.EntityFramework.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.Mox.EntityFrameworkSupport">
+      <HintPath>NexoDLLs\InsERT.Mox.EntityFrameworkSupport.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Auth.Abstractions">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Auth.Abstractions.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.ChangeLog">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.ChangeLog.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Couriers">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Couriers.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.CustomerSubmissions">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.CustomerSubmissions.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.DocumentExchange">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.DocumentExchange.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Documents">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Documents.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Documents.KITokenAuth">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Documents.KITokenAuth.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.ESubscription">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.ESubscription.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Exceptions">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Exceptions.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.ExchangeRates">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.ExchangeRates.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Ferfs">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Ferfs.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.GovConnectors">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.GovConnectors.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.InsMail">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.InsMail.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.InsMonitor">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.InsMonitor.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Ki">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Ki.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.KSeF2.Core">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.KSeF2.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.KSeF2.InvoiceRead">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.KSeF2.InvoiceRead.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.KSeF2.InvoiceWrite">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.KSeF2.InvoiceWrite.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.KSeFService">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.KSeFService.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Licenses">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Licenses.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Parameters">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Parameters.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Push.Filter">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Push.Filter.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Push.Receive">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Push.Receive.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.ServiceOrders">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.ServiceOrders.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Sts">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Sts.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Sts.Soap">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Sts.Soap.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Sts.VM.3.0.17">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Sts.VM.3.0.17.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Telemetry">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Telemetry.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.Telemetry.Desktop">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.Telemetry.Desktop.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Client.WalletAgent">
+      <HintPath>NexoDLLs\InsERT.WebServices.Client.WalletAgent.dll</HintPath>
+    </Reference>
+    <Reference Include="InsERT.WebServices.Extensions.Http">
+      <HintPath>NexoDLLs\InsERT.WebServices.Extensions.Http.dll</HintPath>
+    </Reference>
+    <Reference Include="MailBee.NET">
+      <HintPath>NexoDLLs\MailBee.NET.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Bcl.AsyncInterfaces">
+      <HintPath>NexoDLLs\Microsoft.Bcl.AsyncInterfaces.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Bcl.HashCode">
+      <HintPath>NexoDLLs\Microsoft.Bcl.HashCode.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis">
+      <HintPath>NexoDLLs\Microsoft.CodeAnalysis.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.CSharp">
+      <HintPath>NexoDLLs\Microsoft.CodeAnalysis.CSharp.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.VisualBasic">
+      <HintPath>NexoDLLs\Microsoft.CodeAnalysis.VisualBasic.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Data.SqlClient">
+      <HintPath>NexoDLLs\Microsoft.Data.SqlClient.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Data.Sqlite">
+      <HintPath>NexoDLLs\Microsoft.Data.Sqlite.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Extensions.DependencyInjection">
+      <HintPath>NexoDLLs\Microsoft.Extensions.DependencyInjection.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Extensions.DependencyInjection.Abstractions">
+      <HintPath>NexoDLLs\Microsoft.Extensions.DependencyInjection.Abstractions.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Extensions.Diagnostics">
+      <HintPath>NexoDLLs\Microsoft.Extensions.Diagnostics.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Extensions.Http">
+      <HintPath>NexoDLLs\Microsoft.Extensions.Http.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Extensions.Logging">
+      <HintPath>NexoDLLs\Microsoft.Extensions.Logging.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Extensions.Logging.Abstractions">
+      <HintPath>NexoDLLs\Microsoft.Extensions.Logging.Abstractions.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Extensions.Options">
+      <HintPath>NexoDLLs\Microsoft.Extensions.Options.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Identity.Client">
+      <HintPath>NexoDLLs\Microsoft.Identity.Client.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.IdentityModel.Abstractions">
+      <HintPath>NexoDLLs\Microsoft.IdentityModel.Abstractions.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.IdentityModel.JsonWebTokens">
+      <HintPath>NexoDLLs\Microsoft.IdentityModel.JsonWebTokens.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.IdentityModel.Logging">
+      <HintPath>NexoDLLs\Microsoft.IdentityModel.Logging.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.IdentityModel.Tokens">
+      <HintPath>NexoDLLs\Microsoft.IdentityModel.Tokens.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.IO.RecyclableMemoryStream">
+      <HintPath>NexoDLLs\Microsoft.IO.RecyclableMemoryStream.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Practices.Unity">
+      <HintPath>NexoDLLs\Microsoft.Practices.Unity.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.SqlServer.Server">
+      <HintPath>NexoDLLs\Microsoft.SqlServer.Server.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.SqlServer.TransactSql.ScriptDom">
+      <HintPath>NexoDLLs\Microsoft.SqlServer.TransactSql.ScriptDom.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Toolkit.Uwp.Notifications">
+      <HintPath>NexoDLLs\Microsoft.Toolkit.Uwp.Notifications.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Web.WebView2.Core">
+      <HintPath>NexoDLLs\Microsoft.Web.WebView2.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Web.WebView2.Wpf">
+      <HintPath>NexoDLLs\Microsoft.Web.WebView2.Wpf.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Win32.TaskScheduler">
+      <HintPath>NexoDLLs\Microsoft.Win32.TaskScheduler.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Xades">
+      <HintPath>NexoDLLs\Microsoft.Xades.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Xaml.Behaviors">
+      <HintPath>NexoDLLs\Microsoft.Xaml.Behaviors.dll</HintPath>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>NexoDLLs\Newtonsoft.Json.dll</HintPath>
+    </Reference>
+    <Reference Include="NLog">
+      <HintPath>NexoDLLs\NLog.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.Base">
+      <HintPath>NexoDLLs\Stimulsoft.Base.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.Blockly">
+      <HintPath>NexoDLLs\Stimulsoft.Blockly.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.BlocklyEditor.Wpf">
+      <HintPath>NexoDLLs\Stimulsoft.BlocklyEditor.Wpf.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.Client.Designer">
+      <HintPath>NexoDLLs\Stimulsoft.Client.Designer.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.Controls.Wpf">
+      <HintPath>NexoDLLs\Stimulsoft.Controls.Wpf.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.Data">
+      <HintPath>NexoDLLs\Stimulsoft.Data.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.Database.Wpf">
+      <HintPath>NexoDLLs\Stimulsoft.Database.Wpf.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.Editor.Wpf">
+      <HintPath>NexoDLLs\Stimulsoft.Editor.Wpf.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.Map">
+      <HintPath>NexoDLLs\Stimulsoft.Map.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.Report">
+      <HintPath>NexoDLLs\Stimulsoft.Report.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.Report.Check">
+      <HintPath>NexoDLLs\Stimulsoft.Report.Check.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.Report.Helper">
+      <HintPath>NexoDLLs\Stimulsoft.Report.Helper.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.Report.Wpf">
+      <HintPath>NexoDLLs\Stimulsoft.Report.Wpf.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.Report.WpfDesign">
+      <HintPath>NexoDLLs\Stimulsoft.Report.WpfDesign.dll</HintPath>
+    </Reference>
+    <Reference Include="Stimulsoft.Svg">
+      <HintPath>NexoDLLs\Stimulsoft.Svg.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Data.SqlClient">
+      <HintPath>NexoDLLs\System.Data.SqlClient.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Management">
+      <HintPath>NexoDLLs\System.Management.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <None Update=".env">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="Microsoft.Data.SqlClient.SNI.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <PropertyGroup>
+      <PostBuildCommands>
+        <![CDATA[
+copy /y "$(nexoSdkBinPath)Xml.pak" "$(TargetDir)\Xml.pak"
+copy /y "$(nexoSdkBinPath)ijwhost.dll" "$(TargetDir)\ijwhost.dll"
+copy /y "$(nexoSdkBinPath)Microsoft.Data.SqlClient.SNI.dll" "$(TargetDir)\Microsoft.Data.SqlClient.SNI.dll"
+if exist "$(nexoSdkNarzedziaPath)PackageAndInstallerBuilder.exe" (call "$(nexoSdkNarzedziaPath)PackageAndInstallerBuilder.exe" /PlikKonfiguracji:Konfiguracja.xml /KatalogDocelowy:"$(TargetDir)\") else (echo Nie można zbudować pakietu i instalatora, ponieważ nie istnieje plik: "$(nexoSdkNarzedziaPath)PackageAndInstallerBuilder.exe")
+        ]]>
+      </PostBuildCommands>
+    </PropertyGroup>
+    <Exec Command="$(PostBuildCommands)" />
+  </Target>
 </Project>

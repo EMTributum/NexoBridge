@@ -1,0 +1,15 @@
+# Ignoruj foldery kompilacji
+bin/
+obj/
+
+# Ignoruj has³a i œrodowisko lokalne
+.env
+
+# Ignoruj ciê¿kie biblioteki Sfery Nexo
+NexoDLLs/
+*.dll
+
+# Ignoruj logi i tymczasowe pliki Visual Studio
+.vs/
+*.user
+*.suo
