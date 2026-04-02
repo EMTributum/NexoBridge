@@ -1,7 +1,7 @@
 ﻿using System;
 using InsERT.Mox.Product;
 
-namespace NexoBridge
+namespace NexoBridge.Infrastructure
 {
     public class PobieranieDanychDoUruchomieniaSfery
     {

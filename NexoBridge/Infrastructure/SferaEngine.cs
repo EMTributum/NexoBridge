@@ -4,14 +4,15 @@ using DotNetEnv;
 using System;
 using System.IO;
 using System.Reflection;
+using NexoBridge.Infrastructure;
 
 namespace NexoBridge.Infrastruktura
 {
-    public class SilnikSfery : IDisposable
+    public class SferaEngine : IDisposable
     {
         public Uchwyt Sfera { get; private set; }
 
-        public SilnikSfery()
+        public SferaEngine()
         {
             // [NEXO:] Sfera wymaga wczytania swoich bibliotek do pamięci RAM przed uruchomieniem jakichkolwiek obiektów.
             Env.Load();

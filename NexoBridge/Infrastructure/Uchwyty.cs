@@ -1,6 +1,6 @@
 ﻿using InsERT.Moria.Sfera;
 
-namespace NexoBridge
+namespace NexoBridge.Infrastructure
 {
     public static class Uchwyty
     {

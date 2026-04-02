@@ -13,11 +13,11 @@ namespace NexoBridge.Serwisy
     /// Główny mózg operacyjny odpowiedzialny za procesy księgowe w Nexo.
     /// Rozdziela proces na Import (EPP) oraz Dekretację (Księgowanie).
     /// </summary>
-    public class SerwisKsiegowy
+    public class NexoImportService
     {
         private readonly Uchwyt _sfera;
 
-        public SerwisKsiegowy(Uchwyt sfera)
+        public NexoImportService(Uchwyt sfera)
         {
             _sfera = sfera;
         }

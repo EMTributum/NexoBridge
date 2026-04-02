@@ -1,7 +1,7 @@
 ﻿using System;
 using InsERT.Moria.Sfera;
 
-namespace NexoBridge
+namespace NexoBridge.Infrastructure
 {
     public class PostepLadowaniaSfery : IPostepLadowaniaSfery
     {

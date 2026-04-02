@@ -1,7 +1,7 @@
 ﻿using InsERT.Moria.Sfera;
 using InsERT.Mox.Product;
 
-namespace NexoBridge
+namespace NexoBridge.Infrastructure
 {
     public class DaneDoUruchomieniaSfery
     {
