@@ -1,43 +1,35 @@
-﻿using System;
-using NexoBridge.Infrastruktura;
-using NexoBridge.Serwisy;
+﻿using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Http;
+using System;
+using DotNetEnv;
 
 namespace NexoBridge
 {
     public class Program
     {
-        [STAThread]
-        private static void Main(string[] args)
+        public static void Main(string[] args)
         {
-            Console.WriteLine("Inicjalizacja NexoBridge...");
+            // 1. Wczytanie bezpiecznych haseł z pliku .env od razu na starcie
+            Env.Load();
 
-            // W przyszłości (API) ten blok będzie zarządzany przez wbudowany kontener DI (Dependency Injection)
-            using (var silnik = new SferaEngine())
-            {
-                try
-                {
-                    silnik.Uruchom();
-                    Console.WriteLine("[SUKCES] Połączono ze Sferą!");
+            // 2. Inicjalizacja kreatora serwera Web API
+            var builder = WebApplication.CreateBuilder(args);
 
-                    var serwisKsiegowy = new NexoImportService(silnik.Sfera);
+            // Tutaj w przyszłości będziemy rejestrować Sferę i kolejkę zadań (tzw. Wstrzykiwanie Zależności)
+            // builder.Services.AddSingleton<...>();
 
-                    Console.WriteLine("\n[ETAP 1] Wczytywanie pliku EPP...");
-                    serwisKsiegowy.PrzetworzPlikEpp(@"C:\Automatyzacja\NexoBridge\NexoBridge\faktury\faktura.epp");
+            var app = builder.Build();
 
-                    Console.WriteLine("\n[ETAP 2] Automatyczna Dekretacja...");
-                    serwisKsiegowy.UruchomAutomatycznaDekretacje();
+            // 3. Konfiguracja naszych końcówek (Endpointów) REST
 
-                    Console.WriteLine("\n[GOTOWE] Proces zakończony pomyślnie.");
-                }
-                catch (Exception ex)
-                {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"\n[BŁĄD KRYTYCZNY]: {ex.Message}");
-                    Console.ResetColor();
-                }
-            }
+            // Prosty endpoint testowy (Health Check)
+            app.MapGet("/ping", () => Results.Ok(new { Status = "Online", Message = "NexoBridge nasłuchuje na żądania!" }));
 
-            Console.ReadLine();
+            Console.WriteLine("Uruchamianie mikroserwisu NexoBridge...");
+
+            // 4. Start serwera na sztywno przypisanym porcie (np. 5000)
+            app.Run("http://localhost:5000");
         }
     }
 }
