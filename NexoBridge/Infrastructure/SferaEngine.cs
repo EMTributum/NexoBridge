@@ -1,38 +1,32 @@
 ﻿using InsERT.Moria.Sfera;
 using InsERT.Mox.Product;
-using DotNetEnv;
 using System;
 using System.IO;
 using System.Reflection;
-using NexoBridge.Infrastructure;
 
-namespace NexoBridge.Infrastruktura
+namespace NexoBridge.Infrastructure
 {
     public class SferaEngine : IDisposable
     {
         public Uchwyt Sfera { get; private set; }
 
-        public SferaEngine()
+        static SferaEngine()
         {
-            // [NEXO:] Sfera wymaga wczytania swoich bibliotek do pamięci RAM przed uruchomieniem jakichkolwiek obiektów.
-            Env.Load();
-
             AppDomain.CurrentDomain.AssemblyResolve += ResolvingAssemblies;
             if (System.Windows.Application.Current == null) new System.Windows.Application();
         }
 
-        public void Uruchom()
+        // Teraz przyjmujemy login i hasło przekazane prosto z żądania aplikacji!
+        public void Uruchom(string nexoUser, string nexoPass)
         {
             string server = Environment.GetEnvironmentVariable("DB_SERVER");
             string dbName = Environment.GetEnvironmentVariable("DB_NAME");
             string dbUser = Environment.GetEnvironmentVariable("DB_USER");
             string dbPass = Environment.GetEnvironmentVariable("DB_PASS");
-            string nexoUser = Environment.GetEnvironmentVariable("NEXO_USER");
-            string nexoPass = Environment.GetEnvironmentVariable("NEXO_PASS");
 
             var polaczenieSql = DanePolaczenia.Jawne(server, dbName, false, dbUser, dbPass);
 
-            var dane = new DaneDoUruchomieniaSfery()
+            var dane = new DaneDoUruchomieniaSfery
             {
                 DanePolaczenia = polaczenieSql,
                 Produkt = ProductId.Rachmistrz,
@@ -40,10 +34,8 @@ namespace NexoBridge.Infrastruktura
                 HasloNexo = nexoPass
             };
 
-            // [NEXO:] Utworzenie uchwytu to fizyczne zalogowanie się do bazy SQL i "zajęcie" licencji na program.
             this.Sfera = Uchwyty.UtworzNowy(dane, new PostepLadowaniaSfery());
         }
-
 
         private static Assembly ResolvingAssemblies(object sender, ResolveEventArgs args)
         {
@@ -55,7 +47,7 @@ namespace NexoBridge.Infrastruktura
 
         public void Dispose()
         {
-            // [NEXO:] Pamiętaj, aby w API zawsze zamykać uchwyt, by zwalniać licencje InsERT!
+            // Bezpieczne zwalnianie licencji po zakończeniu paczki EPP
             Sfera?.Dispose();
         }
     }
