@@ -8,6 +8,7 @@ using NexoBridge.Models;
 using NexoBridge.Services;
 using NexoBridge.Workers;
 using NexoBridge.Hubs;
+using Microsoft.Extensions.Hosting;
 
 namespace NexoBridge
 {
@@ -18,22 +19,32 @@ namespace NexoBridge
             Env.Load();
             var builder = WebApplication.CreateBuilder(args);
 
-            // Zezwalamy na połączenia z zewnątrz (CORS)
+            // 1. Rejestrujemy aplikację jako oficjalną Usługę Windows
+            builder.Services.AddWindowsService(options =>
+            {
+                options.ServiceName = "NexoBridgeService";
+            });
+
+            // 2. Twardy CORS - wpuszczamy TYLKO Twoją aplikację z VM 12
+            string allowedOrigin = Environment.GetEnvironmentVariable("ALLOWED_ORIGIN");
             builder.Services.AddCors(options =>
             {
-                options.AddPolicy("AllowAll", policy => {
-                    policy.AllowAnyHeader().AllowAnyMethod().SetIsOriginAllowed(_ => true).AllowCredentials();
+                options.AddPolicy("StrictPolicy", policy => {
+                    policy.WithOrigins(allowedOrigin)
+                          .AllowAnyHeader()
+                          .AllowAnyMethod()
+                          .AllowCredentials(); // Wymagane dla SignalR
                 });
             });
 
-            // Rejestracja serwisów i SignalR
             builder.Services.AddSignalR();
             builder.Services.AddSingleton<JobQueue>();
             builder.Services.AddHostedService<NexoBackgroundWorker>();
 
             var app = builder.Build();
 
-            app.UseCors("AllowAll");
+            // Używamy nowej, rygorystycznej polityki
+            app.UseCors("StrictPolicy");
 
             // Rejestrujemy trasę dla naszego Huba
             app.MapHub<ProgressHub>("/progressHub");

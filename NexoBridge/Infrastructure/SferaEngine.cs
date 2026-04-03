@@ -39,9 +39,14 @@ namespace NexoBridge.Infrastructure
 
         private static Assembly ResolvingAssemblies(object sender, ResolveEventArgs args)
         {
-            string nexoBinPath = @"C:\Automatyzacja\NexoBridge\NexoBridge\NexoDLLs";
+            // Zamiast wpisywać na sztywno, pobieramy ścieżkę do prawdziwego folderu Nexo z .env
+            string nexoBinPath = Environment.GetEnvironmentVariable("NEXO_BIN_PATH");
+
+            if (string.IsNullOrEmpty(nexoBinPath)) throw new Exception("Brak NEXO_BIN_PATH w pliku .env!");
+
             string assemblyName = new AssemblyName(args.Name).Name + ".dll";
             string assemblyPath = Path.Combine(nexoBinPath, assemblyName);
+
             return File.Exists(assemblyPath) ? Assembly.LoadFrom(assemblyPath) : null;
         }
 
