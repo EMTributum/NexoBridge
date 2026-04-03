@@ -7,6 +7,7 @@ using DotNetEnv;
 using NexoBridge.Models;
 using NexoBridge.Services;
 using NexoBridge.Workers;
+using NexoBridge.Hubs;
 
 namespace NexoBridge
 {
@@ -17,15 +18,29 @@ namespace NexoBridge
             Env.Load();
             var builder = WebApplication.CreateBuilder(args);
 
-            // REJESTRACJA SERWISÓW (Dependency Injection)
-            builder.Services.AddSingleton<JobQueue>();             // Kolejka jest jedna (Singleton) dla całego serwera
-            builder.Services.AddHostedService<NexoBackgroundWorker>(); // Uruchamiamy Workera jako proces w tle
+            // Zezwalamy na połączenia z zewnątrz (CORS)
+            builder.Services.AddCors(options =>
+            {
+                options.AddPolicy("AllowAll", policy => {
+                    policy.AllowAnyHeader().AllowAnyMethod().SetIsOriginAllowed(_ => true).AllowCredentials();
+                });
+            });
+
+            // Rejestracja serwisów i SignalR
+            builder.Services.AddSignalR();
+            builder.Services.AddSingleton<JobQueue>();
+            builder.Services.AddHostedService<NexoBackgroundWorker>();
 
             var app = builder.Build();
 
+            app.UseCors("AllowAll");
+
+            // Rejestrujemy trasę dla naszego Huba
+            app.MapHub<ProgressHub>("/progressHub");
+
             app.MapGet("/ping", () => Results.Ok(new { Status = "Online" }));
 
-            // Nasz zaktualizowany Endpoint API
+            // Nasz endpoint (kod zostaje ten sam co poprzednio!)
             app.MapPost("/api/jobs/import", async (HttpRequest request, JobQueue queue) =>
             {
                 if (!request.HasFormContentType) return Results.BadRequest("Oczekiwano formularza multipart/form-data.");
@@ -36,37 +51,20 @@ namespace NexoBridge
                 var files = form.Files;
 
                 if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password) || files.Count == 0)
-                    return Results.BadRequest("Brak danych logowania lub plików EPP.");
+                    return Results.BadRequest("Brak danych logowania lub plików.");
 
-                // Przygotowujemy "pudełko" na zadanie
-                var job = new ImportJob
-                {
-                    JobId = Guid.NewGuid().ToString("N").Substring(0, 8),
-                    Username = username,
-                    Password = password
-                };
+                var job = new ImportJob { JobId = Guid.NewGuid().ToString("N").Substring(0, 8), Username = username, Password = password };
 
-                long totalSize = 0;
-
-                // PRZEPISANIE PLIKÓW DO RAM: Pliki z requestu wyparują za ułamek sekundy. 
-                // Musimy je skopiować do stałej pamięci (byte[]), żeby Worker mógł je potem odczytać.
                 foreach (var file in files)
                 {
                     using var ms = new MemoryStream();
                     await file.CopyToAsync(ms);
                     job.Files.Add(new EppFilePayload { FileName = file.FileName, Content = ms.ToArray() });
-                    totalSize += file.Length;
                 }
 
-                // Wrzucamy gotowe pudło do Kolejki
                 await queue.QueueJobAsync(job);
 
-                return Results.Accepted(value: new
-                {
-                    JobId = job.JobId,
-                    Message = $"Zakolejkowano do przetworzenia {files.Count} plików EPP.",
-                    TotalBytes = totalSize
-                });
+                return Results.Accepted(value: new { JobId = job.JobId, Message = "Zlecenie dodane do kolejki." });
             });
 
             Console.WriteLine("Uruchamianie mikroserwisu NexoBridge...");

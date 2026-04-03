@@ -1,4 +1,6 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Hosting;
+using NexoBridge.Hubs;
 using NexoBridge.Models;
 using NexoBridge.Services;
 using System;
@@ -10,11 +12,12 @@ namespace NexoBridge.Workers
     public class NexoBackgroundWorker : BackgroundService
     {
         private readonly JobQueue _jobQueue;
+        private readonly IHubContext<ProgressHub> _hubContext; // Dodajemy Huba
 
-        // Wstrzykujemy naszą kolejkę
-        public NexoBackgroundWorker(JobQueue jobQueue)
+        public NexoBackgroundWorker(JobQueue jobQueue, IHubContext<ProgressHub> hubContext)
         {
             _jobQueue = jobQueue;
+            _hubContext = hubContext;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -23,20 +26,33 @@ namespace NexoBridge.Workers
 
             while (!stoppingToken.IsCancellationRequested)
             {
-                // Worker idzie spać, dopóki w kolejce nie pojawi się nowe zadanie
                 ImportJob job = await _jobQueue.DequeueAsync(stoppingToken);
 
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine($"\n[WORKER] Wyciągnąłem z kolejki zadanie: {job.JobId}");
-                Console.WriteLine($"[WORKER] Użytkownik: {job.Username}, Przesłanych plików EPP: {job.Files.Count}");
-
-                // Symulacja ciężkiej pracy Sfery (czekamy 5 sekund)
-                Console.WriteLine("[WORKER] Logowanie do Sfery i przetwarzanie...");
-                await Task.Delay(3000, stoppingToken);
-
-                Console.WriteLine($"[WORKER] Zakończono dekretację dla zadania {job.JobId}!");
+                Console.WriteLine($"\n[WORKER] Przetwarzam zadanie: {job.JobId}");
                 Console.ResetColor();
+
+                // Raport 1: Start
+                await WylijPostep(job.JobId, 10, "Uruchamianie silnika Sfery i weryfikacja licencji...");
+                await Task.Delay(2000, stoppingToken); // Symulacja
+
+                // Raport 2: Przetwarzanie EPP
+                await WylijPostep(job.JobId, 40, $"Łączenie plików EPP i synchronizacja słowników...");
+                await Task.Delay(2000, stoppingToken); // Symulacja
+
+                // Raport 3: Dekretacja
+                await WylijPostep(job.JobId, 80, "Sędzia analizuje schematy dekretacji...");
+                await Task.Delay(2000, stoppingToken); // Symulacja
+
+                // Raport 4: Koniec
+                await WylijPostep(job.JobId, 100, $"Zakończono sukcesem! Przetworzono dokumentów: {job.Files.Count}.");
             }
+        }
+
+        private async Task WylijPostep(string jobId, int procent, string wiadomosc)
+        {
+            // Wysyłamy wiadomość TYLKO do grupy o nazwie JobId
+            await _hubContext.Clients.Group(jobId).SendAsync("ReceiveProgress", procent, wiadomosc);
         }
     }
 }
