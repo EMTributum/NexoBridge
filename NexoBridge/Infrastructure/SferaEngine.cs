@@ -12,15 +12,24 @@ namespace NexoBridge.Infrastructure
 
         static SferaEngine()
         {
-            AppDomain.CurrentDomain.AssemblyResolve += ResolvingAssemblies;
             if (System.Windows.Application.Current == null) new System.Windows.Application();
         }
 
         // Teraz przyjmujemy login i hasło przekazane prosto z żądania aplikacji!
-        public void Uruchom(string nexoUser, string nexoPass)
+        public void Uruchom(string nexoUser, string nexoPass, string dbName)
         {
+            string nexoBinPath = Environment.GetEnvironmentVariable("NEXO_BIN_PATH");
+
+            // 1. Oszukujemy system, zmieniając katalog roboczy na folder z InsERTem
+            Directory.SetCurrentDirectory(nexoBinPath);
+
+            // 2. Dodajemy folder InsERTu do systemowej zmiennej PATH w locie
+            var currentPath = Environment.GetEnvironmentVariable("PATH");
+            if (!currentPath.Contains(nexoBinPath))
+            {
+                Environment.SetEnvironmentVariable("PATH", nexoBinPath + ";" + currentPath);
+            }
             string server = Environment.GetEnvironmentVariable("DB_SERVER");
-            string dbName = Environment.GetEnvironmentVariable("DB_NAME");
             string dbUser = Environment.GetEnvironmentVariable("DB_USER");
             string dbPass = Environment.GetEnvironmentVariable("DB_PASS");
 
@@ -35,19 +44,6 @@ namespace NexoBridge.Infrastructure
             };
 
             this.Sfera = Uchwyty.UtworzNowy(dane, new PostepLadowaniaSfery());
-        }
-
-        private static Assembly ResolvingAssemblies(object sender, ResolveEventArgs args)
-        {
-            // Zamiast wpisywać na sztywno, pobieramy ścieżkę do prawdziwego folderu Nexo z .env
-            string nexoBinPath = Environment.GetEnvironmentVariable("NEXO_BIN_PATH");
-
-            if (string.IsNullOrEmpty(nexoBinPath)) throw new Exception("Brak NEXO_BIN_PATH w pliku .env!");
-
-            string assemblyName = new AssemblyName(args.Name).Name + ".dll";
-            string assemblyPath = Path.Combine(nexoBinPath, assemblyName);
-
-            return File.Exists(assemblyPath) ? Assembly.LoadFrom(assemblyPath) : null;
         }
 
         public void Dispose()

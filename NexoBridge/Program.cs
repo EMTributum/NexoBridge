@@ -54,17 +54,24 @@ namespace NexoBridge
             // Nasz endpoint (kod zostaje ten sam co poprzednio!)
             app.MapPost("/api/jobs/import", async (HttpRequest request, JobQueue queue) =>
             {
-                if (!request.HasFormContentType) return Results.BadRequest("Oczekiwano formularza multipart/form-data.");
+                if (!request.HasFormContentType) return Results.BadRequest("Oczekiwano formularza.");
 
                 var form = await request.ReadFormAsync();
                 var username = form["Username"].ToString();
                 var password = form["Password"].ToString();
+                var databaseName = form["DatabaseName"].ToString();
                 var files = form.Files;
 
-                if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password) || files.Count == 0)
-                    return Results.BadRequest("Brak danych logowania lub plików.");
+                if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password) || string.IsNullOrEmpty(databaseName) || files.Count == 0)
+                    return Results.BadRequest("Brak danych logowania, nazwy bazy lub plików.");
 
-                var job = new ImportJob { JobId = Guid.NewGuid().ToString("N").Substring(0, 8), Username = username, Password = password };
+                var job = new ImportJob
+                {
+                    JobId = Guid.NewGuid().ToString("N").Substring(0, 8),
+                    Username = username,
+                    Password = password,
+                    DatabaseName = databaseName
+                };
 
                 foreach (var file in files)
                 {
@@ -79,7 +86,7 @@ namespace NexoBridge
             });
 
             Console.WriteLine("Uruchamianie mikroserwisu NexoBridge...");
-            app.Run("http://localhost:5000");
+            app.Run("http://0.0.0.0:5000");
         }
     }
 }

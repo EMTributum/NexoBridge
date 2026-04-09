@@ -38,7 +38,7 @@ namespace NexoBridge.Workers
                     using (var silnik = new SferaEngine())
                     {
                         // 1. Zalogowanie poświadczeniami użtykownika z aplikacji
-                        silnik.Uruchom(job.Username, job.Password);
+                        silnik.Uruchom(job.Username, job.Password, job.DatabaseName);
 
                         // 2. Podpięcie usługi importu
                         var serwis = new NexoImportService(silnik.Sfera);

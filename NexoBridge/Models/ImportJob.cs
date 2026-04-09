@@ -11,6 +11,7 @@ namespace NexoBridge.Models
         public string JobId { get; set; }
         public string Username { get; set; }
         public string Password { get; set; }
+        public string DatabaseName { get; set; }
         public List<EppFilePayload> Files { get; set; } = new List<EppFilePayload>();
     }
 

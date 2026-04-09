@@ -13,302 +13,16 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="DotNetEnv" Version="3.1.1" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.0" />
+    <PackageReference Include="Microsoft.Data.SqlClient.SNI.runtime" Version="6.0.2" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
   </ItemGroup>
   <ItemGroup>
-    <Reference Include="Google.Apis.Calendar.v3">
-      <HintPath>NexoDLLs\Google.Apis.Calendar.v3.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Devices.Server.Client.WebAPI">
-      <HintPath>NexoDLLs\InsERT.Devices.Server.Client.WebAPI.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Devices.Server.WebAPI.Core">
-      <HintPath>NexoDLLs\InsERT.Devices.Server.WebAPI.Core.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Moria.API">
-      <HintPath>NexoDLLs\InsERT.Moria.API.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Moria.Components.UI">
-      <HintPath>NexoDLLs\InsERT.Moria.Components.UI.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Moria.Components.UI.Configuration">
-      <HintPath>NexoDLLs\InsERT.Moria.Components.UI.Configuration.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Moria.Dokumenty.SQL">
-      <HintPath>NexoDLLs\InsERT.Moria.Dokumenty.SQL.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Moria.DokumentyDoKsiegowania">
-      <HintPath>NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Moria.DokumentyDoKsiegowania.Configuration">
-      <HintPath>NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.Configuration.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Moria.DokumentyDoKsiegowania.UI">
-      <HintPath>NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.UI.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Moria.DokumentyDoKsiegowania.UI.Configuration">
-      <HintPath>NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.UI.Configuration.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Moria.DokumentyDoKsiegowania.Wspomaganie">
-      <HintPath>NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.Wspomaganie.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Moria.DokumentyDoKsiegowania.Wspomaganie.UI">
-      <HintPath>NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.Wspomaganie.UI.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Moria.ModelDanych">
-      <HintPath>NexoDLLs\InsERT.Moria.ModelDanych.dll</HintPath>
-    </Reference>
     <Reference Include="InsERT.Moria.Sfera">
       <HintPath>NexoDLLs\InsERT.Moria.Sfera.dll</HintPath>
     </Reference>
     <Reference Include="InsERT.Mox.Core">
       <HintPath>NexoDLLs\InsERT.Mox.Core.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Mox.EntityFramework.Core">
-      <HintPath>NexoDLLs\InsERT.Mox.EntityFramework.Core.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.Mox.EntityFrameworkSupport">
-      <HintPath>NexoDLLs\InsERT.Mox.EntityFrameworkSupport.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Auth.Abstractions">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Auth.Abstractions.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.ChangeLog">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.ChangeLog.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Couriers">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Couriers.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.CustomerSubmissions">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.CustomerSubmissions.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.DocumentExchange">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.DocumentExchange.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Documents">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Documents.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Documents.KITokenAuth">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Documents.KITokenAuth.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.ESubscription">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.ESubscription.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Exceptions">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Exceptions.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.ExchangeRates">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.ExchangeRates.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Ferfs">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Ferfs.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.GovConnectors">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.GovConnectors.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.InsMail">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.InsMail.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.InsMonitor">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.InsMonitor.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Ki">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Ki.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.KSeF2.Core">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.KSeF2.Core.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.KSeF2.InvoiceRead">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.KSeF2.InvoiceRead.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.KSeF2.InvoiceWrite">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.KSeF2.InvoiceWrite.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.KSeFService">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.KSeFService.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Licenses">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Licenses.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Parameters">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Parameters.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Push.Filter">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Push.Filter.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Push.Receive">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Push.Receive.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.ServiceOrders">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.ServiceOrders.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Sts">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Sts.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Sts.Soap">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Sts.Soap.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Sts.VM.3.0.17">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Sts.VM.3.0.17.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Telemetry">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Telemetry.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.Telemetry.Desktop">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.Telemetry.Desktop.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Client.WalletAgent">
-      <HintPath>NexoDLLs\InsERT.WebServices.Client.WalletAgent.dll</HintPath>
-    </Reference>
-    <Reference Include="InsERT.WebServices.Extensions.Http">
-      <HintPath>NexoDLLs\InsERT.WebServices.Extensions.Http.dll</HintPath>
-    </Reference>
-    <Reference Include="MailBee.NET">
-      <HintPath>NexoDLLs\MailBee.NET.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Bcl.AsyncInterfaces">
-      <HintPath>NexoDLLs\Microsoft.Bcl.AsyncInterfaces.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Bcl.HashCode">
-      <HintPath>NexoDLLs\Microsoft.Bcl.HashCode.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.CodeAnalysis">
-      <HintPath>NexoDLLs\Microsoft.CodeAnalysis.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.CodeAnalysis.CSharp">
-      <HintPath>NexoDLLs\Microsoft.CodeAnalysis.CSharp.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.CodeAnalysis.VisualBasic">
-      <HintPath>NexoDLLs\Microsoft.CodeAnalysis.VisualBasic.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Data.SqlClient">
-      <HintPath>NexoDLLs\Microsoft.Data.SqlClient.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Data.Sqlite">
-      <HintPath>NexoDLLs\Microsoft.Data.Sqlite.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Extensions.DependencyInjection">
-      <HintPath>NexoDLLs\Microsoft.Extensions.DependencyInjection.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Extensions.DependencyInjection.Abstractions">
-      <HintPath>NexoDLLs\Microsoft.Extensions.DependencyInjection.Abstractions.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Extensions.Diagnostics">
-      <HintPath>NexoDLLs\Microsoft.Extensions.Diagnostics.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Extensions.Http">
-      <HintPath>NexoDLLs\Microsoft.Extensions.Http.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Extensions.Logging">
-      <HintPath>NexoDLLs\Microsoft.Extensions.Logging.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Extensions.Logging.Abstractions">
-      <HintPath>NexoDLLs\Microsoft.Extensions.Logging.Abstractions.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Extensions.Options">
-      <HintPath>NexoDLLs\Microsoft.Extensions.Options.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Identity.Client">
-      <HintPath>NexoDLLs\Microsoft.Identity.Client.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.IdentityModel.Abstractions">
-      <HintPath>NexoDLLs\Microsoft.IdentityModel.Abstractions.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.IdentityModel.JsonWebTokens">
-      <HintPath>NexoDLLs\Microsoft.IdentityModel.JsonWebTokens.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.IdentityModel.Logging">
-      <HintPath>NexoDLLs\Microsoft.IdentityModel.Logging.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.IdentityModel.Tokens">
-      <HintPath>NexoDLLs\Microsoft.IdentityModel.Tokens.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.IO.RecyclableMemoryStream">
-      <HintPath>NexoDLLs\Microsoft.IO.RecyclableMemoryStream.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Practices.Unity">
-      <HintPath>NexoDLLs\Microsoft.Practices.Unity.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.SqlServer.Server">
-      <HintPath>NexoDLLs\Microsoft.SqlServer.Server.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.SqlServer.TransactSql.ScriptDom">
-      <HintPath>NexoDLLs\Microsoft.SqlServer.TransactSql.ScriptDom.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Toolkit.Uwp.Notifications">
-      <HintPath>NexoDLLs\Microsoft.Toolkit.Uwp.Notifications.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Web.WebView2.Core">
-      <HintPath>NexoDLLs\Microsoft.Web.WebView2.Core.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Web.WebView2.Wpf">
-      <HintPath>NexoDLLs\Microsoft.Web.WebView2.Wpf.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Win32.TaskScheduler">
-      <HintPath>NexoDLLs\Microsoft.Win32.TaskScheduler.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Xades">
-      <HintPath>NexoDLLs\Microsoft.Xades.dll</HintPath>
-    </Reference>
-    <Reference Include="Microsoft.Xaml.Behaviors">
-      <HintPath>NexoDLLs\Microsoft.Xaml.Behaviors.dll</HintPath>
-    </Reference>
-    <Reference Include="Newtonsoft.Json">
-      <HintPath>NexoDLLs\Newtonsoft.Json.dll</HintPath>
-    </Reference>
-    <Reference Include="NLog">
-      <HintPath>NexoDLLs\NLog.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.Base">
-      <HintPath>NexoDLLs\Stimulsoft.Base.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.Blockly">
-      <HintPath>NexoDLLs\Stimulsoft.Blockly.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.BlocklyEditor.Wpf">
-      <HintPath>NexoDLLs\Stimulsoft.BlocklyEditor.Wpf.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.Client.Designer">
-      <HintPath>NexoDLLs\Stimulsoft.Client.Designer.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.Controls.Wpf">
-      <HintPath>NexoDLLs\Stimulsoft.Controls.Wpf.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.Data">
-      <HintPath>NexoDLLs\Stimulsoft.Data.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.Database.Wpf">
-      <HintPath>NexoDLLs\Stimulsoft.Database.Wpf.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.Editor.Wpf">
-      <HintPath>NexoDLLs\Stimulsoft.Editor.Wpf.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.Map">
-      <HintPath>NexoDLLs\Stimulsoft.Map.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.Report">
-      <HintPath>NexoDLLs\Stimulsoft.Report.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.Report.Check">
-      <HintPath>NexoDLLs\Stimulsoft.Report.Check.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.Report.Helper">
-      <HintPath>NexoDLLs\Stimulsoft.Report.Helper.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.Report.Wpf">
-      <HintPath>NexoDLLs\Stimulsoft.Report.Wpf.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.Report.WpfDesign">
-      <HintPath>NexoDLLs\Stimulsoft.Report.WpfDesign.dll</HintPath>
-    </Reference>
-    <Reference Include="Stimulsoft.Svg">
-      <HintPath>NexoDLLs\Stimulsoft.Svg.dll</HintPath>
-    </Reference>
-    <Reference Include="System.Data.SqlClient">
-      <HintPath>NexoDLLs\System.Data.SqlClient.dll</HintPath>
-    </Reference>
-    <Reference Include="System.Management">
-      <HintPath>NexoDLLs\System.Management.dll</HintPath>
     </Reference>
   </ItemGroup>
   <ItemGroup>
@@ -329,4 +43,577 @@ if exist "$(nexoSdkNarzedziaPath)PackageAndInstallerBuilder.exe" (call "$(nexoSd
     </PropertyGroup>
     <Exec Command="$(PostBuildCommands)" />
   </Target>
+	<ItemGroup>
+		<Reference Include="NexoDLLs\AngleSharp.dll" />
+		<Reference Include="NexoDLLs\BouncyCastle.Cryptography.dll" />
+		<Reference Include="NexoDLLs\C1.WPF.4.5.2.dll" />
+		<Reference Include="NexoDLLs\C1.WPF.DX.4.5.2.dll" />
+		<Reference Include="NexoDLLs\C1.WPF.FinancialChart.4.5.2.dll" />
+		<Reference Include="NexoDLLs\C1.WPF.FlexChart.4.5.2.dll" />
+		<Reference Include="NexoDLLs\C1.WPF.FlexChart.Extended.4.5.2.dll" />
+		<Reference Include="NexoDLLs\C1.WPF.FlexGrid.4.5.2.dll" />
+		<Reference Include="NexoDLLs\CefSharp.BrowserSubprocess.Core.dll" />
+		<Reference Include="NexoDLLs\CefSharp.BrowserSubprocess.dll" />
+		<Reference Include="NexoDLLs\CefSharp.Core.dll" />
+		<Reference Include="NexoDLLs\CefSharp.Core.Runtime.dll" />
+		<Reference Include="NexoDLLs\CefSharp.dll" />
+		<Reference Include="NexoDLLs\CefSharp.Wpf.dll" />
+		<Reference Include="NexoDLLs\ChilkatDnCore.dll" />
+		<Reference Include="NexoDLLs\CoreWCF.Http.dll" />
+		<Reference Include="NexoDLLs\CoreWCF.Primitives.dll" />
+		<Reference Include="NexoDLLs\CoreWCF.WebHttp.dll" />
+		<Reference Include="NexoDLLs\CsQuery.dll" />
+		<Reference Include="NexoDLLs\DocumentFormat.OpenXml.dll" />
+		<Reference Include="NexoDLLs\Dropbox.Api.dll" />
+		<Reference Include="NexoDLLs\Enums.NET.dll" />
+		<Reference Include="NexoDLLs\ExCSS.dll" />
+		<Reference Include="NexoDLLs\Google.Apis.Auth.dll" />
+		<Reference Include="NexoDLLs\Google.Apis.Calendar.v3.dll" />
+		<Reference Include="NexoDLLs\Google.Apis.Core.dll" />
+		<Reference Include="NexoDLLs\Google.Apis.dll" />
+		<Reference Include="NexoDLLs\Google.Apis.Drive.v3.dll" />
+		<Reference Include="NexoDLLs\HtmlAgilityPack.dll" />
+		<Reference Include="NexoDLLs\Ical.Net.dll" />
+		<Reference Include="NexoDLLs\ICSharpCode.AvalonEdit.dll" />
+		<Reference Include="NexoDLLs\ICSharpCode.SharpZipLib.dll" />
+		<Reference Include="NexoDLLs\InsERT.Common.Product.dll" />
+		<Reference Include="NexoDLLs\InsERT.Devices.Core.dll" />
+		<Reference Include="NexoDLLs\InsERT.Devices.Core.Utils.dll" />
+		<Reference Include="NexoDLLs\InsERT.Devices.Drivers.Core.dll" />
+		<Reference Include="NexoDLLs\InsERT.Devices.Server.Client.Core.dll" />
+		<Reference Include="NexoDLLs\InsERT.Devices.Server.Client.WebAPI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Devices.Server.Core.dll" />
+		<Reference Include="NexoDLLs\InsERT.Devices.Server.WebAPI.Core.dll" />
+		<Reference Include="NexoDLLs\InsERT.Feniks.Distrib.dll" />
+		<Reference Include="NexoDLLs\InsERT.Hermes.SyncClients.Abstractions.dll" />
+		<Reference Include="NexoDLLs\InsERT.Hermes.SyncClients.dll" />
+		<Reference Include="NexoDLLs\InsERT.Hermes.SyncClients.Employees.dll" />
+		<Reference Include="NexoDLLs\InsERT.Hermes.SyncClients.Extensions.dll" />
+		<Reference Include="NexoDLLs\InsERT.Hermes.SyncClients.Leaves.dll" />
+		<Reference Include="NexoDLLs\InsERT.Hermes.SyncClients.OrganizationalStructure.dll" />
+		<Reference Include="NexoDLLs\InsERT.Hermes.SyncClients.RemoteWorks.dll" />
+		<Reference Include="NexoDLLs\InsERT.Hermes.SyncClients.Remunerations.dll" />
+		<Reference Include="NexoDLLs\InsERT.Hermes.SyncClients.TaxDocuments.dll" />
+		<Reference Include="NexoDLLs\InsERT.Kolejki.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Allegro.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Allegro.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Amazon.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Amazon.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.API.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.API.Private.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.API.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.API.Uprawnienia.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.APIRozszerzen.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Archiwa.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Archiwa.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Archiwa.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Archiwa.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Asortymenty.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Asortymenty.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Asortymenty.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Bank.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Bank.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Bank.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Bank.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.BankowoscElektroniczna.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.BibliotekaDokumentow.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.BibliotekaMultimediow.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.BibliotekaZalacznikow.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.BibliotekaZalacznikow.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.BibliotekaZalacznikow.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.BibliotekaZalacznikow.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.BusinessResources.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.BusinessResources.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Cenniki.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Cenniki.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Cenniki.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Cenniki.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.CennikUslugBiura.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.CennikUslugBiura.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Components.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Components.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Configuration.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DaneDomyslne.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DatabaseManagement.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DatabaseUpdate.Maintenance.Sql.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DatabaseUpdate.PostDaneDomyslneUpdate.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DatabaseUpdate.PostModelDanychUpdate.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DatabaseUpdate.PostWydrukiDaneDomyslneUpdate.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DatabaseUpdate.PreModelDanychUpdate.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Decathlon.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Decathlon.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Deklaracje.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Deklaracje.Definicje.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Deklaracje.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Deklaracje.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Deklaracje.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DeklaracjeZUS.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DeklaracjeZUS.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DeklaracjeZUS.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DeklaracjeZUS.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Dokumenty.SQL.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.Wspomaganie.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DokumentyDoKsiegowania.Wspomaganie.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DowodyWewnetrzne.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DowodyWewnetrzne.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DowodyWewnetrzne.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.DowodyWewnetrzne.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Dzialania.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Dzialania.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Dzialania.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Dzialania.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Egzekutor.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.EgzekutorMagazynowy.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Empik.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Empik.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Erli.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Erli.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.EwidencjaVAT.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.EwidencjaVAT.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.EwidencjaVAT.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.EwidencjaVAT.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Extensions.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ExternalDatabaseAccess.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Feniks.ConnectorAPI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Filters.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Finanse.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Finanse.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Finanse.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Finanse.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Flagi.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Flagi.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.GaleriaZdjec.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.GaleriaZdjec.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.GaleriaZdjec.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.GaleriaZdjec.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.HandelElektroniczny.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.HandelElektroniczny.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.HandelElektroniczny.Rozszerzenia.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.HandelElektroniczny.Rozszerzenia.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.HandelElektroniczny.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.HandelElektroniczny.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.HOPy.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.HOPy.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.HOPy.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.HOPy.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ImportKsiegowy.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ImportKsiegowy.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ImportKsiegowy.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ImportKsiegowy.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.InsSearch.SQL.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Inwentaryzacja.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Inwentaryzacja.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Inwentaryzacja.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Inwentaryzacja.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Kadry.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Kadry.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Kadry.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Kadry.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Kalendarze.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Kalendarze.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Kalendarze.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Kalendarze.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Kasa.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Kasa.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Kasa.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Kasa.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Klienci.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Klienci.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Klienci.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Klienci.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KlienciBiura.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KlienciBiura.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KlienciBiura.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KlienciBiura.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KlientPoczty.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KlientPoczty.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KlientPoczty.SQL.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KlientPoczty.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KlientPoczty.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KolejkiAdapter.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KolejkiAdapter.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KolejkiAdapter.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KolejkiAdapter.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Komentarze.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Komentarze.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Komentarze.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Komentarze.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Komunikacja.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Komunikacja.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Komunikacja.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Komunikacja.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Komunikacja.WspoldzielenieZalacznikow.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KontrolaSkarbowa.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KontrolaSkarbowa.Definicje.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KontrolaSkarbowa.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KontrolaSkarbowa.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KontrolaSkarbowa.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Ksiegowosc.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Ksiegowosc.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Ksiegowosc.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Ksiegowosc.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KsiegowoscPelna.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KsiegowoscPelna.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KsiegowoscPelna.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KsiegowoscPelna.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KsiegowoscUproszczona.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KsiegowoscUproszczona.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KsiegowoscUproszczona.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.KsiegowoscUproszczona.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Kurierzy.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Kurierzy.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Laboratorium.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Laboratorium.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Logistyka.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Logistyka.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Logistyka.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Logistyka.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.MarketInsERT.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.MarketInsERT.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.MarketInsERT.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.MarketInsERT.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ModelDanych.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ModelOrganizacyjny.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ModelOrganizacyjny.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ModelOrganizacyjny.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ModelOrganizacyjny.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.NaglowkiObiektow.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.NaglowkiObiektow.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Naklejki.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Naklejki.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Naklejki.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Naklejki.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Narzedzia.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Numeracja.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Numeracja.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Online.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Online.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Online.Sql.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Online.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Online.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.OperacjeZewnetrzne.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.OperacjeZewnetrzne.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.OperacjeZewnetrzne.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.OperacjeZewnetrzne.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Parametry.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Parametry.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Parametry.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Parametry.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Place.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Place.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Place.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Place.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Pojazdy.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Pojazdy.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Pojazdy.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Pojazdy.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PolaWlasne.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PolaWlasne.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PolaWlasne.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PolaWlasne.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PolaWlasne2.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PolaWlasne2.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PolaWlasne2.Sql.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PolaWlasne2.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PolaWlasne2.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PPK.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PPK.dll" />
+		<Reference Include="NexoDLLs\InSERT.Moria.PPK.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PPK.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PresentationData.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PrestaShop.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.PrestaShop.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Printing.Stimulsoft.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ProcesKlientowBiura.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Procesy.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Procesy.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Procesy.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Procesy.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ProcesyKlientowBiura.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ProcesyKlientowBiura.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ProcesyKlientowBiura.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ProcesyKsiegowoKadrowe.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ProcesyKsiegowoKadrowe.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ProcesyKsiegowoKadrowe.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ProcesyKsiegowoKadrowe.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Promocje.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Promocje.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Promocje.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Promocje.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Raporty.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Raporty.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Raporty.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Raporty.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.RejestrUslugKsiegowych.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.RejestrUslugKsiegowych.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.RejestrUslugKsiegowych.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.RejestrUslugKsiegowych.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Remanenty.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Remanenty.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Remanenty.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Remanenty.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Rozrachunki.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Rozrachunki.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Rozrachunki.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Rozrachunki.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Schowek.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Schowek.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Schowek.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Schowek.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Search.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Search.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Security.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Security.Core.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Security.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SerwerKasowyHost.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SerwerKasowyMoriaProxy.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SerwerKasowyProxy.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SerwerKasowyService.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SerwerRozwiazanMobilnych.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Serwis.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Serwis.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SerwisyWlasne.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SerwisyWlasne.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SerwisyWlasne.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SerwisyWlasne.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Sfera.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Sfera.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Sfera.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SladRewizyjny.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SladRewizyjny.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SladRewizyjny.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SladRewizyjny.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Slowniki.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Slowniki.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Slowniki.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Slowniki.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SlownikiWlasne.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SlownikiWlasne.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SprawozdaniaFinansowe.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SprawozdaniaFinansowe.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SprawozdaniaFinansowe.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SprawozdaniaFinansowe.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SrodkiTrwale.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SrodkiTrwale.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SrodkiTrwale.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SrodkiTrwale.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.StanyAplikacji.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.StanyAplikacji.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Startup.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Startup.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.StartupLaunchPad.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.StartupLaunchPad.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SzybkaSprzedaz.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SzybkaSprzedaz.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SzybkaSprzedaz.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SzybkaSprzedaz.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.SzybkiePlatnosci.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ThemeControls.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ThemeDark.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.ThemeLight.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Toolbar.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Toolbar.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Towary.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Uprawnienia.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Uprawnienia.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Uprawnienia.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Uprawnienia.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Urzadzenia.Core.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Urzadzenia.Core.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Urzadzenia.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Urzadzenia.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.UzytkownikSzef.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Vendero.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Vendero.Connector.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Vendero.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Vendero.SQL.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Vendero.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Vendero.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Waluty.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Waluty.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Waluty.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Waluty.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.WebControls.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Wspolne.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Wspolne.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Wspolne.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Wspolne.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Wspomaganie.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Wydruki.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Wydruki.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Wydruki.UI.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.Wydruki.UI.dll" />
+		<Reference Include="NexoDLLs\InsERT.Moria.WydrukiDaneDomyslne.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.ApplicationStates.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.Charts.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.Core.BusinessAspects.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.Core.BusinessAspects.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.Core.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.Core.Modules.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.CSharp.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.CSharp.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.DatabaseAccess.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.DatabaseAccess.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.DatabaseManagement.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.DataExtensions.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.DataExtensions.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.DataExtensions.Sql.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.DataModeling.Defaults.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.DataModeling.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.DataModeling.EndUser.Core.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.DataModeling.EndUser.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.Devices.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.EditableGridView.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.EntityFramework.Core.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.EntityFramework.Ms.SqlServer.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.EntityFrameworkSupport.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.ExternalLauncher.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.FileHelpers.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.FlexChart.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.FlexEditableGrid.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.GridDefinition.Common.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.GridDefinition.Core.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.GridDefinition.Reboot.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.Helpers.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.InsTYNKT.Data.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.InsTYNKT.Sql.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.itextsharp.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.Launcher.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.MdmDeploy.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.MvvmSupport.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.Printing.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.Printing.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.Security.Sql.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.ServiceGrid.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.SetupActions.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.SqlServerSupport.ApplicationLocksDbPackage.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.SqlServerSupport.ApplicationSessionsDbPackage.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.SqlServerSupport.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.SqlServerSupport.Module.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.TaskEditor.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.Time.Configuration.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.Time.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.UIFramework.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.UnitySupport.dll" />
+		<Reference Include="NexoDLLs\InsERT.Mox.WpfControls.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Auth.Abstractions.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Couriers.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.CustomerSubmissions.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.DocumentExchange.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Documents.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Documents.KITokenAuth.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Exceptions.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.ExchangeRates.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Ferfs.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.GovConnectors.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.InsMail.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.InsMonitor.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Ki.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.KSeF2.Core.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.KSeF2.InvoiceRead.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.KSeF2.InvoiceWrite.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.KSeFService.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Licenses.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Parameters.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Push.Filter.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Push.Receive.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.ServiceOrders.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Sts.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Sts.Soap.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Sts.VM.3.0.17.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Telemetry.Desktop.dll" />
+		<Reference Include="NexoDLLs\InsERT.WebServices.Client.Telemetry.dll" />
+		<Reference Include="NexoDLLs\Joyent.HttpParser.dll" />
+		<Reference Include="NexoDLLs\Magick.NET-Q8-AnyCPU.dll" />
+		<Reference Include="NexoDLLs\Magick.NET.Core.dll" />
+		<Reference Include="NexoDLLs\MailBee.NET.dll" />
+		<Reference Include="NexoDLLs\MathNet.Numerics.dll" />
+		<Reference Include="NexoDLLs\MediatR.Contracts.dll" />
+		<Reference Include="NexoDLLs\Microsoft.Bcl.AsyncInterfaces.dll" />
+		<Reference Include="NexoDLLs\Microsoft.Bcl.HashCode.dll" />
+		<Reference Include="NexoDLLs\Microsoft.CodeAnalysis.CSharp.dll" />
+		<Reference Include="NexoDLLs\Microsoft.CodeAnalysis.dll" />
+		<Reference Include="NexoDLLs\Microsoft.CodeAnalysis.VisualBasic.dll" />
+		<Reference Include="NexoDLLs\Microsoft.Data.SqlClient.dll" />
+		<Reference Include="NexoDLLs\Microsoft.Data.Sqlite.dll" />
+		<Reference Include="NexoDLLs\Microsoft.Identity.Client.dll" />
+		<Reference Include="NexoDLLs\Microsoft.IdentityModel.Abstractions.dll" />
+		<Reference Include="NexoDLLs\Microsoft.IdentityModel.JsonWebTokens.dll" />
+		<Reference Include="NexoDLLs\Microsoft.IdentityModel.Logging.dll" />
+		<Reference Include="NexoDLLs\Microsoft.IdentityModel.Tokens.dll" />
+		<Reference Include="NexoDLLs\Microsoft.IO.RecyclableMemoryStream.dll" />
+		<Reference Include="NexoDLLs\Microsoft.Practices.Unity.dll" />
+		<Reference Include="NexoDLLs\Microsoft.SqlServer.Server.dll" />
+		<Reference Include="NexoDLLs\Microsoft.SqlServer.TransactSql.ScriptDom.dll" />
+		<Reference Include="NexoDLLs\Microsoft.Web.WebView2.Core.dll" />
+		<Reference Include="NexoDLLs\Microsoft.Web.WebView2.Wpf.dll" />
+		<Reference Include="NexoDLLs\Microsoft.Win32.TaskScheduler.dll" />
+		<Reference Include="NexoDLLs\Microsoft.Xades.dll" />
+		<Reference Include="NexoDLLs\Microsoft.Xaml.Behaviors.dll" />
+		<Reference Include="NexoDLLs\Newtonsoft.Json.dll" />
+		<Reference Include="NexoDLLs\NLog.dll" />
+		<Reference Include="NexoDLLs\NodaTime.dll" />
+		<Reference Include="NexoDLLs\NPOI.Core.dll" />
+		<Reference Include="NexoDLLs\NPOI.OOXML.dll" />
+		<Reference Include="NexoDLLs\NPOI.OpenXml4Net.dll" />
+		<Reference Include="NexoDLLs\NPOI.OpenXmlFormats.dll" />
+		<Reference Include="NexoDLLs\PackageTool.dll" />
+		<Reference Include="NexoDLLs\Polly.Core.dll" />
+		<Reference Include="NexoDLLs\Polly.dll" />
+		<Reference Include="NexoDLLs\Rachmistrz.dll" />
+		<Reference Include="NexoDLLs\RendererPDF.dll" />
+		<Reference Include="NexoDLLs\Rewizor.dll" />
+		<Reference Include="NexoDLLs\SixLabors.Fonts.dll" />
+		<Reference Include="NexoDLLs\SixLabors.ImageSharp.dll" />
+		<Reference Include="NexoDLLs\SQLitePCLRaw.batteries_v2.dll" />
+		<Reference Include="NexoDLLs\SQLitePCLRaw.core.dll" />
+		<Reference Include="NexoDLLs\SQLitePCLRaw.provider.e_sqlite3.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.Base.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.Blockly.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.BlocklyEditor.Wpf.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.Client.Designer.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.Controls.Wpf.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.Data.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.Database.Wpf.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.Editor.Wpf.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.Map.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.Report.Check.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.Report.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.Report.Helper.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.Report.Wpf.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.Report.WpfDesign.dll" />
+		<Reference Include="NexoDLLs\Stimulsoft.Svg.dll" />
+		<Reference Include="NexoDLLs\Subiekt.dll" />
+		<Reference Include="NexoDLLs\Svg.dll" />
+		<Reference Include="NexoDLLs\System.Data.SqlClient.dll" />
+		<Reference Include="NexoDLLs\System.DirectoryServices.AccountManagement.dll" />
+		<Reference Include="NexoDLLs\System.DirectoryServices.Protocols.dll" />
+		<Reference Include="NexoDLLs\System.IdentityModel.Tokens.Jwt.dll" />
+		<Reference Include="NexoDLLs\System.IO.Ports.dll" />
+		<Reference Include="NexoDLLs\System.Linq.Dynamic.Core.dll" />
+		<Reference Include="NexoDLLs\System.Management.dll" />
+		<Reference Include="NexoDLLs\System.Net.Http.WinHttpHandler.dll" />
+		<Reference Include="NexoDLLs\System.ServiceModel.Http.dll" />
+		<Reference Include="NexoDLLs\System.ServiceModel.Primitives.dll" />
+		<Reference Include="NexoDLLs\Telerik.Windows.Controls.DataVisualization.dll" />
+		<Reference Include="NexoDLLs\Telerik.Windows.Controls.dll" />
+		<Reference Include="NexoDLLs\Telerik.Windows.Controls.FixedDocumentViewers.dll" />
+		<Reference Include="NexoDLLs\Telerik.Windows.Controls.ImageEditor.dll" />
+		<Reference Include="NexoDLLs\Telerik.Windows.Controls.Input.dll" />
+		<Reference Include="NexoDLLs\Telerik.Windows.Controls.Navigation.dll" />
+		<Reference Include="NexoDLLs\Telerik.Windows.Controls.RibbonView.dll" />
+		<Reference Include="NexoDLLs\Telerik.Windows.Controls.RichTextBox.dll" />
+		<Reference Include="NexoDLLs\Telerik.Windows.Data.dll" />
+		<Reference Include="NexoDLLs\Telerik.Windows.Documents.Core.dll" />
+		<Reference Include="NexoDLLs\Telerik.Windows.Documents.Fixed.dll" />
+		<Reference Include="NexoDLLs\Telerik.Windows.Documents.Flow.dll" />
+		<Reference Include="NexoDLLs\Telerik.Windows.Zip.dll" />
+		<Reference Include="NexoDLLs\VirtualizingWrapPanel.dll" />
+		<Reference Include="NexoDLLs\Xceed.Wpf.Toolkit.dll" />
+		<Reference Include="NexoDLLs\XpsToPdf.dll" />
+	</ItemGroup>
 </Project>
