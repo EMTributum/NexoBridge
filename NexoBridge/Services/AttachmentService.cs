@@ -24,121 +24,131 @@ namespace NexoBridge.Services
 
         public async Task PodepnijZalacznikiAsync(ImportJob job, dynamic rezultat, List<Tuple<DokumentDoKsiegowania, InsERT.Moria.ModelDanych.SchematImportu>> zatwierdzone, Func<int, string, Task> raportujPostep)
         {
+            _logger.LogInformation("[DEBUG] Uruchomiono usługę załączników dla zadania: {JobId}", job.JobId);
             if (rezultat == null || zatwierdzone == null || zatwierdzone.Count == 0) return;
 
-            await raportujPostep(95, "Podpinanie załączników do finalnych dekretów...");
-
+            await raportujPostep(95, "Podpinanie załączników (NIP + Numer)...");
             var bibliotekaZalacznikow = _sfera.PodajObiektTypu<InsERT.Moria.BibliotekaZalacznikow.IBibliotekaZalacznikow>();
-            dynamic mgrKPiR = PobierzMenedzera("IZapisyWKPiR");
-            dynamic mgrVat = PobierzMenedzera("IZapisyWEwidencjiVAT");
-            dynamic mgrDekrety = PobierzMenedzera("IDekrety");
-            dynamic mgrEP = PobierzMenedzera("IZapisyWEP");
+
+            var menedzerowie = new Dictionary<string, dynamic> {
+                { "KPiR", PobierzMenedzera("IZapisyWKPiR") },
+                { "Vat", PobierzMenedzera("IZapisyWEwidencjiVAT") },
+                { "Dekret", PobierzMenedzera("IDekrety") },
+                { "EP", PobierzMenedzera("IZapisyWEP") }
+            };
 
             var listaWynikow = ((System.Collections.IEnumerable)rezultat).Cast<dynamic>().ToList();
 
             for (int i = 0; i < zatwierdzone.Count; i++)
             {
                 var dok = zatwierdzone[i].Item1;
-                string numer = dok.NumerDokumentu;
-                if (string.IsNullOrEmpty(numer)) numer = dok.Id.ToString();
+                string nrSystemowy = dok.NumerDokumentu ?? "";
+                string nipSystemowy = dok.PodmiotHistoria?.NIP ?? "";
 
-                var operacja = listaWynikow[i];
+                string czystyNrSystemowy = Normalizuj(nrSystemowy);
+                string czystyNipSystemowy = Normalizuj(nipSystemowy);
 
-                var zalacznik = job.Attachments?.FirstOrDefault(z =>
-                    numer.Equals(z.DocumentNumber, StringComparison.OrdinalIgnoreCase) ||
-                    numer.ToLower().Contains(z.DocumentNumber.ToLower()) ||
-                    z.DocumentNumber.ToLower().Contains(numer.ToLower())
-                );
-
-                if (zalacznik != null && zalacznik.Content != null && zalacznik.Content.Length > 0)
+                var meta = job.InvoicesMetadata?.FirstOrDefault(m =>
                 {
-                    string tempPath = Path.Combine(Path.GetTempPath(), zalacznik.FileName);
+                    string czystyNrFront = Normalizuj(m.InvoiceNumber);
+                    string czystyNipFront = Normalizuj(m.VendorNip).Replace("pl", "");
+
+                    if (string.IsNullOrEmpty(czystyNrFront) || string.IsNullOrEmpty(czystyNipFront)) return false;
+
+                    return czystyNrSystemowy.EndsWith(czystyNrFront) &&
+                           czystyNipSystemowy.EndsWith(czystyNipFront);
+                });
+
+                var zalacznik = job.Attachments?.FirstOrDefault(z => meta != null && z.FileName == meta.PdfFileName);
+
+                if (zalacznik != null)
+                {
+                    // ========================================================
+                    // NOWOŚĆ: Piękna nazwa załącznika + izolacja w unikalnym folderze
+                    // ========================================================
+
+                    // 1. Czyścimy numer z niedozwolonych znaków (np. ukośników z "FV 1/2026")
+                    string bezpiecznaNazwa = nrSystemowy.Replace("/", "_").Replace("\\", "_").Replace(":", "_").Replace(" ", "_");
+                    bezpiecznaNazwa = string.Join("_", bezpiecznaNazwa.Split(Path.GetInvalidFileNameChars()));
+                    if (string.IsNullOrWhiteSpace(bezpiecznaNazwa)) bezpiecznaNazwa = $"Skan_{Guid.NewGuid():N}";
+
+                    // 2. Unikalny folder tymczasowy zapobiega kolizjom na dysku
+                    string tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(tempDir);
+
+                    // 3. Pełna ścieżka - plik nazywa się dokładnie jak faktura!
+                    string tempPath = Path.Combine(tempDir, $"{bezpiecznaNazwa}.pdf");
+
                     File.WriteAllBytes(tempPath, zalacznik.Content);
 
                     try
                     {
-                        dynamic dokumentyWynikowe = operacja.WynikowePoprawneZapisy;
-
+                        dynamic dokumentyWynikowe = listaWynikow[i].WynikowePoprawneZapisy;
                         if (dokumentyWynikowe != null)
                         {
                             using (var zalacznikBO = bibliotekaZalacznikow.Utworz())
                             {
+                                // Wczytaj() automatycznie nada plikowi nazwę wyciągniętą z tempPath (czyli ładny numer)
                                 zalacznikBO.Wczytaj(tempPath);
                                 zalacznikBO.Dane.Opis = "Oryginał ze Scanye";
 
-                                bool czyPodpieto = false;
-
-                                foreach (var wynikowyElement in dokumentyWynikowe)
+                                bool podpieto = false;
+                                foreach (var wynik in dokumentyWynikowe)
                                 {
-                                    string typWyniku = "Nieznany";
-                                    string idDoLoga = "Brak";
-                                    try
+                                    object encja = ZnajdzEncje(menedzerowie, wynik);
+                                    if (encja != null)
                                     {
-                                        var rawId = wynikowyElement.DokumentId;
-                                        typWyniku = wynikowyElement.GetType().Name;
-                                        idDoLoga = rawId != null ? rawId.ToString() : "Brak";
-
-                                        object encjaZintegrowana = null;
-
-                                        if (typWyniku.Contains("KPiR")) encjaZintegrowana = ZnajdzFizycznaEncje((object)mgrKPiR, rawId);
-                                        else if (typWyniku.Contains("Dekret")) encjaZintegrowana = ZnajdzFizycznaEncje((object)mgrDekrety, rawId);
-                                        else if (typWyniku.Contains("Vat") || typWyniku.Contains("EVAT")) encjaZintegrowana = ZnajdzFizycznaEncje((object)mgrVat, rawId);
-                                        else if (typWyniku.Contains("EP")) encjaZintegrowana = ZnajdzFizycznaEncje((object)mgrEP, rawId);
-
-                                        if (encjaZintegrowana != null)
-                                        {
-                                            zalacznikBO.DodajPowiazanie((dynamic)encjaZintegrowana);
-                                            czyPodpieto = true;
-                                        }
-                                    }
-                                    catch (Exception exInner)
-                                    {
-                                        _logger.LogError("Błąd podczas przypisywania do {Typ} (ID: {Id}): {Msg}", typWyniku, idDoLoga, exInner.Message);
+                                        zalacznikBO.DodajPowiazanie((dynamic)encja);
+                                        podpieto = true;
                                     }
                                 }
 
-                                if (czyPodpieto && zalacznikBO.Zapisz())
+                                if (podpieto && zalacznikBO.Zapisz())
                                 {
-                                    _logger.LogInformation("[ZAŁĄCZNIK SUKCES] Pomyślnie podpięto plik '{FileName}' bezpośrednio do księgi dla: {Numer}", zalacznik.FileName, numer);
-                                }
-                                else
-                                {
-                                    _logger.LogError("[ZAŁĄCZNIK BŁĄD] Nie podpięto załącznika do ksiąg dla {Numer}.", numer);
+                                    _logger.LogInformation("[ZAŁĄCZNIK SUKCES] Podpięto dokument pod nazwą '{Skan}' dla: {Numer}", bezpiecznaNazwa, nrSystemowy);
                                 }
                             }
                         }
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "[ZAŁĄCZNIK WYJĄTEK] Nie udało się podpiąć pliku do {Numer}", numer);
+                        _logger.LogError(ex, "[ZAŁĄCZNIK BŁĄD] Wystąpił wyjątek podczas podpinania pliku '{Skan}' do dokumentu: {Numer}", bezpiecznaNazwa, nrSystemowy);
                     }
                     finally
                     {
+                        // Sprzątamy zarówno plik, jak i nasz folder izolujący
                         if (File.Exists(tempPath)) File.Delete(tempPath);
+                        if (Directory.Exists(tempDir)) Directory.Delete(tempDir);
                     }
                 }
                 else
                 {
-                    _logger.LogWarning("[ZAŁĄCZNIK BRAK] Brak PDF dla dokumentu: {Numer}.", numer);
+                    _logger.LogWarning("[ZAŁĄCZNIK BRAK] Nie znaleziono dopasowania w metadanych lub brak PDF dla dokumentu: {Numer} (NIP: {Nip})", nrSystemowy, nipSystemowy);
                 }
             }
         }
 
-        private Type ZnajdzTypInterfejsu(string nazwa)
-        {
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                Type[] types = null;
-                try { types = assembly.GetTypes(); }
-                catch (System.Reflection.ReflectionTypeLoadException ex) { types = ex.Types; }
-                catch { continue; }
+        private string Normalizuj(string input) =>
+            input == null ? "" : new string(input.Where(char.IsLetterOrDigit).ToArray()).ToLower();
 
-                if (types != null)
-                {
-                    var t = types.FirstOrDefault(x => x != null && x.Name == nazwa && x.IsInterface);
-                    if (t != null) return t;
-                }
-            }
+        private object ZnajdzEncje(Dictionary<string, dynamic> menedzerowie, dynamic wynik)
+        {
+            string typ = wynik.GetType().Name;
+            dynamic mgr = null;
+            if (typ.Contains("KPiR")) mgr = menedzerowie["KPiR"];
+            else if (typ.Contains("Dekret")) mgr = menedzerowie["Dekret"];
+            else if (typ.Contains("Vat")) mgr = menedzerowie["Vat"];
+            else if (typ.Contains("EP")) mgr = menedzerowie["EP"];
+
+            return ZnajdzFizycznaEncje(mgr, wynik.DokumentId);
+        }
+
+        private object ZnajdzFizycznaEncje(dynamic mgr, object id)
+        {
+            if (mgr == null || id == null) return null;
+            int targetId = Convert.ToInt32(id);
+            try { return mgr.Dane.Znajdz(targetId); } catch { }
+            try { return ((IEnumerable<dynamic>)mgr.Dane.Wszystkie()).FirstOrDefault(e => e.Id == targetId); } catch { }
             return null;
         }
 
@@ -153,34 +163,29 @@ namespace NexoBridge.Services
             return null;
         }
 
-        private object ZnajdzFizycznaEncje(object menedzer, object idWartosc)
+        private Type ZnajdzTypInterfejsu(string nazwa)
         {
-            if (menedzer == null || idWartosc == null) return null;
-            try
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
-                string targetIdStr = idWartosc.ToString();
-
-                var propDane = menedzer.GetType().GetProperty("Dane");
-                if (propDane == null) return null;
-
-                dynamic daneRepo = propDane.GetValue(menedzer);
-                if (daneRepo == null) return null;
-
-                dynamic wszystkieWpisy = daneRepo.Wszystkie();
-
-                foreach (var encja in wszystkieWpisy)
+                Type[] types = null;
+                try
                 {
-                    try
-                    {
-                        var idEncji = encja.Id;
-                        if (idEncji != null && idEncji.ToString() == targetIdStr) return encja;
-                    }
-                    catch { continue; }
+                    types = assembly.GetTypes();
                 }
-            }
-            catch (Exception exRef)
-            {
-                _logger.LogWarning("Błąd wyszukiwania encji {Id}: {Msg}", idWartosc, exRef.InnerException?.Message ?? exRef.Message);
+                catch (System.Reflection.ReflectionTypeLoadException ex)
+                {
+                    types = ex.Types;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (types != null)
+                {
+                    var t = types.FirstOrDefault(x => x != null && x.Name == nazwa && x.IsInterface);
+                    if (t != null) return t;
+                }
             }
             return null;
         }
