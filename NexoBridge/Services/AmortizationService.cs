@@ -88,9 +88,11 @@ namespace NexoBridge.Services
                             // Główna, ukryta metoda silnika wyliczająca matematykę amortyzacji!
                             amBO.NaliczAmortyzacje(st, typPodatkowy, dataAmortyzacji);
 
-                            // Wyciągamy to, co fizycznie stanowi koszt (KUP) do PIT
-                            decimal kwotaKoszty = 0;
-                            try { kwotaKoszty = amBO.Dane.WartoscStanowiacaKoszty; } catch { try { kwotaKoszty = amBO.Dane.Wartosc; } catch { } }
+                            // Bezpieczne i szerokie wyciąganie kwoty z obiektu (różne wersje nexo różnie to nazywają)
+                            decimal kwotaKoszty = 0m;
+                            try { kwotaKoszty = (decimal)amBO.Dane.Wartosc; } catch { }
+                            try { if (kwotaKoszty == 0m) kwotaKoszty = (decimal)amBO.Dane.WartoscStanowiacaKoszty; } catch { }
+                            try { if (kwotaKoszty == 0m) kwotaKoszty = (decimal)amBO.Dane.Kwota; } catch { }
 
                             if (kwotaKoszty > 0)
                             {
@@ -102,14 +104,26 @@ namespace NexoBridge.Services
                                 }
                                 else
                                 {
-                                    _logger.LogWarning("Błąd zapisu dokumentu amortyzacji dla: {NazwaST}. Prawdopodobnie brak wymaganych danych.", nazwaST);
+                                    string bladSfery = "Brak szczegółów w InvalidData";
+                                    try
+                                    {
+                                        var invalid = (IEnumerable)amBO.InvalidData;
+                                        if (invalid != null) bladSfery = string.Join(" | ", invalid.Cast<dynamic>().Select(e => e.Komunikat ?? e.Tresc ?? e.ToString()));
+                                    }
+                                    catch { }
+
+                                    _logger.LogWarning("Odrzucono zapis amortyzacji dla: {NazwaST}. Powód: {Blad}", nazwaST, bladSfery);
                                 }
+                            }
+                            else
+                            {
+                                _logger.LogInformation("Pominięto zapis dla: {NazwaST}. Wyliczona rata wynosi 0 zł.", nazwaST);
                             }
                         }
                         catch (Exception ex)
                         {
-                            // System rzuci wyjątkiem, jeśli na ten miesiąc i dany środek nie przewidziano odpisu
-                            _logger.LogDebug("Środek '{NazwaST}' pominięty w tym miesiącu. (Powód systemowy: {Wiadomosc})", nazwaST, ex.Message);
+                            // Podbijamy z LogDebug na LogWarning, aby widzieć powód w konsoli!
+                            _logger.LogWarning("Środek '{NazwaST}' pominięty (Prawdopodobnie rata już istnieje). Powód Sfery: {Wiadomosc}", nazwaST, ex.Message);
                         }
                     }
                 }
@@ -117,6 +131,12 @@ namespace NexoBridge.Services
                 raport.Processed = true;
                 raport.DocumentsGenerated = naliczoneDokumenty;
                 raport.TotalCostAdded = sumaKosztow;
+
+                // Informacja dla frontendu, jeśli proces wyliczył 0 sztuk
+                if (naliczoneDokumenty == 0)
+                {
+                    raport.Warning = "Nie wygenerowano nowych odpisów (środki zamortyzowane lub raty już istnieją).";
+                }
 
                 _logger.LogInformation("[MODUŁ AMORTYZACJI ZAKOŃCZONY] Wygenerowano dokumenty: {Ilosc}. Całkowita kwota wpompowana do PIT: {Koszt} zł", naliczoneDokumenty, sumaKosztow);
             }

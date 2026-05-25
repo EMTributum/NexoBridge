@@ -50,23 +50,34 @@ namespace NexoBridge.Services
                 Message = "Proces zakończony."
             };
 
-            DateTime dataRozliczenia = DateTime.Now.AddMonths(-1);
+            DateTime dataRozliczenia = new DateTime(job.BillingYear, job.BillingMonth, 1);
+            int zatwierdzoneCount = 0;
 
-            _logger.LogInformation("Rozpoczynam zintegrowane przetwarzanie zadania: {JobId}. Baza docelowa: {Database}", job.JobId, job.DatabaseName);
+            _logger.LogInformation("Rozpoczynam zintegrowane przetwarzanie zadania: {JobId}. Baza docelowa: {Database} za {Miesiac}/{Rok}",
+                job.JobId, job.DatabaseName, job.BillingMonth, job.BillingYear);
 
             try
             {
                 // =========================================================
-                // ETAP 1: ODCZYT FAKTUR (Rozpakowanie i Poczekalnia)
+                // ETAP 1: OBSŁUGA FAKTUR
                 // =========================================================
-                await _parserService.ParseAndSyncAsync(job, raportujPostep);
+                if (job.ImportInvoices)
+                {
+                    await raportujPostep(10, "Pobieranie i analiza plików EPP...");
+                    await _parserService.ParseAndSyncAsync(job, raportujPostep);
+                }
+                else
+                {
+                    _logger.LogInformation("Pomijam moduł importu faktur (flaga ImportInvoices = false).");
+                    await raportujPostep(10, "Tryb bez faktur. Pomijam pobieranie EPP...");
+                }
 
                 // =========================================================
-                // ETAP 2: AMORTYZACJA (Opcjonalna)
+                // ETAP 2: AMORTYZACJA
                 // =========================================================
                 if (job.CalculateAmortization)
                 {
-                    await raportujPostep(65, "Sprawdzanie środków trwałych i naliczanie amortyzacji...");
+                    await raportujPostep(30, "Sprawdzanie środków trwałych i naliczanie amortyzacji...");
                     finalReport.Amortization = await _amortizationService.ObliczAmortyzacjeAsync(dataRozliczenia);
                 }
                 else
@@ -75,74 +86,87 @@ namespace NexoBridge.Services
                 }
 
                 // =========================================================
-                // ETAP 3: DEKRETACJA WŁAŚCIWA (Sędzia)
+                // ETAP 3: DEKRETACJA WŁAŚCIWA (Faktury + Amortyzacja)
                 // =========================================================
-                var (rezultat, zatwierdzone) = await _accountingService.DekretujAsync(raportujPostep);
-
-                if (zatwierdzone.Count > 0)
+                // Dekretujemy zawsze, jeśli wpadły nowe faktury LUB wygenerowano amortyzację
+                if (job.ImportInvoices || job.CalculateAmortization)
                 {
-                    // =========================================================
-                    // ETAP 4: ZAŁĄCZNIKI PDF (Podpinanie do zadekretowanych)
-                    // =========================================================
-                    await _attachmentService.PodepnijZalacznikiAsync(job, rezultat, zatwierdzone, raportujPostep);
+                    await raportujPostep(50, "Dekretacja dokumentów...");
+                    var (rezultat, zatwierdzone) = await _accountingService.DekretujAsync(raportujPostep);
+                    zatwierdzoneCount = zatwierdzone.Count;
 
                     // =========================================================
-                    // ETAP 5: WYLICZENIE PODATKÓW (PIT i VAT - Opcjonalne)
+                    // ETAP 4: ZAŁĄCZNIKI (Tylko dla faktur!)
                     // =========================================================
-
-                    if (job.CalculatePit)
+                    if (job.ImportInvoices && zatwierdzoneCount > 0)
                     {
-                        await raportujPostep(96, "Wyliczanie zaliczek na podatek PIT...");
-                        finalReport.PitTaxes = await _pitService.WyliczZaliczkiWspolnikowAsync(dataRozliczenia);
-
-                        if (finalReport.PitTaxes.Any(p => !string.IsNullOrEmpty(p.CriticalError)))
-                        {
-                            finalReport.Status = "FAILED";
-                            finalReport.Message = "Proces natrafił na krytyczne błędy podczas wyliczania PIT. Sprawdź konfigurację wspólników w Nexo.";
-                            _logger.LogWarning(finalReport.Message);
-                        }
-                    }
-                    else
-                    {
-                        _logger.LogInformation("Pomijam wyliczanie PIT (flaga z Frontendu).");
+                        await raportujPostep(70, "Podpinanie załączników PDF...");
+                        await _attachmentService.PodepnijZalacznikiAsync(job, rezultat, zatwierdzone, raportujPostep);
                     }
 
-                    if (job.CalculateVat)
+                    if (zatwierdzoneCount == 0 && job.ImportInvoices)
                     {
-                        await raportujPostep(98, "Generowanie JPK_V7...");
-                        finalReport.VatTax = await _vatService.WygenerujJpkVatAsync(dataRozliczenia);
-
-                        // Dodano zabezpieczenie null-conditional (?.), na wypadek gdyby VatTax był null
-                        if (!string.IsNullOrEmpty(finalReport.VatTax?.ErrorMsg))
-                        {
-                            finalReport.Status = "FAILED";
-                            finalReport.Message += " Wystąpiły błędy podczas generowania JPK.";
-                        }
+                        _logger.LogInformation("Brak nowych dokumentów do zaksięgowania z dostarczonego EPP.");
+                        finalReport.Message = "Brak dokumentów do zaksięgowania (EPP był pusty lub duplikaty). ";
                     }
-                    else
-                    {
-                        _logger.LogInformation("Pomijam wyliczanie VAT (flaga z Frontendu).");
-                    }
-
-                    // Zabezpieczenie przed błędem, gdy amortyzacja była pominięta
-                    if (finalReport.Status == "SUCCESS" && !string.IsNullOrEmpty(finalReport.Amortization?.Warning))
-                    {
-                        finalReport.Status = "PARTIAL_SUCCESS";
-                    }
-
-                    // =========================================================
-                    // ETAP 6: RAPORTOWANIE
-                    // =========================================================
-                    string summaryJson = JsonSerializer.Serialize(finalReport, new JsonSerializerOptions { WriteIndented = true });
-                    _logger.LogInformation("Zadanie {JobId} zakończone. Status: {Status}", job.JobId, finalReport.Status);
-
-                    await raportujPostep(100, $"[ZAKOŃCZONO] Status: {finalReport.Status}. Zadekretowano {zatwierdzone.Count} dok.");
                 }
                 else
                 {
-                    await raportujPostep(100, "Zakończono! (Brak nowych dokumentów do zadekretowania).");
-                    finalReport.Message = "Brak dokumentów do zaksięgowania.";
+                    await raportujPostep(50, "Brak operacji wymagających dekretacji. Przechodzę do podatków...");
                 }
+
+                // =========================================================
+                // ETAP 5: WYLICZENIE PODATKÓW PIT i VAT
+                // =========================================================
+                if (job.CalculatePit)
+                {
+                    await raportujPostep(85, "Wyliczanie zaliczek na podatek PIT...");
+                    finalReport.PitTaxes = await _pitService.WyliczZaliczkiWspolnikowAsync(dataRozliczenia);
+
+                    if (finalReport.PitTaxes.Any(p => !string.IsNullOrEmpty(p.CriticalError)))
+                    {
+                        finalReport.Status = "FAILED";
+                        finalReport.Message += " Proces natrafił na błędy podczas wyliczania PIT.";
+                        _logger.LogWarning("Błędy PIT: {Msg}", finalReport.Message);
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("Pomijam wyliczanie PIT (flaga z Frontendu).");
+                }
+
+                if (job.CalculateVat)
+                {
+                    await raportujPostep(95, "Generowanie JPK_V7...");
+                    finalReport.VatTax = await _vatService.WygenerujJpkVatAsync(dataRozliczenia);
+
+                    if (!string.IsNullOrEmpty(finalReport.VatTax?.ErrorMsg))
+                    {
+                        finalReport.Status = "FAILED";
+                        finalReport.Message += " Wystąpiły błędy podczas generowania JPK.";
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("Pomijam wyliczanie VAT (flaga z Frontendu).");
+                }
+
+                // =========================================================
+                // ETAP 6: ZAKOŃCZENIE I RAPORTOWANIE
+                // =========================================================
+                if (finalReport.Status == "SUCCESS" && !string.IsNullOrEmpty(finalReport.Amortization?.Warning))
+                {
+                    finalReport.Status = "PARTIAL_SUCCESS";
+                }
+
+                string summaryJson = JsonSerializer.Serialize(finalReport, new JsonSerializerOptions { WriteIndented = true });
+                _logger.LogInformation("Zadanie {JobId} zakończone. Status: {Status}", job.JobId, finalReport.Status);
+
+                string raportKoncowy = (job.ImportInvoices || job.CalculateAmortization)
+                    ? $"[ZAKOŃCZONO] Status: {finalReport.Status}. Zadekretowano {zatwierdzoneCount} dok."
+                    : $"[ZAKOŃCZONO] Status: {finalReport.Status}. Zakończono kalkulacje podatkowe.";
+
+                await raportujPostep(100, raportKoncowy);
             }
             catch (Exception ex)
             {

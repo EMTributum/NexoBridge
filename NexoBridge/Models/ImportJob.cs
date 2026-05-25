@@ -16,6 +16,7 @@ namespace NexoBridge.Models
         // ==========================================
         // NOWE: Flagi sterujące procesem (Feature Flags)
         // ==========================================
+        public bool ImportInvoices { get; set; } = true;
         public bool CalculateVat { get; set; } = true;
         public bool CalculatePit { get; set; } = true;
         public bool CalculateAmortization { get; set; } = true;

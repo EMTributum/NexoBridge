@@ -95,9 +95,10 @@ namespace NexoBridge
                         return Results.BadRequest("Brak danych logowania lub nazwy bazy.");
                     }
 
-                    if (job.Files == null || job.Files.Count == 0)
+                    // ZMIANA: Walidujemy brak plików tylko wtedy, gdy żądamy ich importu!
+                    if (job.ImportInvoices && (job.Files == null || job.Files.Count == 0))
                     {
-                        Log.Warning("Odrzucono żądanie JSON - brak plików EPP w paczce.");
+                        Log.Warning("Odrzucono żądanie JSON - brak plików EPP przy aktywnej fladze importu.");
                         return Results.BadRequest("Brak plików EPP.");
                     }
 
@@ -110,8 +111,9 @@ namespace NexoBridge
                     // 3. Wrzucamy do kolejki
                     await queue.QueueJobAsync(job);
 
-                    Log.Information("Zlecenie {JobId} dodane do kolejki (Baza: {Database}, Pliki EPP: {FileCount}, Załączniki PDF: {AttachmentCount})",
-                        job.JobId, job.DatabaseName, job.Files.Count, job.Attachments?.Count ?? 0);
+                    string typZlecenia = job.ImportInvoices ? "Import + Kalkulacje" : "Tylko Kalkulacje";
+                    Log.Information("Zlecenie {JobId} dodane do kolejki (Baza: {Database}, Typ: {Typ}, Pliki EPP: {FileCount}, Załączniki PDF: {AttachmentCount})",
+                        job.JobId, job.DatabaseName, typZlecenia, job.Files?.Count ?? 0, job.Attachments?.Count ?? 0);
 
                     return Results.Accepted(value: new { JobId = job.JobId, Message = "Zlecenie dodane do kolejki." });
                 });
