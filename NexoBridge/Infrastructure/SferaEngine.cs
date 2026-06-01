@@ -18,6 +18,11 @@ namespace NexoBridge.Infrastructure
         // Teraz przyjmujemy login i hasło przekazane prosto z żądania aplikacji!
         public void Uruchom(string nexoUser, string nexoPass, string dbName)
         {
+            Uruchom(nexoUser, nexoPass, dbName, ProductId.Rachmistrz);
+        }
+
+        public void Uruchom(string nexoUser, string nexoPass, string dbName, ProductId product)
+        {
             string nexoBinPath = Environment.GetEnvironmentVariable("NEXO_BIN_PATH");
 
             // 1. Oszukujemy system, zmieniając katalog roboczy na folder z InsERTem
@@ -38,7 +43,7 @@ namespace NexoBridge.Infrastructure
             var dane = new DaneDoUruchomieniaSfery
             {
                 DanePolaczenia = polaczenieSql,
-                Produkt = ProductId.Rachmistrz,
+                Produkt = product,
                 LoginNexo = nexoUser,
                 HasloNexo = nexoPass
             };

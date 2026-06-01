@@ -1,10 +1,9 @@
 ﻿using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.AspNetCore.Http;
 using System;
 using System.IO;
 using DotNetEnv;
-using NexoBridge.Models;
+using NexoBridge.API;
 using NexoBridge.Services;
 using NexoBridge.Workers;
 using NexoBridge.Hubs;
@@ -69,7 +68,10 @@ namespace NexoBridge
 
                 builder.Services.AddSignalR();
                 builder.Services.AddSingleton<JobQueue>();
+                builder.Services.AddSingleton<OfficeVatFlagsJobQueue>();
+                builder.Services.AddSingleton<OfficeVatFlagsResultStore>();
                 builder.Services.AddHostedService<NexoBackgroundWorker>();
+                builder.Services.AddHostedService<OfficeVatFlagsBackgroundWorker>();
 
                 var app = builder.Build();
 
@@ -79,44 +81,9 @@ namespace NexoBridge
                 // Rejestrujemy trasę dla naszego Huba
                 app.MapHub<ProgressHub>("/progressHub");
 
-                app.MapGet("/ping", () => Results.Ok(new { Status = "Online" }));
-
-                // =====================================================================
-                // NASZ ENDPOINT
-                // =====================================================================
-                app.MapPost("/api/jobs/import", async (ImportJob job, JobQueue queue) =>
-                {
-                    // 1. Walidacja
-                    if (string.IsNullOrEmpty(job.Username) ||
-                        string.IsNullOrEmpty(job.Password) ||
-                        string.IsNullOrEmpty(job.DatabaseName))
-                    {
-                        Log.Warning("Odrzucono żądanie JSON - brak wymaganych danych logowania lub nazwy bazy.");
-                        return Results.BadRequest("Brak danych logowania lub nazwy bazy.");
-                    }
-
-                    // ZMIANA: Walidujemy brak plików tylko wtedy, gdy żądamy ich importu!
-                    if (job.ImportInvoices && (job.Files == null || job.Files.Count == 0))
-                    {
-                        Log.Warning("Odrzucono żądanie JSON - brak plików EPP przy aktywnej fladze importu.");
-                        return Results.BadRequest("Brak plików EPP.");
-                    }
-
-                    // 2. Generujemy unikalne ID zadania (jeśli Python nam nie przysłał)
-                    if (string.IsNullOrEmpty(job.JobId))
-                    {
-                        job.JobId = Guid.NewGuid().ToString("N").Substring(0, 8);
-                    }
-
-                    // 3. Wrzucamy do kolejki
-                    await queue.QueueJobAsync(job);
-
-                    string typZlecenia = job.ImportInvoices ? "Import + Kalkulacje" : "Tylko Kalkulacje";
-                    Log.Information("Zlecenie {JobId} dodane do kolejki (Baza: {Database}, Typ: {Typ}, Pliki EPP: {FileCount}, Załączniki PDF: {AttachmentCount})",
-                        job.JobId, job.DatabaseName, typZlecenia, job.Files?.Count ?? 0, job.Attachments?.Count ?? 0);
-
-                    return Results.Accepted(value: new { JobId = job.JobId, Message = "Zlecenie dodane do kolejki." });
-                });
+                app.MapHealthEndpoints();
+                app.MapImportEndpoints();
+                app.MapOfficeVatFlagsEndpoints();
 
                 Log.Information("NexoBridge nasłuchuje na porcie 5000...");
                 app.Run("http://0.0.0.0:5000");
