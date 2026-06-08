@@ -122,7 +122,10 @@ namespace NexoBridge.Services
                     "Firma",
                     "Grupy",
                     "FlagaWlasna",
-                    "KlientBiura"
+                    "KlientBiura",
+                    "OpiekunPodstawowy",
+                    "OpiekunPodstawowy.Uzytkownik",
+                    "OpiekunPodstawowy.Uzytkownik.Osoba"
                 })).Cast<dynamic>();
             }
             catch
@@ -138,6 +141,7 @@ namespace NexoBridge.Services
             string nipUe = SafeString(podmiot, "NIPUE");
             var groupNames = PobierzNazwyGrup(podmiot);
             string vatUeFlagName = SafeString(SafeObj(podmiot, "FlagaWlasna"), "Nazwa");
+            string guardian = PobierzOpiekuna(podmiot);
 
             return new OfficeVatFlagsItem
             {
@@ -153,7 +157,8 @@ namespace NexoBridge.Services
                 VatUeFlagName = vatUeFlagName,
                 NipUe = nipUe,
                 AlwaysUseNipUe = SafeBool(podmiot, "ZawszeStosujNIPUE"),
-                SmeVatPayer = SafeBool(firma, "PodatnikSme")
+                SmeVatPayer = SafeBool(firma, "PodatnikSme"),
+                Guardian = guardian
             };
         }
 
@@ -176,6 +181,51 @@ namespace NexoBridge.Services
             }
 
             return result;
+        }
+
+        private string PobierzOpiekuna(object podmiot)
+        {
+            try
+            {
+                object opiekunPodstawowy = SafeObj(podmiot, "OpiekunPodstawowy");
+                if (opiekunPodstawowy == null)
+                {
+                    return null;
+                }
+
+                object uzytkownik = SafeObj(opiekunPodstawowy, "Uzytkownik");
+                if (uzytkownik == null)
+                {
+                    return null;
+                }
+
+                object osoba = SafeObj(uzytkownik, "Osoba");
+                if (osoba == null)
+                {
+                    return null;
+                }
+
+                string imie = SafeString(osoba, "Imie")?.Trim();
+                string nazwisko = SafeString(osoba, "Nazwisko")?.Trim();
+
+                string guardian = string.Join(" ", new[]
+                {
+            imie,
+            nazwisko
+        }.Where(x => !string.IsNullOrWhiteSpace(x)));
+
+                return string.IsNullOrWhiteSpace(guardian) ? null : guardian;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(
+                    ex,
+                    "Nie uda³o siê pobraæ opiekuna dla podmiotu ID {Id}: {Message}",
+                    SafeInt(podmiot, "Id"),
+                    ex.GetBaseException().Message);
+
+                return null;
+            }
         }
 
         private dynamic PobierzMenedzera(string nazwaInterfejsu)

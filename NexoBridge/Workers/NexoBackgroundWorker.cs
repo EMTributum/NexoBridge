@@ -55,6 +55,7 @@ namespace NexoBridge.Workers
                         var pitLogger = _loggerFactory.CreateLogger<PitCalculationService>();
                         var vatLogger = _loggerFactory.CreateLogger<VatCalculationService>();
                         var attLogger = _loggerFactory.CreateLogger<AttachmentService>();
+                        var ksefLogger = _loggerFactory.CreateLogger<KsefNumberAssignmentService>();
                         var importLogger = _loggerFactory.CreateLogger<NexoImportService>();
 
                         // 3. Budujemy nasze serwisy i przekazujemy im świeżo uruchomiony uchwyt Sfery
@@ -64,6 +65,7 @@ namespace NexoBridge.Workers
                         var pitService = new PitCalculationService(silnik.Sfera, pitLogger);
                         var vatService = new VatCalculationService(silnik.Sfera, vatLogger);
                         var attService = new AttachmentService(silnik.Sfera, attLogger);
+                        var ksefService = new KsefNumberAssignmentService(silnik.Sfera, ksefLogger);
 
                         // 4. Budujemy "Dyrygenta", z pełnym, nowym składem orkiestry
                         var serwis = new NexoImportService(
@@ -73,6 +75,7 @@ namespace NexoBridge.Workers
                             pitService,
                             vatService,
                             attService,
+                            ksefService,
                             importLogger
                         );
 

@@ -45,5 +45,6 @@ namespace NexoBridge.Models
         public string NipUe { get; set; }
         public bool? AlwaysUseNipUe { get; set; }
         public bool? SmeVatPayer { get; set; }
+        public string Guardian { get; set; }
     }
 }

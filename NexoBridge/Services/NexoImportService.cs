@@ -1,4 +1,4 @@
-﻿using InsERT.Mox.Telemetry;
+using InsERT.Mox.Telemetry;
 using Microsoft.Extensions.Logging;
 using NexoBridge.Models;
 using NLog;
@@ -21,6 +21,7 @@ namespace NexoBridge.Services
         private readonly PitCalculationService _pitService;
         private readonly VatCalculationService _vatService;
         private readonly AttachmentService _attachmentService;
+        private readonly KsefNumberAssignmentService _ksefNumberAssignmentService;
         private readonly ILogger<NexoImportService> _logger;
 
         public NexoImportService(
@@ -30,6 +31,7 @@ namespace NexoBridge.Services
             PitCalculationService pitCalculationService,
             VatCalculationService vatCalculationService,
             AttachmentService attachmentService,
+            KsefNumberAssignmentService ksefNumberAssignmentService,
             ILogger<NexoImportService> logger)
         {
             _parserService = parserService;
@@ -38,6 +40,7 @@ namespace NexoBridge.Services
             _pitService = pitCalculationService;
             _vatService = vatCalculationService;
             _attachmentService = attachmentService;
+            _ksefNumberAssignmentService = ksefNumberAssignmentService;
             _logger = logger;
         }
 
@@ -52,23 +55,34 @@ namespace NexoBridge.Services
 
             DateTime dataRozliczenia = new DateTime(job.BillingYear, job.BillingMonth, 1);
             int zatwierdzoneCount = 0;
+            bool maImportFaktur = job.ImportInvoices && job.Files != null && job.Files.Count > 0;
+            bool amortyzacjaWygenerowalaDokumenty = false;
 
-            _logger.LogInformation("Rozpoczynam zintegrowane przetwarzanie zadania: {JobId}. Baza docelowa: {Database} za {Miesiac}/{Rok}",
-                job.JobId, job.DatabaseName, job.BillingMonth, job.BillingYear);
+            _logger.LogInformation("Rozpoczynam zintegrowane przetwarzanie zadania: {JobId}. Baza docelowa: {Database} za {Miesiac}/{Rok}. Flagi: ImportInvoices={ImportInvoices}, Files={Files}, CalculateAmortization={CalculateAmortization}, CalculatePit={CalculatePit}, CalculateVat={CalculateVat}",
+                job.JobId,
+                job.DatabaseName,
+                job.BillingMonth,
+                job.BillingYear,
+                job.ImportInvoices,
+                job.Files?.Count ?? 0,
+                job.CalculateAmortization,
+                job.CalculatePit,
+                job.CalculateVat);
 
             try
             {
                 // =========================================================
                 // ETAP 1: OBSŁUGA FAKTUR
                 // =========================================================
-                if (job.ImportInvoices)
+                if (maImportFaktur)
                 {
                     await raportujPostep(10, "Pobieranie i analiza plików EPP...");
                     await _parserService.ParseAndSyncAsync(job, raportujPostep);
+                    await _ksefNumberAssignmentService.PrzypiszPrzedDekretacjaAsync(job, raportujPostep);
                 }
                 else
                 {
-                    _logger.LogInformation("Pomijam moduł importu faktur (flaga ImportInvoices = false).");
+                    _logger.LogInformation("Pomijam moduł importu faktur (ImportInvoices={ImportInvoices}, Files={Files}).", job.ImportInvoices, job.Files?.Count ?? 0);
                     await raportujPostep(10, "Tryb bez faktur. Pomijam pobieranie EPP...");
                 }
 
@@ -79,6 +93,11 @@ namespace NexoBridge.Services
                 {
                     await raportujPostep(30, "Sprawdzanie środków trwałych i naliczanie amortyzacji...");
                     finalReport.Amortization = await _amortizationService.ObliczAmortyzacjeAsync(dataRozliczenia);
+                    amortyzacjaWygenerowalaDokumenty = finalReport.Amortization?.DocumentsGenerated > 0;
+                    if (!amortyzacjaWygenerowalaDokumenty)
+                    {
+                        _logger.LogInformation("Amortyzacja nie wygenerowała nowych dokumentów. Pomijam dekretację amortyzacji (DocumentsGenerated={DocumentsGenerated}).", finalReport.Amortization?.DocumentsGenerated ?? 0);
+                    }
                 }
                 else
                 {
@@ -88,8 +107,9 @@ namespace NexoBridge.Services
                 // =========================================================
                 // ETAP 3: DEKRETACJA WŁAŚCIWA (Faktury + Amortyzacja)
                 // =========================================================
-                // Dekretujemy zawsze, jeśli wpadły nowe faktury LUB wygenerowano amortyzację
-                if (job.ImportInvoices || job.CalculateAmortization)
+                // Dekretujemy tylko realnie utworzone nowe faktury lub dokumenty amortyzacji.
+                bool wymagaDekretacji = maImportFaktur || amortyzacjaWygenerowalaDokumenty;
+                if (wymagaDekretacji)
                 {
                     await raportujPostep(50, "Dekretacja dokumentów...");
                     var (rezultat, zatwierdzone) = await _accountingService.DekretujAsync(raportujPostep);
@@ -98,13 +118,14 @@ namespace NexoBridge.Services
                     // =========================================================
                     // ETAP 4: ZAŁĄCZNIKI (Tylko dla faktur!)
                     // =========================================================
-                    if (job.ImportInvoices && zatwierdzoneCount > 0)
+                    if (maImportFaktur && zatwierdzoneCount > 0)
                     {
                         await raportujPostep(70, "Podpinanie załączników PDF...");
                         await _attachmentService.PodepnijZalacznikiAsync(job, rezultat, zatwierdzone, raportujPostep);
+                        await _ksefNumberAssignmentService.ZweryfikujPoDekretacjiAsync(job, rezultat, zatwierdzone, raportujPostep);
                     }
 
-                    if (zatwierdzoneCount == 0 && job.ImportInvoices)
+                    if (zatwierdzoneCount == 0 && maImportFaktur)
                     {
                         _logger.LogInformation("Brak nowych dokumentów do zaksięgowania z dostarczonego EPP.");
                         finalReport.Message = "Brak dokumentów do zaksięgowania (EPP był pusty lub duplikaty). ";
@@ -162,7 +183,7 @@ namespace NexoBridge.Services
                 string summaryJson = JsonSerializer.Serialize(finalReport, new JsonSerializerOptions { WriteIndented = true });
                 _logger.LogInformation("Zadanie {JobId} zakończone. Status: {Status}", job.JobId, finalReport.Status);
 
-                string raportKoncowy = (job.ImportInvoices || job.CalculateAmortization)
+                string raportKoncowy = wymagaDekretacji
                     ? $"[ZAKOŃCZONO] Status: {finalReport.Status}. Zadekretowano {zatwierdzoneCount} dok."
                     : $"[ZAKOŃCZONO] Status: {finalReport.Status}. Zakończono kalkulacje podatkowe.";
 

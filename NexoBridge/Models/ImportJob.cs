@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace NexoBridge.Models
@@ -16,10 +16,10 @@ namespace NexoBridge.Models
         // ==========================================
         // NOWE: Flagi sterujące procesem (Feature Flags)
         // ==========================================
-        public bool ImportInvoices { get; set; } = true;
-        public bool CalculateVat { get; set; } = true;
-        public bool CalculatePit { get; set; } = true;
-        public bool CalculateAmortization { get; set; } = true;
+        public bool ImportInvoices { get; set; } = false;
+        public bool CalculateVat { get; set; } = false;
+        public bool CalculatePit { get; set; } = false;
+        public bool CalculateAmortization { get; set; } = false;
 
         public List<EppFilePayload> Files { get; set; } = new List<EppFilePayload>();
         public List<AttachmentPayload> Attachments { get; set; } = new List<AttachmentPayload>();
@@ -34,6 +34,8 @@ namespace NexoBridge.Models
 
     public class AttachmentPayload
     {
+        public string DocumentNumber { get; set; }
+        public string VendorNip { get; set; }
         public string FileName { get; set; }
         public byte[] Content { get; set; }
     }
