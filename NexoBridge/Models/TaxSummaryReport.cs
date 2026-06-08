@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
 namespace NexoBridge.Models
@@ -18,6 +18,38 @@ namespace NexoBridge.Models
         public AmortizationReport Amortization { get; set; }
         public List<PitResult> PitTaxes { get; set; } = new List<PitResult>();
         public VatReport VatTax { get; set; }
+        public List<DocumentProcessingReport> Documents { get; set; } = new List<DocumentProcessingReport>();
+    }
+
+    public class DocumentProcessingReport
+    {
+        public string Source { get; set; }
+        public string InvoiceNumber { get; set; }
+        public string VendorNip { get; set; }
+        public string KsefNumber { get; set; }
+        public string PdfFileName { get; set; }
+
+        public string MatchStatus { get; set; } = "pending";
+        public string WaitingRoomStatus { get; set; } = "notChecked";
+        public string WaitingRoomId { get; set; }
+        public int? WaitingRoomNr { get; set; }
+        public string WaitingRoomNumber { get; set; }
+        public string WaitingRoomNip { get; set; }
+
+        public string KsefStatus { get; set; } = "notProvided";
+        public string AttachmentStatus { get; set; } = "notProvided";
+        public string DecreeStatus { get; set; } = "notChecked";
+        public string DecreeSchema { get; set; }
+        public List<DocumentResultEntry> ResultEntries { get; set; } = new List<DocumentResultEntry>();
+        public List<string> Warnings { get; set; } = new List<string>();
+    }
+
+    public class DocumentResultEntry
+    {
+        public string ResultType { get; set; }
+        public int? DocumentId { get; set; }
+        public string EntityType { get; set; }
+        public string KsefNumber { get; set; }
     }
 
     // Raport z modułu Środków Trwałych
@@ -53,3 +85,4 @@ namespace NexoBridge.Models
         public string ErrorMsg { get; set; }
     }
 }
+

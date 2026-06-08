@@ -1,4 +1,4 @@
-﻿using InsERT.Moria.DokumentyDoKsiegowania;
+using InsERT.Moria.DokumentyDoKsiegowania;
 using InsERT.Moria.ImportKsiegowy;
 using InsERT.Moria.Narzedzia.EPP;
 using InsERT.Moria.Narzedzia.EPP.Typy;
@@ -85,12 +85,14 @@ namespace NexoBridge.Services
 
                 if (kandydaci.Count == 0)
                 {
-                    throw new Exception($"Nie znaleziono nagłówka EPP dla faktury z KSeF: {meta.InvoiceNumber} (NIP: {meta.VendorNip}).");
+                    _logger.LogWarning("[KSEF EPP POMINIĘTY] Nie znaleziono nagłówka EPP dla faktury z KSeF: {Numer} (NIP: {Nip}). KSeF zostanie zaraportowany jako niepotwierdzony, ale import będzie kontynuowany.", meta.InvoiceNumber, meta.VendorNip);
+                    continue;
                 }
 
                 if (kandydaci.Count > 1)
                 {
-                    throw new Exception($"Nie mogę bezpiecznie dopisać KSeF do EPP dla faktury {meta.InvoiceNumber} (NIP: {meta.VendorNip}) - znaleziono {kandydaci.Count} nagłówków.");
+                    _logger.LogWarning("[KSEF EPP NIEJEDNOZNACZNY] Nie mogę bezpiecznie dopisać KSeF do EPP dla faktury {Numer} (NIP: {Nip}) - znaleziono {Count} nagłówków. Import będzie kontynuowany bez tego dopisania.", meta.InvoiceNumber, meta.VendorNip, kandydaci.Count);
+                    continue;
                 }
 
                 var naglowek = kandydaci[0];
@@ -181,8 +183,11 @@ namespace NexoBridge.Services
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .ToList();
 
+            var wariantyNumeru = InvoiceDocumentMatcher.GenerateNumberVariants(meta.InvoiceNumber).ToList();
             return nipEpp.EndsWith(nipFront) &&
-                   numeryEpp.Any(n => n == nrFront || n.EndsWith(nrFront));
+                   numeryEpp.Any(n => n == nrFront ||
+                                       n.EndsWith(nrFront) ||
+                                       wariantyNumeru.Any(w => n == w || n.EndsWith(w) || (w.Length >= 8 && n.Contains(w))));
         }
 
         private string OczyscNumerKsef(string value)
@@ -207,3 +212,5 @@ namespace NexoBridge.Services
         }
     }
 }
+
+

@@ -22,12 +22,17 @@ namespace NexoBridge.Services
             _logger = logger;
         }
 
-        public async Task PodepnijZalacznikiAsync(ImportJob job, dynamic rezultat, List<Tuple<DokumentDoKsiegowania, InsERT.Moria.ModelDanych.SchematImportu>> zatwierdzone, Func<int, string, Task> raportujPostep)
+        public async Task PodepnijZalacznikiAsync(
+            ImportJob job,
+            dynamic rezultat,
+            List<Tuple<DokumentDoKsiegowania, SchematImportu>> zatwierdzone,
+            List<DocumentProcessingReport> manifest,
+            Func<int, string, Task> raportujPostep)
         {
             _logger.LogInformation("[DEBUG] Uruchomiono usługę załączników dla zadania: {JobId}", job.JobId);
             if (rezultat == null || zatwierdzone == null || zatwierdzone.Count == 0) return;
 
-            await raportujPostep(95, "Podpinanie załączników (NIP + Numer)...");
+            await raportujPostep(95, "Podpinanie załączników (bezpieczne dopasowanie)...");
             var bibliotekaZalacznikow = _sfera.PodajObiektTypu<InsERT.Moria.BibliotekaZalacznikow.IBibliotekaZalacznikow>();
 
             var menedzerowie = new Dictionary<string, dynamic> {
@@ -59,176 +64,199 @@ namespace NexoBridge.Services
                 var dok = zatwierdzone[i].Item1;
                 string nrSystemowy = dok.NumerDokumentu ?? "";
                 string nipSystemowy = dok.PodmiotHistoria?.NIP ?? "";
+                var raport = ImportManifestService.ZnajdzRaportDlaDokumentu(manifest, dok);
 
-                string czystyNrSystemowy = Normalizuj(nrSystemowy);
-                string czystyNipSystemowy = Normalizuj(nipSystemowy);
-
-                var meta = job.InvoicesMetadata?.FirstOrDefault(m =>
-                {
-                    string czystyNrFront = Normalizuj(m.InvoiceNumber);
-                    string czystyNipFront = Normalizuj(m.VendorNip).Replace("pl", "");
-
-                    if (string.IsNullOrEmpty(czystyNrFront) || string.IsNullOrEmpty(czystyNipFront)) return false;
-
-                    return czystyNrSystemowy.EndsWith(czystyNrFront) &&
-                           czystyNipSystemowy.EndsWith(czystyNipFront);
-                });
-
-                var zalacznik = job.Attachments?.FirstOrDefault(z => meta != null && z.FileName == meta.PdfFileName);
+                var zalacznik = ZnajdzZalacznik(job, dok, raport, out string attachmentMatchStatus);
                 if (zalacznik == null)
-                {
-                    zalacznik = job.Attachments?.FirstOrDefault(z => PasujeZalacznikDoDokumentu(z, czystyNrSystemowy, czystyNipSystemowy));
-                }
-
-                if (zalacznik != null)
-                {
-                    _logger.LogInformation("[ZAŁĄCZNIK DOPASOWANY] Dokument={Numer}; NIP={Nip}; plik={Plik}; documentNumber={DocumentNumber}; vendorNip={VendorNip}; bytes={Bytes}",
-                        nrSystemowy,
-                        nipSystemowy,
-                        zalacznik.FileName,
-                        zalacznik.DocumentNumber,
-                        zalacznik.VendorNip,
-                        zalacznik.Content?.Length ?? 0);
-
-                    // ========================================================
-                    // NOWOŚĆ: Piękna nazwa załącznika + izolacja w unikalnym folderze
-                    // ========================================================
-
-                    // 1. Czyścimy numer z niedozwolonych znaków (np. ukośników z "FV 1/2026")
-                    string bezpiecznaNazwa = nrSystemowy.Replace("/", "_").Replace("\\", "_").Replace(":", "_").Replace(" ", "_");
-                    bezpiecznaNazwa = string.Join("_", bezpiecznaNazwa.Split(Path.GetInvalidFileNameChars()));
-                    if (string.IsNullOrWhiteSpace(bezpiecznaNazwa)) bezpiecznaNazwa = $"Skan_{Guid.NewGuid():N}";
-
-                    // 2. Unikalny folder tymczasowy zapobiega kolizjom na dysku
-                    string tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-                    Directory.CreateDirectory(tempDir);
-
-                    // 3. Pełna ścieżka - plik nazywa się dokładnie jak faktura!
-                    string rozszerzenie = Path.GetExtension(zalacznik.FileName);
-                    if (string.IsNullOrWhiteSpace(rozszerzenie)) rozszerzenie = ".pdf";
-                    string tempPath = Path.Combine(tempDir, $"{bezpiecznaNazwa}{rozszerzenie}");
-
-                    File.WriteAllBytes(tempPath, zalacznik.Content);
-                    _logger.LogInformation("[ZAŁĄCZNIK TEMP] Plik={Plik}; tempPath={TempPath}; bytes={Bytes}",
-                        zalacznik.FileName,
-                        tempPath,
-                        zalacznik.Content?.Length ?? 0);
-
-                    try
-                    {
-                        dynamic dokumentyWynikowe = listaWynikow[i].WynikowePoprawneZapisy;
-                        if (dokumentyWynikowe == null)
-                        {
-                            string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
-                            niepodpieteZalaczniki.Add(wpis + " | brak WynikowePoprawneZapisy");
-                            _logger.LogWarning("[ZAŁĄCZNIK BRAK WYNIKÓW] Plik={Plik}; Dokument={Numer}; NIP={Nip}; listaWynikowIndex={Index}",
-                                zalacznik.FileName,
-                                nrSystemowy,
-                                nipSystemowy,
-                                i);
-                        }
-                        else
-                        {
-                            var wynikowe = ((System.Collections.IEnumerable)dokumentyWynikowe).Cast<dynamic>().ToList();
-                            _logger.LogInformation("[ZAŁĄCZNIK WYNIKOWE] Plik={Plik}; Dokument={Numer}; liczba={Count}; wyniki={Wyniki}",
-                                zalacznik.FileName,
-                                nrSystemowy,
-                                wynikowe.Count,
-                                OpiszWyniki(wynikowe));
-
-                            using (var zalacznikBO = bibliotekaZalacznikow.Utworz())
-                            {
-                                // Wczytaj() automatycznie nada plikowi nazwę wyciągniętą z tempPath (czyli ładny numer)
-                                zalacznikBO.Wczytaj(tempPath);
-                                zalacznikBO.Dane.Opis = "Oryginał ze Scanye";
-
-                                bool podpieto = false;
-                                foreach (var wynik in wynikowe)
-                                {
-                                    object wynikObj = (object)wynik;
-                                    string typWyniku = wynikObj?.GetType().Name;
-                                    object dokumentId = PobierzDokumentId(wynik);
-                                    object encja = ZnajdzEncje(menedzerowie, wynik);
-                                    if (encja != null)
-                                    {
-                                        zalacznikBO.DodajPowiazanie((dynamic)encja);
-                                        podpieto = true;
-                                        _logger.LogInformation("[ZAŁĄCZNIK POWIĄZANIE] Plik={Plik}; Dokument={Numer}; wynikTyp={WynikTyp}; dokumentId={DokumentId}; encjaTyp={EncjaTyp}",
-                                            zalacznik.FileName,
-                                            nrSystemowy,
-                                            typWyniku,
-                                            dokumentId,
-                                            encja.GetType().FullName);
-                                    }
-                                    else
-                                    {
-                                        _logger.LogWarning("[ZAŁĄCZNIK BRAK ENCJI] Plik={Plik}; Dokument={Numer}; wynikTyp={WynikTyp}; dokumentId={DokumentId}",
-                                            zalacznik.FileName,
-                                            nrSystemowy,
-                                            typWyniku,
-                                            dokumentId);
-                                    }
-                                }
-
-                                if (!podpieto)
-                                {
-                                    string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
-                                    niepodpieteZalaczniki.Add(wpis + " | brak powiązań z encjami wynikowymi");
-                                    _logger.LogWarning("[ZAŁĄCZNIK BEZ POWIĄZAŃ] Plik={Plik}; Dokument={Numer}; NIP={Nip}", zalacznik.FileName, nrSystemowy, nipSystemowy);
-                                }
-                                else
-                                {
-                                    bool zapisano = zalacznikBO.Zapisz();
-                                    if (zapisano)
-                                    {
-                                        string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
-                                        podpieteZalaczniki.Add(wpis);
-                                        _logger.LogInformation("[ZAŁĄCZNIK SUKCES] Podpięto plik={Plik} pod nazwą '{Skan}' dla dokumentu={Numer}; NIP={Nip}",
-                                            zalacznik.FileName,
-                                            bezpiecznaNazwa,
-                                            nrSystemowy,
-                                            nipSystemowy);
-                                    }
-                                    else
-                                    {
-                                        string bledy = WyciagnijBledySfery(zalacznikBO);
-                                        string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
-                                        niepodpieteZalaczniki.Add(wpis + $" | Zapisz=false | {bledy}");
-                                        _logger.LogWarning("[ZAŁĄCZNIK ZAPIS NIEUDANY] Plik={Plik}; Dokument={Numer}; NIP={Nip}; Błędy={Bledy}",
-                                            zalacznik.FileName,
-                                            nrSystemowy,
-                                            nipSystemowy,
-                                            bledy);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
-                        niepodpieteZalaczniki.Add(wpis + $" | wyjątek: {ex.GetBaseException().Message}");
-                        _logger.LogError(ex, "[ZAŁĄCZNIK BŁĄD] Wystąpił wyjątek podczas podpinania pliku '{Skan}' do dokumentu: {Numer}; plik={Plik}; NIP={Nip}",
-                            bezpiecznaNazwa,
-                            nrSystemowy,
-                            zalacznik.FileName,
-                            nipSystemowy);
-                    }
-                    finally
-                    {
-                        // Sprzątamy zarówno plik, jak i nasz folder izolujący
-                        if (File.Exists(tempPath)) File.Delete(tempPath);
-                        if (Directory.Exists(tempDir)) Directory.Delete(tempDir);
-                    }
-                }
-                else
                 {
                     string wpis = $"BRAK DOPASOWANIA -> {nrSystemowy} ({nipSystemowy})";
                     niepodpieteZalaczniki.Add(wpis);
+                    if (raport != null && raport.AttachmentStatus == "pending")
+                    {
+                        raport.AttachmentStatus = "notFound";
+                        ImportManifestService.DodajWarning(raport, $"Nie znaleziono załącznika PDF dla dokumentu {nrSystemowy}. Dostępne pliki: {OpiszZalaczniki(job.Attachments)}");
+                    }
                     _logger.LogWarning("[ZAŁĄCZNIK BRAK] Nie znaleziono dopasowania w metadanych ani attachments dla dokumentu: {Numer} (NIP: {Nip}). Dostępne pliki: {Pliki}",
                         nrSystemowy,
                         nipSystemowy,
                         OpiszZalaczniki(job.Attachments));
+                    continue;
+                }
+
+                if (raport != null)
+                {
+                    raport.AttachmentStatus = "matched";
+                }
+
+                _logger.LogInformation("[ZAŁĄCZNIK DOPASOWANY] Dokument={Numer}; NIP={Nip}; plik={Plik}; documentNumber={DocumentNumber}; vendorNip={VendorNip}; bytes={Bytes}; match={Match}",
+                    nrSystemowy,
+                    nipSystemowy,
+                    zalacznik.FileName,
+                    zalacznik.DocumentNumber,
+                    zalacznik.VendorNip,
+                    zalacznik.Content?.Length ?? 0,
+                    attachmentMatchStatus);
+
+                string bezpiecznaNazwa = nrSystemowy.Replace("/", "_").Replace("\\", "_").Replace(":", "_").Replace(" ", "_");
+                bezpiecznaNazwa = string.Join("_", bezpiecznaNazwa.Split(Path.GetInvalidFileNameChars()));
+                if (string.IsNullOrWhiteSpace(bezpiecznaNazwa)) bezpiecznaNazwa = $"Skan_{Guid.NewGuid():N}";
+
+                string tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(tempDir);
+
+                string rozszerzenie = Path.GetExtension(zalacznik.FileName);
+                if (string.IsNullOrWhiteSpace(rozszerzenie)) rozszerzenie = ".pdf";
+                string tempPath = Path.Combine(tempDir, $"{bezpiecznaNazwa}{rozszerzenie}");
+
+                File.WriteAllBytes(tempPath, zalacznik.Content);
+                _logger.LogInformation("[ZAŁĄCZNIK TEMP] Plik={Plik}; tempPath={TempPath}; bytes={Bytes}",
+                    zalacznik.FileName,
+                    tempPath,
+                    zalacznik.Content?.Length ?? 0);
+
+                try
+                {
+                    if (i >= listaWynikow.Count)
+                    {
+                        string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy}) | brak wyniku dekretacji pod indeksem {i}";
+                        niepodpieteZalaczniki.Add(wpis);
+                        if (raport != null)
+                        {
+                            raport.AttachmentStatus = "notAttached";
+                            ImportManifestService.DodajWarning(raport, "Nie podpięto załącznika, bo dekretacja nie zwróciła odpowiadającego wyniku operacji.");
+                        }
+                        _logger.LogWarning("[ZAŁĄCZNIK BRAK WYNIKU] Plik={Plik}; Dokument={Numer}; NIP={Nip}; listaWynikowIndex={Index}",
+                            zalacznik.FileName,
+                            nrSystemowy,
+                            nipSystemowy,
+                            i);
+                        continue;
+                    }
+
+                    dynamic dokumentyWynikowe = listaWynikow[i].WynikowePoprawneZapisy;
+                    if (dokumentyWynikowe == null)
+                    {
+                        string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
+                        niepodpieteZalaczniki.Add(wpis + " | brak WynikowePoprawneZapisy");
+                        if (raport != null)
+                        {
+                            raport.AttachmentStatus = "notAttached";
+                            ImportManifestService.DodajWarning(raport, "Nie podpięto załącznika, bo wynik dekretacji nie zawierał WynikowePoprawneZapisy.");
+                        }
+                        _logger.LogWarning("[ZAŁĄCZNIK BRAK WYNIKÓW] Plik={Plik}; Dokument={Numer}; NIP={Nip}; listaWynikowIndex={Index}",
+                            zalacznik.FileName,
+                            nrSystemowy,
+                            nipSystemowy,
+                            i);
+                        continue;
+                    }
+
+                    var wynikowe = ((System.Collections.IEnumerable)dokumentyWynikowe).Cast<dynamic>().ToList();
+                    _logger.LogInformation("[ZAŁĄCZNIK WYNIKOWE] Plik={Plik}; Dokument={Numer}; liczba={Count}; wyniki={Wyniki}",
+                        zalacznik.FileName,
+                        nrSystemowy,
+                        wynikowe.Count,
+                        OpiszWyniki(wynikowe));
+
+                    using (var zalacznikBO = bibliotekaZalacznikow.Utworz())
+                    {
+                        zalacznikBO.Wczytaj(tempPath);
+                        zalacznikBO.Dane.Opis = "Oryginał ze Scanye";
+
+                        bool podpieto = false;
+                        foreach (var wynik in wynikowe)
+                        {
+                            object wynikObj = (object)wynik;
+                            string typWyniku = wynikObj?.GetType().Name;
+                            object dokumentId = PobierzDokumentId(wynik);
+                            object encja = ZnajdzEncje(menedzerowie, wynik);
+                            if (encja != null)
+                            {
+                                zalacznikBO.DodajPowiazanie((dynamic)encja);
+                                podpieto = true;
+                                _logger.LogInformation("[ZAŁĄCZNIK POWIĄZANIE] Plik={Plik}; Dokument={Numer}; wynikTyp={WynikTyp}; dokumentId={DokumentId}; encjaTyp={EncjaTyp}",
+                                    zalacznik.FileName,
+                                    nrSystemowy,
+                                    typWyniku,
+                                    dokumentId,
+                                    encja.GetType().FullName);
+                            }
+                            else
+                            {
+                                _logger.LogWarning("[ZAŁĄCZNIK BRAK ENCJI] Plik={Plik}; Dokument={Numer}; wynikTyp={WynikTyp}; dokumentId={DokumentId}",
+                                    zalacznik.FileName,
+                                    nrSystemowy,
+                                    typWyniku,
+                                    dokumentId);
+                            }
+                        }
+
+                        if (!podpieto)
+                        {
+                            string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
+                            niepodpieteZalaczniki.Add(wpis + " | brak powiązań z encjami wynikowymi");
+                            if (raport != null)
+                            {
+                                raport.AttachmentStatus = "notAttached";
+                                ImportManifestService.DodajWarning(raport, "Nie podpięto załącznika, bo nie znaleziono encji wynikowych do powiązania.");
+                            }
+                            _logger.LogWarning("[ZAŁĄCZNIK BEZ POWIĄZAŃ] Plik={Plik}; Dokument={Numer}; NIP={Nip}", zalacznik.FileName, nrSystemowy, nipSystemowy);
+                        }
+                        else
+                        {
+                            bool zapisano = zalacznikBO.Zapisz();
+                            if (zapisano)
+                            {
+                                string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
+                                podpieteZalaczniki.Add(wpis);
+                                if (raport != null)
+                                {
+                                    raport.AttachmentStatus = "attached";
+                                }
+                                _logger.LogInformation("[ZAŁĄCZNIK SUKCES] Podpięto plik={Plik} pod nazwą '{Skan}' dla dokumentu={Numer}; NIP={Nip}",
+                                    zalacznik.FileName,
+                                    bezpiecznaNazwa,
+                                    nrSystemowy,
+                                    nipSystemowy);
+                            }
+                            else
+                            {
+                                string bledy = WyciagnijBledySfery(zalacznikBO);
+                                string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
+                                niepodpieteZalaczniki.Add(wpis + $" | Zapisz=false | {bledy}");
+                                if (raport != null)
+                                {
+                                    raport.AttachmentStatus = "notAttached";
+                                    ImportManifestService.DodajWarning(raport, $"Nie udało się zapisać załącznika w Sferze: {bledy}");
+                                }
+                                _logger.LogWarning("[ZAŁĄCZNIK ZAPIS NIEUDANY] Plik={Plik}; Dokument={Numer}; NIP={Nip}; Błędy={Bledy}",
+                                    zalacznik.FileName,
+                                    nrSystemowy,
+                                    nipSystemowy,
+                                    bledy);
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
+                    niepodpieteZalaczniki.Add(wpis + $" | wyjątek: {ex.GetBaseException().Message}");
+                    if (raport != null)
+                    {
+                        raport.AttachmentStatus = "notAttached";
+                        ImportManifestService.DodajWarning(raport, $"Wyjątek podczas podpinania załącznika: {ex.GetBaseException().Message}");
+                    }
+                    _logger.LogError(ex, "[ZAŁĄCZNIK BŁĄD] Wystąpił wyjątek podczas podpinania pliku '{Skan}' do dokumentu: {Numer}; plik={Plik}; NIP={Nip}",
+                        bezpiecznaNazwa,
+                        nrSystemowy,
+                        zalacznik.FileName,
+                        nipSystemowy);
+                }
+                finally
+                {
+                    if (File.Exists(tempPath)) File.Delete(tempPath);
+                    if (Directory.Exists(tempDir)) Directory.Delete(tempDir);
                 }
             }
 
@@ -238,6 +266,41 @@ namespace NexoBridge.Services
                 ListaDoLogu(podpieteZalaczniki),
                 niepodpieteZalaczniki.Count,
                 ListaDoLogu(niepodpieteZalaczniki));
+        }
+
+        private AttachmentPayload ZnajdzZalacznik(ImportJob job, DokumentDoKsiegowania dok, DocumentProcessingReport raport, out string matchStatus)
+        {
+            matchStatus = "none";
+            if (job.Attachments == null || job.Attachments.Count == 0) return null;
+
+            if (raport != null && !string.IsNullOrWhiteSpace(raport.PdfFileName))
+            {
+                var byName = job.Attachments.FirstOrDefault(z => string.Equals(z.FileName, raport.PdfFileName, StringComparison.OrdinalIgnoreCase));
+                if (byName != null)
+                {
+                    matchStatus = "pdfFileName";
+                    return byName;
+                }
+            }
+
+            var matches = job.Attachments
+                .Select(z => new { Attachment = z, Match = InvoiceDocumentMatcher.Match(new[] { dok }, new InvoiceMetadata { InvoiceNumber = z.DocumentNumber, VendorNip = z.VendorNip }) })
+                .Where(x => x.Match.Document != null)
+                .ToList();
+
+            if (matches.Count == 1)
+            {
+                matchStatus = matches[0].Match.Status;
+                return matches[0].Attachment;
+            }
+
+            if (matches.Count > 1 && raport != null)
+            {
+                raport.AttachmentStatus = "ambiguous";
+                ImportManifestService.DodajWarning(raport, "Nie podpięto załącznika, bo wiele plików pasuje do tego samego dokumentu.");
+            }
+
+            return null;
         }
 
         private string OpiszZalaczniki(IEnumerable<AttachmentPayload> zalaczniki)
@@ -309,22 +372,6 @@ namespace NexoBridge.Services
             var lista = items.Where(x => !string.IsNullOrWhiteSpace(x)).Take(200).ToList();
             return lista.Count == 0 ? "brak" : string.Join(" || ", lista);
         }
-        private bool PasujeZalacznikDoDokumentu(AttachmentPayload zalacznik, string czystyNrSystemowy, string czystyNipSystemowy)
-        {
-            if (zalacznik == null) return false;
-
-            string czystyNrZalacznika = Normalizuj(zalacznik.DocumentNumber);
-            string czystyNipZalacznika = Normalizuj(zalacznik.VendorNip).Replace("pl", "");
-
-            if (string.IsNullOrEmpty(czystyNrZalacznika)) return false;
-
-            bool numerPasuje = czystyNrSystemowy.EndsWith(czystyNrZalacznika);
-            bool nipPasuje = string.IsNullOrEmpty(czystyNipZalacznika) || czystyNipSystemowy.EndsWith(czystyNipZalacznika);
-
-            return numerPasuje && nipPasuje;
-        }
-        private string Normalizuj(string input) =>
-            input == null ? "" : new string(input.Where(char.IsLetterOrDigit).ToArray()).ToLower();
 
         private object ZnajdzEncje(Dictionary<string, dynamic> menedzerowie, dynamic wynik)
         {

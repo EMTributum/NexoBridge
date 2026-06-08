@@ -1,21 +1,18 @@
-using InsERT.Mox.Telemetry;
+using InsERT.Moria.ModelDanych;
 using Microsoft.Extensions.Logging;
 using NexoBridge.Models;
-using NLog;
-using NPOI.POIFS.Properties;
-using SQLitePCL;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using static Dropbox.Api.TeamLog.LoginMethod;
-using static InsERT.Moria.Wspolne.Tagi.Consts.TagConsts;
 
 namespace NexoBridge.Services
 {
     public class NexoImportService
     {
         private readonly EppParserService _parserService;
+        private readonly ImportManifestService _manifestService;
         private readonly AmortizationService _amortizationService;
         private readonly AccountingService _accountingService;
         private readonly PitCalculationService _pitService;
@@ -26,6 +23,7 @@ namespace NexoBridge.Services
 
         public NexoImportService(
             EppParserService parserService,
+            ImportManifestService manifestService,
             AmortizationService amortizationService,
             AccountingService accountingService,
             PitCalculationService pitCalculationService,
@@ -35,6 +33,7 @@ namespace NexoBridge.Services
             ILogger<NexoImportService> logger)
         {
             _parserService = parserService;
+            _manifestService = manifestService;
             _amortizationService = amortizationService;
             _accountingService = accountingService;
             _pitService = pitCalculationService;
@@ -71,6 +70,8 @@ namespace NexoBridge.Services
 
             try
             {
+                finalReport.Documents = _manifestService.ZbudujManifest(job);
+
                 // =========================================================
                 // ETAP 1: OBSŁUGA FAKTUR
                 // =========================================================
@@ -78,7 +79,10 @@ namespace NexoBridge.Services
                 {
                     await raportujPostep(10, "Pobieranie i analiza plików EPP...");
                     await _parserService.ParseAndSyncAsync(job, raportujPostep);
-                    await _ksefNumberAssignmentService.PrzypiszPrzedDekretacjaAsync(job, raportujPostep);
+
+                    var oczekujacePoImporcie = _manifestService.PobierzDokumentyWPoczekalni();
+                    _manifestService.AktualizujPoPoczekalni(finalReport.Documents, oczekujacePoImporcie);
+                    await _ksefNumberAssignmentService.PrzypiszPrzedDekretacjaAsync(job, finalReport.Documents, raportujPostep);
                 }
                 else
                 {
@@ -105,30 +109,33 @@ namespace NexoBridge.Services
                 }
 
                 // =========================================================
-                // ETAP 3: DEKRETACJA WŁAŚCIWA (Faktury + Amortyzacja)
+                // ETAP 3: DEKRETACJA WŁAŚCIWA (cała Poczekalnia)
                 // =========================================================
-                // Dekretujemy tylko realnie utworzone nowe faktury lub dokumenty amortyzacji.
                 bool wymagaDekretacji = maImportFaktur || amortyzacjaWygenerowalaDokumenty;
                 if (wymagaDekretacji)
                 {
+                    var oczekujacePrzedDekretacja = _manifestService.PobierzDokumentyWPoczekalni();
+                    _manifestService.AktualizujPoPoczekalni(finalReport.Documents, oczekujacePrzedDekretacja);
+
                     await raportujPostep(50, "Dekretacja dokumentów...");
-                    var (rezultat, zatwierdzone) = await _accountingService.DekretujAsync(raportujPostep);
+                    var (rezultat, zatwierdzone, oczekujace, brakSchematu, bledneSchematy) = await _accountingService.DekretujAsync(raportujPostep);
                     zatwierdzoneCount = zatwierdzone.Count;
+                    AktualizujStatusyDekretacji(finalReport.Documents, rezultat, zatwierdzone, brakSchematu, bledneSchematy);
 
                     // =========================================================
-                    // ETAP 4: ZAŁĄCZNIKI (Tylko dla faktur!)
+                    // ETAP 4: ZAŁĄCZNIKI i KSeF (nie blokują procesu)
                     // =========================================================
                     if (maImportFaktur && zatwierdzoneCount > 0)
                     {
                         await raportujPostep(70, "Podpinanie załączników PDF...");
-                        await _attachmentService.PodepnijZalacznikiAsync(job, rezultat, zatwierdzone, raportujPostep);
-                        await _ksefNumberAssignmentService.ZweryfikujPoDekretacjiAsync(job, rezultat, zatwierdzone, raportujPostep);
+                        await _attachmentService.PodepnijZalacznikiAsync(job, rezultat, zatwierdzone, finalReport.Documents, raportujPostep);
+                        await _ksefNumberAssignmentService.ZweryfikujPoDekretacjiAsync(job, rezultat, zatwierdzone, finalReport.Documents, raportujPostep);
                     }
 
                     if (zatwierdzoneCount == 0 && maImportFaktur)
                     {
-                        _logger.LogInformation("Brak nowych dokumentów do zaksięgowania z dostarczonego EPP.");
-                        finalReport.Message = "Brak dokumentów do zaksięgowania (EPP był pusty lub duplikaty). ";
+                        _logger.LogInformation("Brak nowych dokumentów do zaksięgowania z dostarczonego EPP lub Poczekalni.");
+                        finalReport.Message = "Brak dokumentów do zaksięgowania. Szczegóły są dostępne w raporcie dokumentów.";
                     }
                 }
                 else
@@ -175,13 +182,23 @@ namespace NexoBridge.Services
                 // =========================================================
                 // ETAP 6: ZAKOŃCZENIE I RAPORTOWANIE
                 // =========================================================
+                if (finalReport.Status == "SUCCESS" && CzySaOstrzezeniaDokumentow(finalReport))
+                {
+                    finalReport.Status = "PARTIAL_SUCCESS";
+                    finalReport.Message += " Część dokumentów wymaga uwagi - szczegóły w raporcie dokumentów.";
+                }
+
                 if (finalReport.Status == "SUCCESS" && !string.IsNullOrEmpty(finalReport.Amortization?.Warning))
                 {
                     finalReport.Status = "PARTIAL_SUCCESS";
                 }
 
                 string summaryJson = JsonSerializer.Serialize(finalReport, new JsonSerializerOptions { WriteIndented = true });
-                _logger.LogInformation("Zadanie {JobId} zakończone. Status: {Status}", job.JobId, finalReport.Status);
+                _logger.LogInformation("Zadanie {JobId} zakończone. Status: {Status}. Dokumenty={DocumentsCount}; ostrzeżeniaDokumentów={WarningCount}",
+                    job.JobId,
+                    finalReport.Status,
+                    finalReport.Documents?.Count ?? 0,
+                    finalReport.Documents?.Count(d => d.Warnings != null && d.Warnings.Count > 0) ?? 0);
 
                 string raportKoncowy = wymagaDekretacji
                     ? $"[ZAKOŃCZONO] Status: {finalReport.Status}. Zadekretowano {zatwierdzoneCount} dok."
@@ -199,5 +216,135 @@ namespace NexoBridge.Services
 
             return finalReport;
         }
+
+        private void AktualizujStatusyDekretacji(
+            List<DocumentProcessingReport> manifest,
+            dynamic rezultat,
+            List<Tuple<DokumentDoKsiegowania, SchematImportu>> zatwierdzone,
+            List<DokumentDoKsiegowania> brakSchematu,
+            List<DokumentDoKsiegowania> bledneSchematy)
+        {
+            foreach (var doc in brakSchematu ?? new List<DokumentDoKsiegowania>())
+            {
+                var raport = ImportManifestService.ZnajdzRaportDlaDokumentu(manifest, doc);
+                if (raport == null) continue;
+                raport.DecreeStatus = "noSchema";
+                ImportManifestService.DodajWarning(raport, "Dokument nie został zadekretowany, bo nie spełnił warunków żadnego schematu dekretacji.");
+            }
+
+            foreach (var doc in bledneSchematy ?? new List<DokumentDoKsiegowania>())
+            {
+                var raport = ImportManifestService.ZnajdzRaportDlaDokumentu(manifest, doc);
+                if (raport == null) continue;
+                raport.DecreeStatus = "schemaError";
+                ImportManifestService.DodajWarning(raport, "Dokument nie został zadekretowany z powodu błędu krytycznego w schemacie albo danych dokumentu.");
+            }
+
+            var listaWynikow = PobierzWynikiOperacji(rezultat);
+            for (int i = 0; i < (zatwierdzone?.Count ?? 0); i++)
+            {
+                var dokument = zatwierdzone[i].Item1;
+                var schemat = zatwierdzone[i].Item2;
+                var raport = ImportManifestService.ZnajdzRaportDlaDokumentu(manifest, dokument);
+                if (raport == null) continue;
+
+                raport.DecreeSchema = schemat?.Nazwa;
+                if (i >= listaWynikow.Count)
+                {
+                    raport.DecreeStatus = "resultMissing";
+                    ImportManifestService.DodajWarning(raport, "Dokument miał przypisany schemat, ale operacja dekretacji nie zwróciła odpowiadającego wyniku.");
+                    _logger.LogWarning("[DEKRETACJA BRAK WYNIKU] Dokument={Numer}; NIP={Nip}; schemat={Schemat}; index={Index}",
+                        dokument.NumerDokumentu,
+                        dokument.PodmiotHistoria?.NIP,
+                        schemat?.Nazwa,
+                        i);
+                    continue;
+                }
+
+                var wynikowe = PobierzWynikoweZapisy(listaWynikow[i]);
+                if (wynikowe.Count == 0)
+                {
+                    raport.DecreeStatus = "noResultEntries";
+                    ImportManifestService.DodajWarning(raport, "Operacja dekretacji nie zwróciła wynikowych zapisów księgowych dla dokumentu.");
+                    _logger.LogWarning("[DEKRETACJA BEZ ZAPISÓW] Dokument={Numer}; NIP={Nip}; schemat={Schemat}",
+                        dokument.NumerDokumentu,
+                        dokument.PodmiotHistoria?.NIP,
+                        schemat?.Nazwa);
+                    continue;
+                }
+
+                raport.DecreeStatus = "decreed";
+                var resultEntries = new List<DocumentResultEntry>();
+                foreach (var wynik in wynikowe)
+                {
+                    resultEntries.Add(new DocumentResultEntry
+                    {
+                        ResultType = wynik?.GetType().Name,
+                        DocumentId = PobierzDokumentId(wynik)
+                    });
+                }
+                raport.ResultEntries = resultEntries;
+
+                _logger.LogInformation("[SUKCES DEKRETACJI] Dokument={Numer}; NIP={Nip}; Schemat={Schemat}; wyniki={Wyniki}",
+                    dokument.NumerDokumentu,
+                    dokument.PodmiotHistoria?.NIP,
+                    schemat?.Nazwa,
+                    string.Join("; ", raport.ResultEntries.Select(e => $"typ={e.ResultType}, dokumentId={e.DocumentId}")));
+            }
+        }
+
+        private List<dynamic> PobierzWynikiOperacji(dynamic rezultat)
+        {
+            if (rezultat == null) return new List<dynamic>();
+            try { return ((System.Collections.IEnumerable)rezultat).Cast<dynamic>().ToList(); }
+            catch { return new List<dynamic>(); }
+        }
+
+        private List<dynamic> PobierzWynikoweZapisy(dynamic wynikOperacji)
+        {
+            try
+            {
+                var wynikowe = (System.Collections.IEnumerable)wynikOperacji.WynikowePoprawneZapisy;
+                return wynikowe?.Cast<dynamic>().ToList() ?? new List<dynamic>();
+            }
+            catch
+            {
+                return new List<dynamic>();
+            }
+        }
+
+        private int? PobierzDokumentId(dynamic wynik)
+        {
+            try
+            {
+                object id = wynik?.DokumentId;
+                if (id == null) return null;
+                return Convert.ToInt32(id);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private bool CzySaOstrzezeniaDokumentow(TaxSummaryReport report)
+        {
+            return report.Documents != null && report.Documents.Any(d =>
+                (d.Warnings != null && d.Warnings.Count > 0) ||
+                d.WaitingRoomStatus == "notFound" ||
+                d.WaitingRoomStatus == "ambiguous" ||
+                d.KsefStatus == "notFoundInWaitingRoom" ||
+                d.KsefStatus == "notConfirmedInWaitingRoom" ||
+                d.KsefStatus == "differentInWaitingRoom" ||
+                d.KsefStatus == "notConfirmedAfterDecree" ||
+                d.AttachmentStatus == "notFound" ||
+                d.AttachmentStatus == "ambiguous" ||
+                d.AttachmentStatus == "notAttached" ||
+                d.DecreeStatus == "noSchema" ||
+                d.DecreeStatus == "schemaError" ||
+                d.DecreeStatus == "resultMissing" ||
+                d.DecreeStatus == "noResultEntries");
+        }
     }
 }
+

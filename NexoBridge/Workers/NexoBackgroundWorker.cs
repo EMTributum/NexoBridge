@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NexoBridge.Hubs;
@@ -50,6 +50,7 @@ namespace NexoBridge.Workers
 
                         // 2. Tworzymy loggery dla WSZYSTKICH rozbitych serwisów (dodano 3 nowe)
                         var parserLogger = _loggerFactory.CreateLogger<EppParserService>();
+                        var manifestLogger = _loggerFactory.CreateLogger<ImportManifestService>();
                         var amLogger = _loggerFactory.CreateLogger<AmortizationService>();
                         var accLogger = _loggerFactory.CreateLogger<AccountingService>();
                         var pitLogger = _loggerFactory.CreateLogger<PitCalculationService>();
@@ -60,6 +61,7 @@ namespace NexoBridge.Workers
 
                         // 3. Budujemy nasze serwisy i przekazujemy im świeżo uruchomiony uchwyt Sfery
                         var parserService = new EppParserService(silnik.Sfera, parserLogger);
+                        var manifestService = new ImportManifestService(silnik.Sfera, manifestLogger);
                         var amService = new AmortizationService(silnik.Sfera, amLogger);
                         var accService = new AccountingService(silnik.Sfera, accLogger);
                         var pitService = new PitCalculationService(silnik.Sfera, pitLogger);
@@ -70,6 +72,7 @@ namespace NexoBridge.Workers
                         // 4. Budujemy "Dyrygenta", z pełnym, nowym składem orkiestry
                         var serwis = new NexoImportService(
                             parserService,
+                            manifestService,
                             amService,
                             accService,
                             pitService,
@@ -106,3 +109,4 @@ namespace NexoBridge.Workers
         }
     }
 }
+

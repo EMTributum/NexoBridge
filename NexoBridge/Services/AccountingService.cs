@@ -1,4 +1,4 @@
-﻿using InsERT.Moria.DokumentyDoKsiegowania;
+using InsERT.Moria.DokumentyDoKsiegowania;
 using InsERT.Moria.ImportKsiegowy;
 using InsERT.Moria.ModelDanych;
 using InsERT.Moria.Sfera;
@@ -22,7 +22,12 @@ namespace NexoBridge.Services
             _logger = logger;
         }
 
-        public async Task<(dynamic Rezultat, List<Tuple<DokumentDoKsiegowania, InsERT.Moria.ModelDanych.SchematImportu>> Zatwierdzone)> DekretujAsync(Func<int, string, Task> raportujPostep)
+        public async Task<(
+            dynamic Rezultat,
+            List<Tuple<DokumentDoKsiegowania, SchematImportu>> Zatwierdzone,
+            List<DokumentDoKsiegowania> Oczekujace,
+            List<DokumentDoKsiegowania> BrakSchematu,
+            List<DokumentDoKsiegowania> BledneSchematy)> DekretujAsync(Func<int, string, Task> raportujPostep)
         {
             await raportujPostep(70, "Analiza dokumentów oczekujących...");
             var menedzerDokumentow = _sfera.PodajObiektTypu<IDokumentyDoKsiegowania>();
@@ -33,7 +38,7 @@ namespace NexoBridge.Services
             if (oczekujace.Count == 0)
             {
                 _logger.LogInformation("Zakończono: Brak nowych dokumentów do zadekretowania po synchronizacji.");
-                return (null, new List<Tuple<DokumentDoKsiegowania, InsERT.Moria.ModelDanych.SchematImportu>>());
+                return (null, new List<Tuple<DokumentDoKsiegowania, SchematImportu>>(), oczekujace, new List<DokumentDoKsiegowania>(), new List<DokumentDoKsiegowania>());
             }
 
             var obecnyOkres = menedzerOkresow.Dane.Wszystkie().ToList().LastOrDefault();
@@ -44,20 +49,20 @@ namespace NexoBridge.Services
             dynamic werdykt = menedzerDynamiczny.WyszukajSchematyDlaDokumentow(oczekujace, obecnyOkres);
 
             var typ = werdykt.GetType();
-            var brakSchematu = typ.GetProperty("DokumentyONieokreslonychSchematach")?.GetValue(werdykt) as System.Collections.IEnumerable;
-            var zBledami = typ.GetProperty("DokumentyOBlednychSchematach")?.GetValue(werdykt) as System.Collections.IEnumerable;
+            var brakSchematuRaw = typ.GetProperty("DokumentyONieokreslonychSchematach")?.GetValue(werdykt) as System.Collections.IEnumerable;
+            var zBledamiRaw = typ.GetProperty("DokumentyOBlednychSchematach")?.GetValue(werdykt) as System.Collections.IEnumerable;
 
-            int brakCount = 0; if (brakSchematu != null) foreach (var b in brakSchematu) brakCount++;
-            int bledyCount = 0; if (zBledami != null) foreach (var b in zBledami) bledyCount++;
+            var brakSchematu = PobierzDokumentyZElementow(brakSchematuRaw);
+            var bledneSchematy = PobierzDokumentyZElementow(zBledamiRaw);
 
-            if (brakCount > 0) _logger.LogWarning("[WERDYKT] Odrzucono (brak spełnionych warunków schematu): {BrakCount}", brakCount);
-            if (bledyCount > 0) _logger.LogWarning("[WERDYKT] Odrzucono (błędy krytyczne w fakturze): {BledyCount}", bledyCount);
+            if (brakSchematu.Count > 0) _logger.LogWarning("[WERDYKT] Odrzucono (brak spełnionych warunków schematu): {BrakCount}; dokumenty={Dokumenty}", brakSchematu.Count, OpiszDokumenty(brakSchematu));
+            if (bledneSchematy.Count > 0) _logger.LogWarning("[WERDYKT] Odrzucono (błędy krytyczne w fakturze): {BledyCount}; dokumenty={Dokumenty}", bledneSchematy.Count, OpiszDokumenty(bledneSchematy));
 
             var zatwierdzone = PobierzZaakceptowanePary(werdykt);
             if (zatwierdzone.Count == 0)
             {
-                _logger.LogError("Żadna z wrzuconych faktur nie pasuje do schematów dekretacji!");
-                throw new Exception("Żadna z wrzuconych faktur nie pasuje do schematów dekretacji!");
+                _logger.LogWarning("Żaden dokument z Poczekalni nie pasuje do schematów dekretacji. Nie przerywam procesu - raport zostanie zwrócony na front.");
+                return (null, zatwierdzone, oczekujace, brakSchematu, bledneSchematy);
             }
 
             await raportujPostep(90, $"Fizyczna dekretacja {zatwierdzone.Count} dokumentów w bazie...");
@@ -72,13 +77,15 @@ namespace NexoBridge.Services
             dynamic operacjaBypass = operacjaSeryjna;
 
             dynamic rezultat = operacjaBypass.WykonajOperacje(zatwierdzone, parametry);
+            int liczbaWynikow = PoliczWynikiOperacji(rezultat);
+            _logger.LogInformation("[DEKRETACJA OPERACJA] Zlecono={Zlecono}; wynikiOperacji={Wyniki}", (object)zatwierdzone.Count, (object)liczbaWynikow);
 
-            return (rezultat, zatwierdzone);
+            return (rezultat, zatwierdzone, oczekujace, brakSchematu, bledneSchematy);
         }
 
-        private List<Tuple<DokumentDoKsiegowania, InsERT.Moria.ModelDanych.SchematImportu>> PobierzZaakceptowanePary(dynamic werdykt)
+        private List<Tuple<DokumentDoKsiegowania, SchematImportu>> PobierzZaakceptowanePary(dynamic werdykt)
         {
-            var gotowe = new List<Tuple<DokumentDoKsiegowania, InsERT.Moria.ModelDanych.SchematImportu>>();
+            var gotowe = new List<Tuple<DokumentDoKsiegowania, SchematImportu>>();
             var szufladka = werdykt.GetType().GetProperty("DokumentyZeSchematami")?.GetValue(werdykt) as System.Collections.IEnumerable;
 
             if (szufladka == null) return gotowe;
@@ -87,17 +94,17 @@ namespace NexoBridge.Services
             {
                 var typItemu = item.GetType();
                 var dok = typItemu.GetProperties().FirstOrDefault(p => p.PropertyType.Name.Contains("DokumentDoKsiegowania"))?.GetValue(item);
-                InsERT.Moria.ModelDanych.SchematImportu schemat = null;
+                SchematImportu schemat = null;
                 var schematyProp = typItemu.GetProperties().FirstOrDefault(p => p.PropertyType.IsGenericType && p.PropertyType.GetGenericArguments().Any(g => g.Name.Contains("SchematImportu")));
 
                 if (schematyProp != null && schematyProp.GetValue(item) is System.Collections.IEnumerable lista)
                 {
-                    foreach (var s in lista) { schemat = (InsERT.Moria.ModelDanych.SchematImportu)s; break; }
+                    foreach (var s in lista) { schemat = (SchematImportu)s; break; }
                 }
                 else
                 {
                     var pojedynczyProp = typItemu.GetProperties().FirstOrDefault(p => p.PropertyType.Name.Contains("SchematImportu"));
-                    if (pojedynczyProp != null) schemat = (InsERT.Moria.ModelDanych.SchematImportu)pojedynczyProp.GetValue(item);
+                    if (pojedynczyProp != null) schemat = (SchematImportu)pojedynczyProp.GetValue(item);
                 }
 
                 if (dok != null && schemat != null)
@@ -106,11 +113,50 @@ namespace NexoBridge.Services
                     string numer = paraDok.NumerDokumentu;
                     if (string.IsNullOrEmpty(numer)) numer = paraDok.Id.ToString();
 
-                    _logger.LogInformation("[SUKCES DEKRETACJI] Odpakowano z teczki Sędziego: {Numer} -> Schemat: {Schemat}", numer, schemat.Nazwa);
-                    gotowe.Add(new Tuple<DokumentDoKsiegowania, InsERT.Moria.ModelDanych.SchematImportu>(paraDok, schemat));
+                    _logger.LogInformation("[SCHEMAT DEKRETACJI] Dokument zaakceptowany przez Sędziego: {Numer} -> Schemat: {Schemat}", numer, schemat.Nazwa);
+                    gotowe.Add(new Tuple<DokumentDoKsiegowania, SchematImportu>(paraDok, schemat));
                 }
             }
             return gotowe;
         }
+
+        private List<DokumentDoKsiegowania> PobierzDokumentyZElementow(System.Collections.IEnumerable elementy)
+        {
+            var dokumenty = new List<DokumentDoKsiegowania>();
+            if (elementy == null) return dokumenty;
+
+            foreach (var item in elementy)
+            {
+                if (item is DokumentDoKsiegowania dokument)
+                {
+                    dokumenty.Add(dokument);
+                    continue;
+                }
+
+                var typItemu = item.GetType();
+                var dok = typItemu.GetProperties().FirstOrDefault(p => p.PropertyType.Name.Contains("DokumentDoKsiegowania"))?.GetValue(item) as DokumentDoKsiegowania;
+                if (dok != null)
+                {
+                    dokumenty.Add(dok);
+                }
+            }
+
+            return dokumenty;
+        }
+
+        private int PoliczWynikiOperacji(dynamic rezultat)
+        {
+            if (rezultat == null) return 0;
+            try { return ((System.Collections.IEnumerable)rezultat).Cast<object>().Count(); }
+            catch { return 0; }
+        }
+
+        private string OpiszDokumenty(IEnumerable<DokumentDoKsiegowania> dokumenty)
+        {
+            if (dokumenty == null) return "brak";
+            var opisy = dokumenty.Take(100).Select(InvoiceDocumentMatcher.Describe).ToList();
+            return opisy.Count == 0 ? "brak" : string.Join(" || ", opisy);
+        }
     }
 }
+
