@@ -57,6 +57,10 @@ namespace NexoBridge.Models
     {
         public bool Processed { get; set; }
         public int DocumentsGenerated { get; set; }
+        public int PartialDocumentsGenerated { get; set; }
+        public bool CollectiveDocumentGenerated { get; set; }
+        public int? CollectiveOperationId { get; set; }
+        public string CollectiveDocumentNumber { get; set; }
         public decimal TotalCostAdded { get; set; }
 
         // Zignorowane błędy (np. brak środków do amortyzacji)

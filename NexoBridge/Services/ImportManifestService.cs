@@ -120,6 +120,7 @@ namespace NexoBridge.Services
 
             foreach (var doc in oczekujace)
             {
+                if (CzyCzastkowaAmortyzacja(doc)) continue;
                 if (matchedWaitingRoomNumbers.Contains(doc.Nr)) continue;
                 if (manifest.Any(x => x.WaitingRoomNr == doc.Nr)) continue;
 
@@ -202,6 +203,29 @@ namespace NexoBridge.Services
         {
             string cleaned = value?.Trim();
             return string.IsNullOrWhiteSpace(cleaned) ? null : cleaned;
+        }
+
+        private bool CzyCzastkowaAmortyzacja(DokumentDoKsiegowania dokument)
+        {
+            if (dokument == null) return false;
+
+            try
+            {
+                if (dokument.OperacjaAMZ != null) return false;
+            }
+            catch { }
+
+            try
+            {
+                var operacja = dokument.OperacjaST;
+                if (operacja == null) return false;
+
+                return operacja is OperacjaAM || operacja.GetType().Name.Contains("OperacjaAM");
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private string OpiszRaport(DocumentProcessingReport report)

@@ -6,8 +6,14 @@ namespace NexoBridge.Infrastructure
     public class PostepLadowaniaSfery : IPostepLadowaniaSfery
     {
         private const int StoProcent = 100;
+        private readonly Action<int, string> _raportujPostep;
         private string _opis;
         private int _step = 0;
+
+        public PostepLadowaniaSfery(Action<int, string> raportujPostep = null)
+        {
+            _raportujPostep = raportujPostep;
+        }
 
         public void RaportujPostep(PostepLadowaniaSferyEventArgs args)
         {
@@ -18,6 +24,7 @@ namespace NexoBridge.Infrastructure
             }
 
             Console.Write($"\r{_step}. {args.Opis}: {args.BiezacyProcent} %");
+            _raportujPostep?.Invoke(args.BiezacyProcent, args.Opis);
 
             if (args.BiezacyProcent == StoProcent)
             {

@@ -34,7 +34,17 @@ namespace NexoBridge.Services
             var menedzerImportu = _sfera.PodajObiektTypu<IOperacjeImportuKsiegowego>();
             var menedzerOkresow = _sfera.PodajObiektTypu<InsERT.Moria.Ksiegowosc.IOkresyObrachunkowe>();
 
-            var oczekujace = menedzerDokumentow.Dane.Wszystkie().Where(d => (int)d.StatusKsiegowy == 2).ToList();
+            var wszystkieOczekujace = menedzerDokumentow.Dane.Wszystkie().Where(d => (int)d.StatusKsiegowy == 2).ToList();
+            var pominieteAmortyzacjeCzastkowe = wszystkieOczekujace.Where(CzyCzastkowaAmortyzacja).ToList();
+            var oczekujace = wszystkieOczekujace.Except(pominieteAmortyzacjeCzastkowe).ToList();
+
+            if (pominieteAmortyzacjeCzastkowe.Count > 0)
+            {
+                _logger.LogInformation("[AMORTYZACJA CZĄSTKOWA POMINIĘTA] Nie dekretuję cząstkowych odpisów AM, bo dekretowana ma być wyłącznie amortyzacja zbiorcza AMZ. Liczba={Count}; dokumenty={Dokumenty}",
+                    pominieteAmortyzacjeCzastkowe.Count,
+                    OpiszDokumenty(pominieteAmortyzacjeCzastkowe));
+            }
+
             if (oczekujace.Count == 0)
             {
                 _logger.LogInformation("Zakończono: Brak nowych dokumentów do zadekretowania po synchronizacji.");
@@ -149,6 +159,29 @@ namespace NexoBridge.Services
             if (rezultat == null) return 0;
             try { return ((System.Collections.IEnumerable)rezultat).Cast<object>().Count(); }
             catch { return 0; }
+        }
+
+        private bool CzyCzastkowaAmortyzacja(DokumentDoKsiegowania dokument)
+        {
+            if (dokument == null) return false;
+
+            try
+            {
+                if (dokument.OperacjaAMZ != null) return false;
+            }
+            catch { }
+
+            try
+            {
+                var operacja = dokument.OperacjaST;
+                if (operacja == null) return false;
+
+                return operacja is OperacjaAM || operacja.GetType().Name.Contains("OperacjaAM");
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private string OpiszDokumenty(IEnumerable<DokumentDoKsiegowania> dokumenty)

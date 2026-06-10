@@ -18,11 +18,22 @@ namespace NexoBridge.Infrastructure
         // Teraz przyjmujemy login i hasło przekazane prosto z żądania aplikacji!
         public void Uruchom(string nexoUser, string nexoPass, string dbName)
         {
-            Uruchom(nexoUser, nexoPass, dbName, ProductId.Rachmistrz);
+            Uruchom(nexoUser, nexoPass, dbName, ProductId.Rachmistrz, null);
         }
 
         public void Uruchom(string nexoUser, string nexoPass, string dbName, ProductId product)
         {
+            Uruchom(nexoUser, nexoPass, dbName, product, null);
+        }
+
+        public void Uruchom(string nexoUser, string nexoPass, string dbName, Action<int, string> raportujPostep)
+        {
+            Uruchom(nexoUser, nexoPass, dbName, ProductId.Rachmistrz, raportujPostep);
+        }
+
+        public void Uruchom(string nexoUser, string nexoPass, string dbName, ProductId product, Action<int, string> raportujPostep)
+        {
+            raportujPostep?.Invoke(5, "Ładowanie bibliotek nexo...");
             string nexoBinPath = Environment.GetEnvironmentVariable("NEXO_BIN_PATH");
 
             // 1. Oszukujemy system, zmieniając katalog roboczy na folder z InsERTem
@@ -34,6 +45,8 @@ namespace NexoBridge.Infrastructure
             {
                 Environment.SetEnvironmentVariable("PATH", nexoBinPath + ";" + currentPath);
             }
+
+            raportujPostep?.Invoke(15, "Przygotowanie połączenia z bazą danych...");
             string server = Environment.GetEnvironmentVariable("DB_SERVER");
             string dbUser = Environment.GetEnvironmentVariable("DB_USER");
             string dbPass = Environment.GetEnvironmentVariable("DB_PASS");
@@ -48,7 +61,14 @@ namespace NexoBridge.Infrastructure
                 HasloNexo = nexoPass
             };
 
-            this.Sfera = Uchwyty.UtworzNowy(dane, new PostepLadowaniaSfery());
+            var postepSfery = new PostepLadowaniaSfery((procent, opis) =>
+            {
+                int lokalnyProcent = 20 + (int)Math.Round(procent * 0.75m, MidpointRounding.AwayFromZero);
+                raportujPostep?.Invoke(lokalnyProcent, "Logowanie do Sfery: " + opis);
+            });
+
+            this.Sfera = Uchwyty.UtworzNowy(dane, postepSfery);
+            raportujPostep?.Invoke(100, "Sfera gotowa.");
         }
 
         public void Dispose()

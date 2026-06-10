@@ -40,13 +40,18 @@ namespace NexoBridge.Workers
 
                 try
                 {
-                    await WylijPostep(job.JobId, 10, "Budzenie Sfery... Logowanie użytkownika: " + job.Username);
+                    var progress = new ProgressTracker(
+                        (procent, wiadomosc) => WylijPostep(job.JobId, procent, wiadomosc),
+                        JobProgressPlan.CalculateTotalUnits(job));
 
                     // Bezpieczne zamknięcie Sfery w bloku using! Licencja odblokuje się natychmiast po wykonaniu.
                     using (var silnik = new SferaEngine())
                     {
+                        var sferaProgress = progress.BeginSegment(JobProgressPlan.SferaStartupUnits);
+
                         // 1. Zalogowanie poświadczeniami użytkownika z aplikacji
-                        silnik.Uruchom(job.Username, job.Password, job.DatabaseName);
+                        silnik.Uruchom(job.Username, job.Password, job.DatabaseName, sferaProgress.ReportSync);
+                        await sferaProgress.CompleteAsync("Połączono z bazą i zalogowano do Sfery.");
 
                         // 2. Tworzymy loggery dla WSZYSTKICH rozbitych serwisów (dodano 3 nowe)
                         var parserLogger = _loggerFactory.CreateLogger<EppParserService>();
@@ -83,10 +88,7 @@ namespace NexoBridge.Workers
                         );
 
                         // 5. Wywołanie ostatecznego procesu (zapisujemy wynik do zmiennej!)
-                        var raportKoncowy = await serwis.PrzetworzZadanieAsync(job, async (procent, wiadomosc) =>
-                        {
-                            await WylijPostep(job.JobId, procent, wiadomosc);
-                        });
+                        var raportKoncowy = await serwis.PrzetworzZadanieAsync(job, progress);
 
                         // 6. Wysyłamy gotowy raport JSON na Front-end przez SignalR
                         var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };

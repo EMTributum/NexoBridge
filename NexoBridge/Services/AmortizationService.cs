@@ -1,8 +1,11 @@
-﻿using InsERT.Moria.Sfera;
+﻿using InsERT.Moria.DokumentyDoKsiegowania;
+using InsERT.Moria.ModelDanych;
+using InsERT.Moria.Sfera;
 using Microsoft.Extensions.Logging;
 using NexoBridge.Models;
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -19,12 +22,16 @@ namespace NexoBridge.Services
             _logger = logger;
         }
 
-        public async Task<AmortizationReport> ObliczAmortyzacjeAsync(DateTime dataRozliczenia)
+        public Task<AmortizationReport> ObliczAmortyzacjeAsync(DateTime dataRozliczenia)
         {
             var raport = new AmortizationReport
             {
                 Processed = false,
                 DocumentsGenerated = 0,
+                PartialDocumentsGenerated = 0,
+                CollectiveDocumentGenerated = false,
+                CollectiveOperationId = null,
+                CollectiveDocumentNumber = null,
                 TotalCostAdded = 0m,
                 Warning = null
             };
@@ -42,15 +49,17 @@ namespace NexoBridge.Services
                 {
                     raport.Warning = "Brak menedżera typów amortyzacji.";
                     _logger.LogWarning(raport.Warning);
-                    return raport;
+                    return Task.FromResult(raport);
                 }
 
-                var typPodatkowy = ((IEnumerable)mgrTypow.Dane.Wszystkie()).Cast<dynamic>().FirstOrDefault(t => t.Nazwa == "Podatkowy");
+                TypAmortyzacji typPodatkowy = ((IEnumerable)mgrTypow.Dane.Wszystkie())
+                    .Cast<TypAmortyzacji>()
+                    .FirstOrDefault(t => string.Equals(t.Nazwa, "Podatkowy", StringComparison.OrdinalIgnoreCase));
                 if (typPodatkowy == null)
                 {
                     raport.Warning = "W systemie brak wymaganego typu amortyzacji 'Podatkowy'.";
                     _logger.LogWarning(raport.Warning);
-                    return raport;
+                    return Task.FromResult(raport);
                 }
 
                 dynamic mgrST = PobierzMenedzera("ISrodkiTrwale");
@@ -60,7 +69,7 @@ namespace NexoBridge.Services
                 {
                     raport.Warning = "Brak licencji Sfery na moduł Środków Trwałych lub brak dostępu do danych.";
                     _logger.LogWarning(raport.Warning);
-                    return raport;
+                    return Task.FromResult(raport);
                 }
 
                 var wszystkieST = ((IEnumerable)mgrST.Dane.Wszystkie()).Cast<dynamic>().ToList();
@@ -69,11 +78,12 @@ namespace NexoBridge.Services
                 {
                     _logger.LogInformation("W ewidencji nie znaleziono żadnych środków trwałych. Zwracam kwotę 0 zł.");
                     raport.Processed = true;
-                    return raport;
+                    return Task.FromResult(raport);
                 }
 
                 decimal sumaKosztow = 0;
                 int naliczoneDokumenty = 0;
+                var naliczoneOperacje = new List<OperacjaAM>();
 
                 // Iterujemy przez wszystkie środki trwałe i próbujemy naliczyć ratę dla każdego z nich
                 foreach (var st in wszystkieST)
@@ -101,18 +111,20 @@ namespace NexoBridge.Services
                                     _logger.LogInformation("Naliczono i ZAPISANO ratę dla: {NazwaST} | Koszt wliczany do PIT: {Kwota} zł", nazwaST, kwotaKoszty);
                                     sumaKosztow += kwotaKoszty;
                                     naliczoneDokumenty++;
+
+                                    try
+                                    {
+                                        naliczoneOperacje.Add((OperacjaAM)amBO.Dane);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogWarning("Nie udało się pobrać zapisanej operacji AM dla: {NazwaST}. Powód: {Blad}", nazwaST, ex.Message);
+                                    }
                                 }
                                 else
                                 {
-                                    string bladSfery = "Brak szczegółów w InvalidData";
-                                    try
-                                    {
-                                        var invalid = (IEnumerable)amBO.InvalidData;
-                                        if (invalid != null) bladSfery = string.Join(" | ", invalid.Cast<dynamic>().Select(e => e.Komunikat ?? e.Tresc ?? e.ToString()));
-                                    }
-                                    catch { }
-
-                                    _logger.LogWarning("Odrzucono zapis amortyzacji dla: {NazwaST}. Powód: {Blad}", nazwaST, bladSfery);
+                                    string bladWalidacji = PobierzBledyWalidacji(amBO);
+                                    _logger.LogWarning("Odrzucono zapis amortyzacji dla: {NazwaST}. Powód: {Blad}", nazwaST, bladWalidacji);
                                 }
                             }
                             else
@@ -129,7 +141,7 @@ namespace NexoBridge.Services
                 }
 
                 raport.Processed = true;
-                raport.DocumentsGenerated = naliczoneDokumenty;
+                raport.PartialDocumentsGenerated = naliczoneDokumenty;
                 raport.TotalCostAdded = sumaKosztow;
 
                 // Informacja dla frontendu, jeśli proces wyliczył 0 sztuk
@@ -137,8 +149,46 @@ namespace NexoBridge.Services
                 {
                     raport.Warning = "Nie wygenerowano nowych odpisów (środki zamortyzowane lub raty już istnieją).";
                 }
+                else
+                {
+                    var okresZbiorczej = UtworzOkresMiesiaca(dataAmortyzacji);
+                    var operacjeSpozaOkresu = naliczoneOperacje
+                        .Where(o => !CzyDataWOkresie(o.Data, okresZbiorczej))
+                        .ToList();
 
-                _logger.LogInformation("[MODUŁ AMORTYZACJI ZAKOŃCZONY] Wygenerowano dokumenty: {Ilosc}. Całkowita kwota wpompowana do PIT: {Koszt} zł", naliczoneDokumenty, sumaKosztow);
+                    if (operacjeSpozaOkresu.Count > 0)
+                    {
+                        _logger.LogWarning(
+                            "Nie utworzę amortyzacji zbiorczej AMZ, bo {Ilosc} odpisów cząstkowych ma datę poza okresem {Od}-{Do}. Odpisy: {Odpisy}",
+                            operacjeSpozaOkresu.Count,
+                            okresZbiorczej.DataPoczatkowa.ToShortDateString(),
+                            okresZbiorczej.DataKoncowa.ToShortDateString(),
+                            string.Join(" || ", operacjeSpozaOkresu.Select(OpiszOperacjeAM)));
+
+                        raport.DocumentsGenerated = 0;
+                        raport.Warning = "Naliczono odpisy cząstkowe, ale nie udało się utworzyć amortyzacji zbiorczej: część odpisów ma datę poza rozliczanym miesiącem.";
+                        return Task.FromResult(raport);
+                    }
+
+                    var zbiorcza = UtworzAmortyzacjeZbiorcza(naliczoneOperacje, typPodatkowy, okresZbiorczej, dataAmortyzacji);
+                    if (zbiorcza != null)
+                    {
+                        raport.DocumentsGenerated = 1;
+                        raport.CollectiveDocumentGenerated = true;
+                        raport.CollectiveOperationId = zbiorcza.Id;
+                        raport.CollectiveDocumentNumber = zbiorcza.DokumentDoKsiegowania?.NumerDokumentu ?? zbiorcza.Id.ToString();
+                    }
+                    else
+                    {
+                        raport.DocumentsGenerated = 0;
+                        raport.Warning = "Naliczono odpisy cząstkowe, ale nie udało się utworzyć amortyzacji zbiorczej. Dekretacja cząstkowych odpisów została pominięta.";
+                    }
+                }
+
+                _logger.LogInformation("[MODUŁ AMORTYZACJI ZAKOŃCZONY] Odpisy cząstkowe: {Czastkowe}. Zbiorcza: {Zbiorcza}. Całkowita kwota wpompowana do PIT: {Koszt} zł",
+                    raport.PartialDocumentsGenerated,
+                    raport.CollectiveDocumentGenerated ? raport.CollectiveDocumentNumber ?? raport.CollectiveOperationId?.ToString() ?? "TAK" : "NIE",
+                    sumaKosztow);
             }
             catch (Exception ex)
             {
@@ -146,7 +196,142 @@ namespace NexoBridge.Services
                 raport.Warning = $"Krytyczny błąd silnika Sfery: {ex.Message}";
             }
 
-            return raport;
+            return Task.FromResult(raport);
+        }
+
+        private OperacjaAMZ UtworzAmortyzacjeZbiorcza(List<OperacjaAM> operacjeAM, TypAmortyzacji typAmortyzacji, OkresWymagany okresAmortyzacji, DateTime dataAmortyzacji)
+        {
+            if (operacjeAM == null || operacjeAM.Count == 0)
+            {
+                return null;
+            }
+
+            if (typAmortyzacji == null)
+            {
+                _logger.LogWarning("Nie utworzę amortyzacji zbiorczej AMZ, bo nie przekazano typu amortyzacji.");
+                return null;
+            }
+
+            dynamic mgrAMZ = PobierzMenedzera("IOperacjeAMZ");
+            if (mgrAMZ == null)
+            {
+                _logger.LogWarning("Nie udało się pobrać menedżera IOperacjeAMZ. Nie utworzę amortyzacji zbiorczej.");
+                return null;
+            }
+
+            using (dynamic amzBO = mgrAMZ.Utworz())
+            {
+                try
+                {
+                    amzBO.Dane.TypAmortyzacji = typAmortyzacji;
+                    amzBO.Dane.Okres = okresAmortyzacji;
+                    amzBO.Dane.Data = dataAmortyzacji;
+
+                    _logger.LogInformation(
+                        "[AMORTYZACJA ZBIORCZA PLAN] Okres={Od}-{Do}; Data={Data}; Odpisy={Odpisy}",
+                        okresAmortyzacji.DataPoczatkowa.ToShortDateString(),
+                        okresAmortyzacji.DataKoncowa.ToShortDateString(),
+                        dataAmortyzacji.ToShortDateString(),
+                        string.Join(" || ", operacjeAM.Select(OpiszOperacjeAM)));
+
+                    amzBO.DodajAmortyzacje(operacjeAM);
+                    amzBO.InicjujOpisKsiegowy();
+
+                    if (!amzBO.Zapisz())
+                    {
+                        string bladWalidacji = PobierzBledyWalidacji(amzBO);
+                        _logger.LogWarning("Nie udało się zapisać amortyzacji zbiorczej AMZ. Powód: {Blad}", bladWalidacji);
+                        return null;
+                    }
+
+                    OperacjaAMZ operacjaAMZ = (OperacjaAMZ)amzBO.Dane;
+                    DokumentDoKsiegowania dokument = operacjaAMZ.DokumentDoKsiegowania;
+
+                    if (dokument == null)
+                    {
+                        _logger.LogWarning("Amortyzacja zbiorcza AMZ {Id} została zapisana, ale nie ma dokumentu do księgowania.", operacjaAMZ.Id);
+                        return null;
+                    }
+
+                    if ((int)dokument.StatusKsiegowy != (int)StatusKsiegowyDokumentuDoKsiegowania.Opisany)
+                    {
+                        dokument.StatusKsiegowy = (byte)StatusKsiegowyDokumentuDoKsiegowania.Opisany;
+                        if (!amzBO.Zapisz())
+                        {
+                            string bladWalidacji = PobierzBledyWalidacji(amzBO);
+                            _logger.LogWarning("Nie udało się ustawić statusu Opisany dla dokumentu AMZ {Numer}. Powód: {Blad}",
+                                dokument.NumerDokumentu,
+                                bladWalidacji);
+                            return null;
+                        }
+                    }
+
+                    _logger.LogInformation("[AMORTYZACJA ZBIORCZA] Utworzono AMZ Id={Id}; Dokument={Numer}; StatusKsiegowy={Status}; Data={Data}; Odpisy={Ilosc}; Kwota={Kwota}",
+                        operacjaAMZ.Id,
+                        dokument.NumerDokumentu,
+                        dokument.StatusKsiegowy,
+                        dataAmortyzacji.ToShortDateString(),
+                        operacjeAM.Count,
+                        operacjaAMZ.WartoscStanowiacaKoszty);
+
+                    return operacjaAMZ;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Nie udało się utworzyć amortyzacji zbiorczej AMZ dla {Ilosc} odpisów cząstkowych.", operacjeAM.Count);
+                    return null;
+                }
+            }
+        }
+
+        private OkresWymagany UtworzOkresMiesiaca(DateTime data)
+        {
+            DateTime dataPoczatkowa = new DateTime(data.Year, data.Month, 1);
+            DateTime dataKoncowa = new DateTime(data.Year, data.Month, DateTime.DaysInMonth(data.Year, data.Month));
+
+            return new OkresWymagany
+            {
+                DataPoczatkowa = dataPoczatkowa,
+                DataKoncowa = dataKoncowa
+            };
+        }
+
+        private bool CzyDataWOkresie(DateTime data, OkresWymagany okres)
+        {
+            return data.Date >= okres.DataPoczatkowa.Date && data.Date <= okres.DataKoncowa.Date;
+        }
+
+        private string OpiszOperacjeAM(OperacjaAM operacja)
+        {
+            if (operacja == null)
+            {
+                return "null";
+            }
+
+            string nazwaST = "brak ST";
+            try { nazwaST = operacja.SrodekTrwaly?.Nazwa ?? nazwaST; } catch { }
+
+            return $"Id={operacja.Id}, Data={operacja.Data:yyyy-MM-dd}, ST={nazwaST}, Kwota={operacja.WartoscStanowiacaKoszty}";
+        }
+
+        private string PobierzBledyWalidacji(dynamic bo)
+        {
+            try
+            {
+                var invalid = (IEnumerable)bo.InvalidData;
+                if (invalid != null)
+                {
+                    var bledy = invalid.Cast<dynamic>()
+                        .Select(e => (string)(e.Komunikat ?? e.Tresc ?? e.ToString()))
+                        .Where(e => !string.IsNullOrWhiteSpace(e))
+                        .ToList();
+
+                    if (bledy.Count > 0) return string.Join(" | ", bledy);
+                }
+            }
+            catch { }
+
+            return "Brak szczegółów w InvalidData";
         }
 
         // --- PRYWATNE METODY REFLEKSYJNE ---

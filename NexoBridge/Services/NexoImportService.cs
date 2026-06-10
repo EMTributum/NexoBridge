@@ -1,5 +1,6 @@
 using InsERT.Moria.ModelDanych;
 using Microsoft.Extensions.Logging;
+using NexoBridge.Infrastructure;
 using NexoBridge.Models;
 using System;
 using System.Collections.Generic;
@@ -43,7 +44,13 @@ namespace NexoBridge.Services
             _logger = logger;
         }
 
-        public async Task<TaxSummaryReport> PrzetworzZadanieAsync(ImportJob job, Func<int, string, Task> raportujPostep)
+        public Task<TaxSummaryReport> PrzetworzZadanieAsync(ImportJob job, Func<int, string, Task> raportujPostep)
+        {
+            var progress = new ProgressTracker(raportujPostep, JobProgressPlan.CalculateTotalUnits(job));
+            return PrzetworzZadanieAsync(job, progress);
+        }
+
+        public async Task<TaxSummaryReport> PrzetworzZadanieAsync(ImportJob job, ProgressTracker progress)
         {
             var finalReport = new TaxSummaryReport
             {
@@ -54,7 +61,7 @@ namespace NexoBridge.Services
 
             DateTime dataRozliczenia = new DateTime(job.BillingYear, job.BillingMonth, 1);
             int zatwierdzoneCount = 0;
-            bool maImportFaktur = job.ImportInvoices && job.Files != null && job.Files.Count > 0;
+            bool maImportFaktur = JobProgressPlan.HasInvoiceImport(job);
             bool amortyzacjaWygenerowalaDokumenty = false;
 
             _logger.LogInformation("Rozpoczynam zintegrowane przetwarzanie zadania: {JobId}. Baza docelowa: {Database} za {Miesiac}/{Rok}. Flagi: ImportInvoices={ImportInvoices}, Files={Files}, CalculateAmortization={CalculateAmortization}, CalculatePit={CalculatePit}, CalculateVat={CalculateVat}",
@@ -70,66 +77,84 @@ namespace NexoBridge.Services
 
             try
             {
+                await progress.AdvanceAsync(JobProgressPlan.ManifestUnits, "Budowanie manifestu dokumentów...");
                 finalReport.Documents = _manifestService.ZbudujManifest(job);
 
                 // =========================================================
                 // ETAP 1: OBSŁUGA FAKTUR
                 // =========================================================
+                var importProgress = progress.BeginSegment(maImportFaktur ? JobProgressPlan.ImportInvoicesUnits : JobProgressPlan.SkipImportUnits);
                 if (maImportFaktur)
                 {
-                    await raportujPostep(10, "Pobieranie i analiza plików EPP...");
-                    await _parserService.ParseAndSyncAsync(job, raportujPostep);
+                    await importProgress.ReportAsync(5, "Pobieranie i analiza plików EPP...");
+                    await _parserService.ParseAndSyncAsync(job, importProgress.ReportAsync);
 
                     var oczekujacePoImporcie = _manifestService.PobierzDokumentyWPoczekalni();
                     _manifestService.AktualizujPoPoczekalni(finalReport.Documents, oczekujacePoImporcie);
-                    await _ksefNumberAssignmentService.PrzypiszPrzedDekretacjaAsync(job, finalReport.Documents, raportujPostep);
+                    await _ksefNumberAssignmentService.PrzypiszPrzedDekretacjaAsync(job, finalReport.Documents, importProgress.ReportAsync);
+                    await importProgress.CompleteAsync("Import faktur i audyt KSeF w Poczekalni zakończone.");
                 }
                 else
                 {
                     _logger.LogInformation("Pomijam moduł importu faktur (ImportInvoices={ImportInvoices}, Files={Files}).", job.ImportInvoices, job.Files?.Count ?? 0);
-                    await raportujPostep(10, "Tryb bez faktur. Pomijam pobieranie EPP...");
+                    await importProgress.CompleteAsync("Tryb bez faktur. Pomijam pobieranie EPP...");
                 }
 
                 // =========================================================
                 // ETAP 2: AMORTYZACJA
                 // =========================================================
+                var amortizationProgress = progress.BeginSegment(job.CalculateAmortization ? JobProgressPlan.AmortizationUnits : JobProgressPlan.SkipAmortizationUnits);
                 if (job.CalculateAmortization)
                 {
-                    await raportujPostep(30, "Sprawdzanie środków trwałych i naliczanie amortyzacji...");
+                    await amortizationProgress.ReportAsync(10, "Sprawdzanie środków trwałych i naliczanie amortyzacji...");
                     finalReport.Amortization = await _amortizationService.ObliczAmortyzacjeAsync(dataRozliczenia);
                     amortyzacjaWygenerowalaDokumenty = finalReport.Amortization?.DocumentsGenerated > 0;
                     if (!amortyzacjaWygenerowalaDokumenty)
                     {
                         _logger.LogInformation("Amortyzacja nie wygenerowała nowych dokumentów. Pomijam dekretację amortyzacji (DocumentsGenerated={DocumentsGenerated}).", finalReport.Amortization?.DocumentsGenerated ?? 0);
                     }
+                    await amortizationProgress.CompleteAsync("Naliczanie amortyzacji zakończone.");
                 }
                 else
                 {
                     _logger.LogInformation("Pomijam naliczanie amortyzacji (flaga z Frontendu).");
+                    await amortizationProgress.CompleteAsync("Pomijam naliczanie amortyzacji.");
                 }
 
                 // =========================================================
                 // ETAP 3: DEKRETACJA WŁAŚCIWA (cała Poczekalnia)
                 // =========================================================
                 bool wymagaDekretacji = maImportFaktur || amortyzacjaWygenerowalaDokumenty;
+                var decreeProgress = progress.BeginSegment((maImportFaktur || job.CalculateAmortization) ? JobProgressPlan.DecreeUnits : JobProgressPlan.SkipDecreeUnits);
                 if (wymagaDekretacji)
                 {
                     var oczekujacePrzedDekretacja = _manifestService.PobierzDokumentyWPoczekalni();
                     _manifestService.AktualizujPoPoczekalni(finalReport.Documents, oczekujacePrzedDekretacja);
 
-                    await raportujPostep(50, "Dekretacja dokumentów...");
-                    var (rezultat, zatwierdzone, oczekujace, brakSchematu, bledneSchematy) = await _accountingService.DekretujAsync(raportujPostep);
+                    await decreeProgress.ReportAsync(5, "Dekretacja dokumentów...");
+                    var (rezultat, zatwierdzone, oczekujace, brakSchematu, bledneSchematy) = await _accountingService.DekretujAsync(decreeProgress.ReportAsync);
                     zatwierdzoneCount = zatwierdzone.Count;
                     AktualizujStatusyDekretacji(finalReport.Documents, rezultat, zatwierdzone, brakSchematu, bledneSchematy);
+                    await decreeProgress.CompleteAsync($"Dekretacja zakończona. Zadekretowano {zatwierdzoneCount} dok.");
 
                     // =========================================================
                     // ETAP 4: ZAŁĄCZNIKI i KSeF (nie blokują procesu)
                     // =========================================================
-                    if (maImportFaktur && zatwierdzoneCount > 0)
+                    if (maImportFaktur)
                     {
-                        await raportujPostep(70, "Podpinanie załączników PDF...");
-                        await _attachmentService.PodepnijZalacznikiAsync(job, rezultat, zatwierdzone, finalReport.Documents, raportujPostep);
-                        await _ksefNumberAssignmentService.ZweryfikujPoDekretacjiAsync(job, rezultat, zatwierdzone, finalReport.Documents, raportujPostep);
+                        var attachmentsProgress = progress.BeginSegment(JobProgressPlan.AttachmentsAndKsefUnits);
+                        if (zatwierdzoneCount > 0)
+                        {
+                            Func<int, string, Task> attachmentsReporter = attachmentsProgress.ReportAsync;
+                            await attachmentsProgress.ReportAsync(5, "Podpinanie załączników PDF...");
+                            await _attachmentService.PodepnijZalacznikiAsync(job, rezultat, zatwierdzone, finalReport.Documents, attachmentsReporter);
+                            await _ksefNumberAssignmentService.ZweryfikujPoDekretacjiAsync(job, rezultat, zatwierdzone, finalReport.Documents, attachmentsReporter);
+                            await attachmentsProgress.CompleteAsync("Obsługa załączników i weryfikacja KSeF zakończona.");
+                        }
+                        else
+                        {
+                            await attachmentsProgress.CompleteAsync("Brak zadekretowanych dokumentów. Pomijam załączniki i weryfikację KSeF.");
+                        }
                     }
 
                     if (zatwierdzoneCount == 0 && maImportFaktur)
@@ -140,16 +165,18 @@ namespace NexoBridge.Services
                 }
                 else
                 {
-                    await raportujPostep(50, "Brak operacji wymagających dekretacji. Przechodzę do podatków...");
+                    await decreeProgress.CompleteAsync("Brak operacji wymagających dekretacji. Przechodzę do podatków...");
                 }
 
                 // =========================================================
                 // ETAP 5: WYLICZENIE PODATKÓW PIT i VAT
                 // =========================================================
+                var pitProgress = progress.BeginSegment(job.CalculatePit ? JobProgressPlan.PitUnits : JobProgressPlan.SkipPitUnits);
                 if (job.CalculatePit)
                 {
-                    await raportujPostep(85, "Wyliczanie zaliczek na podatek PIT...");
+                    await pitProgress.ReportAsync(10, "Wyliczanie zaliczek na podatek PIT...");
                     finalReport.PitTaxes = await _pitService.WyliczZaliczkiWspolnikowAsync(dataRozliczenia);
+                    await pitProgress.CompleteAsync("Wyliczanie PIT zakończone.");
 
                     if (finalReport.PitTaxes.Any(p => !string.IsNullOrEmpty(p.CriticalError)))
                     {
@@ -161,12 +188,15 @@ namespace NexoBridge.Services
                 else
                 {
                     _logger.LogInformation("Pomijam wyliczanie PIT (flaga z Frontendu).");
+                    await pitProgress.CompleteAsync("Pomijam wyliczanie PIT.");
                 }
 
+                var vatProgress = progress.BeginSegment(job.CalculateVat ? JobProgressPlan.VatUnits : JobProgressPlan.SkipVatUnits);
                 if (job.CalculateVat)
                 {
-                    await raportujPostep(95, "Generowanie JPK_V7...");
+                    await vatProgress.ReportAsync(10, "Generowanie JPK_V7...");
                     finalReport.VatTax = await _vatService.WygenerujJpkVatAsync(dataRozliczenia);
+                    await vatProgress.CompleteAsync("Generowanie JPK_V7 zakończone.");
 
                     if (!string.IsNullOrEmpty(finalReport.VatTax?.ErrorMsg))
                     {
@@ -177,6 +207,7 @@ namespace NexoBridge.Services
                 else
                 {
                     _logger.LogInformation("Pomijam wyliczanie VAT (flaga z Frontendu).");
+                    await vatProgress.CompleteAsync("Pomijam wyliczanie VAT.");
                 }
 
                 // =========================================================
@@ -204,14 +235,14 @@ namespace NexoBridge.Services
                     ? $"[ZAKOŃCZONO] Status: {finalReport.Status}. Zadekretowano {zatwierdzoneCount} dok."
                     : $"[ZAKOŃCZONO] Status: {finalReport.Status}. Zakończono kalkulacje podatkowe.";
 
-                await raportujPostep(100, raportKoncowy);
+                await progress.CompleteAsync(raportKoncowy);
             }
             catch (Exception ex)
             {
                 finalReport.Status = "FAILED";
                 finalReport.Message = $"Błąd krytyczny procesu: {ex.Message}";
                 _logger.LogError(ex, "Przerwano procesowanie zadania {JobId}", job.JobId);
-                await raportujPostep(100, $"[BŁĄD KRYTYCZNY] {ex.Message}");
+                await progress.CompleteAsync($"[BŁĄD KRYTYCZNY] {ex.Message}");
             }
 
             return finalReport;

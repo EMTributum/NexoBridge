@@ -169,7 +169,7 @@ namespace NexoBridge.Services
                             object wynikObj = (object)wynik;
                             string typWyniku = wynikObj?.GetType().Name;
                             object dokumentId = PobierzDokumentId(wynik);
-                            object encja = ZnajdzEncje(menedzerowie, wynik);
+                            object encja = ZnajdzEncje(menedzerowie, wynik, dok);
                             if (encja != null)
                             {
                                 zalacznikBO.DodajPowiazanie((dynamic)encja);
@@ -373,16 +373,157 @@ namespace NexoBridge.Services
             return lista.Count == 0 ? "brak" : string.Join(" || ", lista);
         }
 
-        private object ZnajdzEncje(Dictionary<string, dynamic> menedzerowie, dynamic wynik)
+        private object ZnajdzEncje(Dictionary<string, dynamic> menedzerowie, dynamic wynik, DokumentDoKsiegowania dokumentZrodlowy)
         {
             string typ = wynik.GetType().Name;
             dynamic mgr = null;
+
+            if (ZawieraTyp(typ, "VAT"))
+            {
+                return ZnajdzEncjeVat(menedzerowie["Vat"], wynik, dokumentZrodlowy);
+            }
+
             if (ZawieraTyp(typ, "KPiR")) mgr = menedzerowie["KPiR"];
             else if (ZawieraTyp(typ, "Dekret")) mgr = menedzerowie["Dekret"];
-            else if (ZawieraTyp(typ, "VAT")) mgr = menedzerowie["Vat"];
             else if (ZawieraTyp(typ, "EP")) mgr = menedzerowie["EP"];
 
             return ZnajdzFizycznaEncje(mgr, wynik.DokumentId);
+        }
+
+        private object ZnajdzEncjeVat(dynamic mgrVat, dynamic wynik, DokumentDoKsiegowania dokumentZrodlowy)
+        {
+            object dokumentId = PobierzDokumentId(wynik);
+            object encja = ZnajdzFizycznaEncje(mgrVat, dokumentId);
+            if (encja != null)
+            {
+                return encja;
+            }
+
+            encja = PobierzVatZDokumentuZrodlowego(dokumentZrodlowy, dokumentId);
+            if (encja != null)
+            {
+                _logger.LogInformation("[ZAŁĄCZNIK VAT FALLBACK] Znaleziono zapis VAT przez relację DokumentDoKsiegowania. Dokument={Numer}; wynikDokumentId={DokumentId}; encjaTyp={EncjaTyp}",
+                    dokumentZrodlowy?.NumerDokumentu,
+                    dokumentId,
+                    encja.GetType().FullName);
+                return encja;
+            }
+
+            encja = ZnajdzVatPoPowiazaniuZDdk(mgrVat, dokumentZrodlowy, dokumentId);
+            if (encja != null)
+            {
+                _logger.LogInformation("[ZAŁĄCZNIK VAT FALLBACK] Znaleziono zapis VAT przez powiązanie Zrodlowy/DocelowyDokumentDoKsiegowania. Dokument={Numer}; wynikDokumentId={DokumentId}; encjaTyp={EncjaTyp}",
+                    dokumentZrodlowy?.NumerDokumentu,
+                    dokumentId,
+                    encja.GetType().FullName);
+            }
+
+            return encja;
+        }
+
+        private object PobierzVatZDokumentuZrodlowego(DokumentDoKsiegowania dokumentZrodlowy, object wynikDokumentId)
+        {
+            if (dokumentZrodlowy == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                object wynikowyVat = dokumentZrodlowy.WynikowyZapisWEwidencjiVAT;
+                if (wynikowyVat != null && CzyIdPasuje(wynikowyVat, wynikDokumentId))
+                {
+                    return wynikowyVat;
+                }
+            }
+            catch { }
+
+            try
+            {
+                object zrodlowyVat = dokumentZrodlowy.ZrodlowyZapisWEwidencjiVAT;
+                if (zrodlowyVat != null && CzyIdPasuje(zrodlowyVat, wynikDokumentId))
+                {
+                    return zrodlowyVat;
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        private object ZnajdzVatPoPowiazaniuZDdk(dynamic mgrVat, DokumentDoKsiegowania dokumentZrodlowy, object wynikDokumentId)
+        {
+            if (mgrVat == null || dokumentZrodlowy == null)
+            {
+                return null;
+            }
+
+            Guid dokumentZrodlowyId = dokumentZrodlowy.Id;
+            try
+            {
+                foreach (var encja in ((System.Collections.IEnumerable)mgrVat.Dane.Wszystkie()).Cast<dynamic>())
+                {
+                    object encjaObj = (object)encja;
+                    if (CzyIdPasuje(encjaObj, wynikDokumentId))
+                    {
+                        return encjaObj;
+                    }
+
+                    if (CzyPowiazanyZDdk(encja, dokumentZrodlowyId))
+                    {
+                        return encjaObj;
+                    }
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        private bool CzyPowiazanyZDdk(dynamic encja, Guid dokumentDoKsiegowaniaId)
+        {
+            try
+            {
+                if (encja.ZrodlowyDokumentDoKsiegowania != null && encja.ZrodlowyDokumentDoKsiegowania.Id == dokumentDoKsiegowaniaId)
+                {
+                    return true;
+                }
+            }
+            catch { }
+
+            try
+            {
+                if (encja.DocelowyDokumentDoKsiegowania != null && encja.DocelowyDokumentDoKsiegowania.Id == dokumentDoKsiegowaniaId)
+                {
+                    return true;
+                }
+            }
+            catch { }
+
+            return false;
+        }
+
+        private bool CzyIdPasuje(object encja, object id)
+        {
+            if (encja == null)
+            {
+                return false;
+            }
+
+            if (id == null)
+            {
+                return true;
+            }
+
+            try
+            {
+                object encjaId = encja.GetType().GetProperty("Id")?.GetValue(encja);
+                return encjaId != null && Convert.ToInt32(encjaId) == Convert.ToInt32(id);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private bool ZawieraTyp(string typ, string fragment)
