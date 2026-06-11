@@ -4,9 +4,11 @@ using Microsoft.Extensions.Logging;
 using NexoBridge.Models;
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Linq;
@@ -15,6 +17,8 @@ namespace NexoBridge.Services
 {
     public class VatCalculationService
     {
+        private const string DomyslnyAdresEmailJpk = "biuro@emtributum.pl";
+
         private readonly Uchwyt _sfera;
         private readonly ILogger<VatCalculationService> _logger;
 
@@ -377,20 +381,41 @@ namespace NexoBridge.Services
         {
             wygenerowanyJpk = null;
             blad = null;
+            var bledySciezek = new List<string>();
 
             dynamic mgrNaliczania = PobierzMenedzera("IMenadzerNaliczaniaPlikowJPK");
             if (mgrNaliczania != null)
             {
-                return WygenerujPrzezMenedzerPlikowJpk(mgrNaliczania, dataOd, dataDo, out wygenerowanyJpk, out blad);
+                if (WygenerujPrzezMenedzerPlikowJpk(mgrNaliczania, dataOd, dataDo, out wygenerowanyJpk, out blad))
+                {
+                    return true;
+                }
+
+                bledySciezek.Add($"IMenadzerNaliczaniaPlikowJPK: {blad}");
+                _logger.LogWarning("[VAT JPK FALLBACK] Ogólny menedżer JPK nie wygenerował V7M. Próbuję menedżera wysyłki V7M. Powód: {Blad}", blad);
             }
 
             dynamic mgrWysylkiV7M = PobierzMenedzera("IMenadzerNaliczaniaWysylkiV7M");
             if (mgrWysylkiV7M != null)
             {
-                return WygenerujPrzezMenedzerWysylkiV7M(mgrWysylkiV7M, dataOd, dataDo, out wygenerowanyJpk, out blad);
+                if (WygenerujPrzezMenedzerWysylkiV7M(mgrWysylkiV7M, dataOd, dataDo, out wygenerowanyJpk, out blad))
+                {
+                    return true;
+                }
+
+                bledySciezek.Add($"IMenadzerNaliczaniaWysylkiV7M: {blad}");
             }
 
-            blad = "Nie udało się pobrać menedżera naliczania JPK_V7M (IMenadzerNaliczaniaPlikowJPK / IMenadzerNaliczaniaWysylkiV7M).";
+            if (WygenerujPrzezBezposredniJpkV7M(dataOd, dataDo, out wygenerowanyJpk, out blad))
+            {
+                return true;
+            }
+
+            bledySciezek.Add($"IJednolityPlikKontrolny.Generuj: {blad}");
+
+            blad = bledySciezek.Count > 0
+                ? "Nie udało się wygenerować JPK_V7M żadną dostępną ścieżką Sfery. " + string.Join(" || ", bledySciezek)
+                : "Nie udało się pobrać menedżera naliczania JPK_V7M (IMenadzerNaliczaniaPlikowJPK / IMenadzerNaliczaniaWysylkiV7M).";
             return false;
         }
 
@@ -398,6 +423,7 @@ namespace NexoBridge.Services
         {
             wygenerowanyJpk = null;
             blad = null;
+            WynikGenerowaniaPlikuJPK wynikNaliczania = null;
 
             try
             {
@@ -411,19 +437,37 @@ namespace NexoBridge.Services
 
                 dynamic plik = mgr.DodajPlik(RodzajJPK.V7M, dataOd, dataDo, false);
                 PrzygotujParametryJpkV7(plik, dataOd, dataDo);
+                UzupelnijParametryZManagera(mgr, plik);
 
                 if (CzyDaneNiekompletne(mgr))
                 {
                     string bledyWalidacji = PobierzBledyWalidacji(mgr);
                     _logger.LogWarning("[VAT JPK] Menedżer zgłasza niekompletne dane przed wyliczeniem. Szczegóły: {Bledy}", bledyWalidacji);
+                    LogujDiagnostykeJpk("IMenadzerNaliczaniaPlikowJPK", mgr, plik);
                 }
 
-                mgr.Wylicz();
-                wygenerowanyJpk = ZnajdzJpkV7M(dataOd, dataDo);
+                Action<WynikGenerowaniaPlikuJPK> ustawWynik = wynik => wynikNaliczania = wynik;
+                IDisposable subskrypcja = PodepnijNaliczonoEventHandler((object)mgr, ustawWynik, "IMenadzerNaliczaniaPlikowJPK");
+                try
+                {
+                    mgr.Wylicz();
+                }
+                finally
+                {
+                    subskrypcja?.Dispose();
+                }
+
+                if (!CzyWynikGenerowaniaJpkPoprawny(wynikNaliczania, out string bladWyniku))
+                {
+                    blad = bladWyniku;
+                    return false;
+                }
+
+                wygenerowanyJpk = ZnajdzJpkV7M(dataOd, dataDo) ?? ZnajdzJpkPoId(wynikNaliczania?.Id ?? 0);
 
                 if (wygenerowanyJpk == null)
                 {
-                    blad = "Sfera zakończyła naliczanie JPK_V7M, ale po operacji nie znaleziono pliku JPK w bazie.";
+                    blad = $"Sfera zakończyła naliczanie JPK_V7M, ale po operacji nie znaleziono pliku JPK w bazie. Wynik: {OpiszWynikGenerowaniaJpk(wynikNaliczania)}";
                     return false;
                 }
 
@@ -444,32 +488,48 @@ namespace NexoBridge.Services
         {
             wygenerowanyJpk = null;
             blad = null;
+            WynikGenerowaniaPlikuJPK wynikNaliczania = null;
 
             try
             {
                 mgr.Inicjalizuj();
-                UstawJesliMozna(mgr, "MiesiacNaliczenia", dataOd);
-                UstawJesliMozna(mgr, "DataWystawienia", DateTime.Today);
-                UstawJesliMozna(mgr, "Korekta", false);
-                UstawJesliMozna(mgr, "EwidencjaVAT", true);
-                UstawJesliMozna(mgr, "Nazwa", $"JPK_V7M {dataOd:yyyy-MM}");
+                PrzygotujManagerWysylkiV7M(mgr, dataOd);
 
                 dynamic plik = null;
                 try { plik = mgr.DodajDomyslnyPlik(); } catch { }
                 PrzygotujParametryJpkV7(plik ?? mgr.Plik, dataOd, dataDo);
+                UzupelnijParametryZManagera(mgr, plik ?? mgr.Plik);
+                LogujBrakiParametrowJpk("IMenadzerNaliczaniaWysylkiV7M", mgr, plik ?? mgr.Plik);
 
                 if (CzyDaneNiekompletne(mgr))
                 {
                     string bledyWalidacji = PobierzBledyWalidacji(mgr);
                     _logger.LogWarning("[VAT JPK] Menedżer V7M zgłasza niekompletne dane przed wyliczeniem. Szczegóły: {Bledy}", bledyWalidacji);
+                    LogujDiagnostykeJpk("IMenadzerNaliczaniaWysylkiV7M", mgr, plik ?? mgr.Plik);
                 }
 
-                mgr.Wylicz();
-                wygenerowanyJpk = ZnajdzJpkV7M(dataOd, dataDo);
+                Action<WynikGenerowaniaPlikuJPK> ustawWynik = wynik => wynikNaliczania = wynik;
+                IDisposable subskrypcja = PodepnijNaliczonoEventHandler((object)mgr, ustawWynik, "IMenadzerNaliczaniaWysylkiV7M");
+                try
+                {
+                    mgr.Wylicz();
+                }
+                finally
+                {
+                    subskrypcja?.Dispose();
+                }
+
+                if (!CzyWynikGenerowaniaJpkPoprawny(wynikNaliczania, out string bladWyniku))
+                {
+                    blad = $"{bladWyniku}. Parametry: {OpiszKrytyczneParametryJpk(mgr, plik ?? mgr.Plik)}";
+                    return false;
+                }
+
+                wygenerowanyJpk = ZnajdzJpkV7M(dataOd, dataDo) ?? ZnajdzJpkPoId(wynikNaliczania?.Id ?? 0);
 
                 if (wygenerowanyJpk == null)
                 {
-                    blad = "Sfera zakończyła naliczanie JPK_V7M przez menedżer V7M, ale po operacji nie znaleziono pliku JPK w bazie.";
+                    blad = $"Sfera zakończyła naliczanie JPK_V7M przez menedżer V7M, ale po operacji nie znaleziono pliku JPK w bazie. Wynik: {OpiszWynikGenerowaniaJpk(wynikNaliczania)}";
                     return false;
                 }
 
@@ -486,6 +546,91 @@ namespace NexoBridge.Services
             }
         }
 
+        private bool WygenerujPrzezBezposredniJpkV7M(DateTime dataOd, DateTime dataDo, out dynamic wygenerowanyJpk, out string blad)
+        {
+            wygenerowanyJpk = null;
+            blad = null;
+
+            dynamic mgrParametrow = null;
+            dynamic mgrJpk = null;
+            dynamic jpkBO = null;
+
+            try
+            {
+                mgrParametrow = PobierzMenedzera("IMenadzerNaliczaniaWysylkiV7M");
+                mgrJpk = PobierzMenedzera("IJednolitePlikiKontrolne");
+                if (mgrParametrow == null || mgrJpk == null)
+                {
+                    blad = "Brak menedżera parametrów V7M lub menedżera IJednolitePlikiKontrolne.";
+                    return false;
+                }
+
+                mgrParametrow.Inicjalizuj();
+                PrzygotujManagerWysylkiV7M(mgrParametrow, dataOd);
+
+                dynamic plik = null;
+                try { plik = mgrParametrow.DodajDomyslnyPlik(); } catch { }
+                dynamic parametry = plik ?? mgrParametrow.Plik;
+                PrzygotujParametryJpkV7(parametry, dataOd, dataDo);
+                UzupelnijParametryZManagera(mgrParametrow, parametry);
+                LogujBrakiParametrowJpk("IJednolityPlikKontrolny.Generuj", mgrParametrow, parametry);
+
+                jpkBO = mgrJpk.Utworz();
+                jpkBO.InicjalizujTrybGenerowania(parametry);
+
+                WynikGenerowaniaPlikuJPK wynik = jpkBO.Generuj();
+                _logger.LogInformation("[VAT JPK WYNIK] Ścieżka=IJednolityPlikKontrolny.Generuj; {Wynik}", OpiszWynikGenerowaniaJpk(wynik));
+
+                if (!CzyWynikGenerowaniaJpkPoprawny(wynik, out string bladWyniku))
+                {
+                    blad = $"{bladWyniku}. Parametry: {OpiszKrytyczneParametryJpk(mgrParametrow, parametry)}";
+                    return false;
+                }
+
+                bool zapisano = false;
+                try { zapisano = jpkBO.Zapisz(); } catch { }
+                if (!zapisano)
+                {
+                    blad = $"JPK_V7M został wygenerowany bezpośrednio, ale nie udało się go zapisać jako widocznego pliku. Wynik: {OpiszWynikGenerowaniaJpk(wynik)}";
+                    return false;
+                }
+
+                try { wygenerowanyJpk = jpkBO.Dane; } catch { }
+                wygenerowanyJpk = wygenerowanyJpk ?? ZnajdzJpkPoId(wynik?.Id ?? 0) ?? ZnajdzJpkV7M(dataOd, dataDo);
+
+                if (wygenerowanyJpk == null)
+                {
+                    blad = $"JPK_V7M został wygenerowany i zapisany bezpośrednio, ale nie udało się odczytać encji JPK po zapisie. Wynik: {OpiszWynikGenerowaniaJpk(wynik)}";
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                blad = $"Bezpośrednie generowanie JPK_V7M przez IJednolityPlikKontrolny nie powiodło się. Powód: {ex.InnerException?.Message ?? ex.Message}. Szczegóły parametrów: {OpiszKrytyczneParametryJpk(mgrParametrow, null)}";
+                return false;
+            }
+            finally
+            {
+                ZwolnijJesliMozna(jpkBO);
+                ZwolnijJesliMozna(mgrParametrow);
+                ZwolnijJesliMozna(mgrJpk);
+            }
+        }
+
+        private void PrzygotujManagerWysylkiV7M(dynamic mgr, DateTime dataOd)
+        {
+            UstawJesliMozna(mgr, "MiesiacNaliczenia", dataOd);
+            UstawDateSystemowaJesliMozna(mgr, "DataWystawienia", DateTime.Today);
+            UstawJesliMozna(mgr, "Korekta", false);
+            UstawJesliMozna(mgr, "EwidencjaVAT", true);
+            UstawJesliMozna(mgr, "Nazwa", $"JPK_V7M {dataOd:yyyy-MM}");
+            UstawJesliMozna(mgr, "AdresEmail", PobierzAdresEmailJpk(mgr));
+            UstawJesliMozna(mgr, "TrybNaliczaniaKorektyCzesciDeklaracyjnej", TrybNaliczaniaKorektyCzesciDeklaracyjnejWysylkiV7.Auto);
+            UstawJesliMozna(mgr, "TrybNaliczaniaKorektyCzesciEwidencyjnej", TrybNaliczaniaKorektyCzesciEwidencyjnejWysylkiV7.Auto);
+        }
+
         private void PrzygotujParametryJpkV7(dynamic plik, DateTime dataOd, DateTime dataDo)
         {
             if (plik == null) return;
@@ -493,14 +638,190 @@ namespace NexoBridge.Services
             UstawJesliMozna(plik, "DataOd", dataOd);
             UstawJesliMozna(plik, "DataDo", dataDo);
             UstawJesliMozna(plik, "DataWystawienia", DateTime.Today);
+            UstawJesliMozna(plik, "AdresEmail", DomyslnyAdresEmailJpk);
             UstawJesliMozna(plik, "Korekta", false);
             UstawJesliMozna(plik, "Sprzedaz", true);
             UstawJesliMozna(plik, "Zakup", true);
             UstawJesliMozna(plik, "Importowany", false);
+            UstawJesliMozna(plik, "NaZadanie", false);
+            UstawJesliMozna(plik, "SymbolWaluty", "PLN");
             UstawJesliMozna(plik, "UzyjWlasnychWyrazen", false);
             UstawJesliMozna(plik, "UwzglednijEwidencjeZrodlowa", true);
+            UstawJesliMozna(plik, "UwzglednijFakturyWyslaneDoKsef", true);
+            UstawJesliMozna(plik, "SposobKwalifikowaniaZapisowVAT", SposobKwalifikowaniaZapisowVAT.WgMiesiacaNaliczenia);
+            UstawJesliMozna(plik, "DataDokumentuSprzedazy", DataKwalifikowaniaDokumentuSprzedazy.DataObowiazkuPodatkowego);
+            UstawJesliMozna(plik, "DataDokumentuZakupu", DataKwalifikowaniaDokumentuZakupu.DataUzyskaniaPrawaDoOdliczenia);
             UstawJesliMozna(plik, "TrybNaliczaniaKorektyCzesciDeklaracyjnej", TrybNaliczaniaKorektyCzesciDeklaracyjnejWysylkiV7.Auto);
             UstawJesliMozna(plik, "TrybNaliczaniaKorektyCzesciEwidencyjnej", TrybNaliczaniaKorektyCzesciEwidencyjnejWysylkiV7.Auto);
+        }
+
+        private void UzupelnijParametryZManagera(dynamic manager, dynamic plik)
+        {
+            if (manager == null || plik == null) return;
+
+            if (TryReadStringProperty(manager, "KodUrzeduSkarbowego", out string kodUrzedu))
+            {
+                UstawJesliMozna(plik, "KodUrzedu", kodUrzedu);
+            }
+
+            UstawJesliMozna(plik, "AdresEmail", PobierzAdresEmailJpk(manager));
+        }
+
+        private string PobierzAdresEmailJpk(object source)
+        {
+            return TryReadStringProperty(source, "AdresEmail", out string adresEmail)
+                ? adresEmail
+                : DomyslnyAdresEmailJpk;
+        }
+
+        private void LogujBrakiParametrowJpk(string sciezka, object manager, object plik)
+        {
+            var braki = ZnajdzBrakiParametrowJpk(manager, plik);
+            if (braki.Count == 0)
+            {
+                _logger.LogInformation("[VAT JPK PARAMETRY] Ścieżka={Sciezka}; {Parametry}", sciezka, OpiszKrytyczneParametryJpk(manager, plik));
+                return;
+            }
+
+            _logger.LogWarning("[VAT JPK PARAMETRY BRAKI] Ścieżka={Sciezka}; braki={Braki}; {Parametry}",
+                sciezka,
+                string.Join(", ", braki),
+                OpiszKrytyczneParametryJpk(manager, plik));
+        }
+
+        private List<string> ZnajdzBrakiParametrowJpk(object manager, object plik)
+        {
+            var braki = new List<string>();
+
+            string kodUrzedu = PobierzPierwszyTekst(manager, "KodUrzeduSkarbowego")
+                ?? PobierzPierwszyTekst(plik, "KodUrzedu");
+            if (string.IsNullOrWhiteSpace(kodUrzedu))
+            {
+                braki.Add("KodUrzedu/KodUrzeduSkarbowego");
+            }
+
+            string email = PobierzPierwszyTekst(plik, "AdresEmail")
+                ?? PobierzPierwszyTekst(manager, "AdresEmail");
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                braki.Add("AdresEmail");
+            }
+
+            if (!CzyDataUstawiona(plik, "DataOd"))
+            {
+                braki.Add("DataOd");
+            }
+
+            if (!CzyDataUstawiona(plik, "DataDo"))
+            {
+                braki.Add("DataDo");
+            }
+
+            bool sprzedaz = TryReadBoolProperty(plik, "Sprzedaz", out bool sprzedazValue) && sprzedazValue;
+            bool zakup = TryReadBoolProperty(plik, "Zakup", out bool zakupValue) && zakupValue;
+            if (!sprzedaz && !zakup)
+            {
+                braki.Add("Sprzedaz/Zakup");
+            }
+
+            return braki;
+        }
+
+        private string OpiszKrytyczneParametryJpk(object manager, object plik)
+        {
+            object realnyPlik = plik ?? PobierzWartoscWlasciwosci(manager, "Plik");
+
+            string managerOpis = OpiszWybraneWlasciwosci(manager,
+                "MiesiacNaliczenia",
+                "DataWystawienia",
+                "KodUrzeduSkarbowego",
+                "AdresEmail",
+                "Korekta",
+                "EwidencjaVAT",
+                "DaneKompletne",
+                "Nazwa");
+
+            string plikOpis = OpiszWybraneWlasciwosci(realnyPlik,
+                "Rodzaj",
+                "Wersja",
+                "DataOd",
+                "DataDo",
+                "DataWystawienia",
+                "KodUrzedu",
+                "AdresEmail",
+                "Korekta",
+                "NumerKorekty",
+                "Sprzedaz",
+                "Zakup",
+                "NaZadanie",
+                "SymbolWaluty",
+                "SposobKwalifikowaniaZapisowVAT",
+                "DataDokumentuSprzedazy",
+                "DataDokumentuZakupu",
+                "TrybNaliczaniaKorektyCzesciDeklaracyjnej",
+                "TrybNaliczaniaKorektyCzesciEwidencyjnej");
+
+            return $"Manager[{managerOpis}], Plik[{plikOpis}]";
+        }
+
+        private string OpiszWybraneWlasciwosci(object source, params string[] propertyNames)
+        {
+            if (source == null) return "brak";
+
+            var parts = new List<string>();
+            foreach (string propertyName in propertyNames)
+            {
+                object value = PobierzWartoscWlasciwosci(source, propertyName);
+                parts.Add($"{propertyName}={FormatujWartoscDiagnostyczna(value)}");
+            }
+
+            return string.Join(", ", parts);
+        }
+
+        private object PobierzWartoscWlasciwosci(object source, string propertyName)
+        {
+            if (source == null) return null;
+
+            try
+            {
+                var property = source.GetType().GetProperty(propertyName);
+                if (property == null || !property.CanRead) return null;
+                return property.GetValue(source);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private string PobierzPierwszyTekst(object source, string propertyName)
+        {
+            object value = PobierzWartoscWlasciwosci(source, propertyName);
+            string text = value?.ToString();
+            return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+        }
+
+        private bool CzyDataUstawiona(object source, string propertyName)
+        {
+            object value = PobierzWartoscWlasciwosci(source, propertyName);
+            return value is DateTime date && date != default;
+        }
+
+        private bool TryReadBoolProperty(object source, string propertyName, out bool value)
+        {
+            value = false;
+            object raw = PobierzWartoscWlasciwosci(source, propertyName);
+            if (raw == null) return false;
+
+            try
+            {
+                value = Convert.ToBoolean(raw, CultureInfo.InvariantCulture);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private dynamic ZnajdzJpkV7M(DateTime dataOd, DateTime dataDo)
@@ -525,6 +846,30 @@ namespace NexoBridge.Services
             }
         }
 
+        private dynamic ZnajdzJpkPoId(int id)
+        {
+            if (id <= 0) return null;
+
+            dynamic mgrJpk = PobierzMenedzera("IJednolitePlikiKontrolne");
+            if (mgrJpk == null) return null;
+
+            try
+            {
+                object znaleziony = mgrJpk.Dane.Znajdz(id);
+                if (znaleziony != null)
+                {
+                    _logger.LogInformation("[VAT JPK] Odnaleziono wygenerowany JPK po Id wyniku naliczania: {Jpk}", OpiszJpk(znaleziony));
+                    return znaleziony;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[VAT JPK] Nie udało się odszukać JPK po Id wyniku naliczania: {Id}.", id);
+            }
+
+            return null;
+        }
+
         private bool CzyJpkV7M(dynamic jpk)
         {
             try
@@ -535,6 +880,87 @@ namespace NexoBridge.Services
             catch
             {
                 return false;
+            }
+        }
+
+        private IDisposable PodepnijNaliczonoEventHandler(object manager, Action<WynikGenerowaniaPlikuJPK> ustawWynik, string sciezka)
+        {
+            if (manager == null) return null;
+
+            NaliczonoEventHandler handler = (sender, e) =>
+            {
+                var wynik = e?.Wynik;
+                ustawWynik(wynik);
+                _logger.LogInformation("[VAT JPK WYNIK] Ścieżka={Sciezka}; {Wynik}", sciezka, OpiszWynikGenerowaniaJpk(wynik));
+            };
+
+            if (manager is IMenadzerNaliczaniaPlikowJPK managerPlikow)
+            {
+                managerPlikow.NaliczonoEventHandler += handler;
+                return new DisposableAction(() => managerPlikow.NaliczonoEventHandler -= handler);
+            }
+
+            if (manager is IMenadzerNaliczaniaWysylkiV managerWysylki)
+            {
+                managerWysylki.NaliczonoEventHandler += handler;
+                return new DisposableAction(() => managerWysylki.NaliczonoEventHandler -= handler);
+            }
+
+            _logger.LogDebug("[VAT JPK WYNIK] Nie udało się podpiąć NaliczonoEventHandler dla typu {Typ}.", manager.GetType().FullName);
+            return null;
+        }
+
+        private bool CzyWynikGenerowaniaJpkPoprawny(WynikGenerowaniaPlikuJPK wynik, out string blad)
+        {
+            blad = null;
+            if (wynik == null) return true;
+
+            string status = wynik.Status.ToString();
+            if (string.Equals(status, "OK", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(status, "Ostrzezenie", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            blad = $"Sfera zwróciła niepoprawny wynik generowania JPK_V7M: {OpiszWynikGenerowaniaJpk(wynik)}";
+            return false;
+        }
+
+        private string OpiszWynikGenerowaniaJpk(WynikGenerowaniaPlikuJPK wynik)
+        {
+            if (wynik == null) return "brak wyniku";
+
+            string szczegolyLogu = PobierzFragmentLoguJpk(wynik.LogSciezka);
+            string log = string.IsNullOrWhiteSpace(szczegolyLogu)
+                ? $"Log={wynik.LogSciezka ?? "brak"}"
+                : $"Log={wynik.LogSciezka ?? "brak"}; LogSzczegoly={szczegolyLogu}";
+
+            return $"Status={wynik.Status}; Id={wynik.Id}; Opis={wynik.Opis ?? "brak"}; XML={wynik.XmlSciezka ?? "brak"}; {log}; Sprzedaz={wynik.Sprzedaz}; Zakup={wynik.Zakup}";
+        }
+
+        private string PobierzFragmentLoguJpk(string sciezkaLogu)
+        {
+            if (string.IsNullOrWhiteSpace(sciezkaLogu)) return null;
+
+            try
+            {
+                if (!File.Exists(sciezkaLogu)) return null;
+
+                string fragment = string.Join(" | ",
+                    File.ReadLines(sciezkaLogu)
+                        .Where(linia => !string.IsNullOrWhiteSpace(linia))
+                        .Take(12));
+
+                if (fragment.Length > 1200)
+                {
+                    fragment = fragment.Substring(0, 1200) + "...";
+                }
+
+                return fragment;
+            }
+            catch
+            {
+                return null;
             }
         }
 
@@ -566,6 +992,36 @@ namespace NexoBridge.Services
             }
         }
 
+        private void UstawDateSystemowaJesliMozna(dynamic target, string propertyName, DateTime data)
+        {
+            if (target == null) return;
+
+            try
+            {
+                var property = target.GetType().GetProperty(propertyName);
+                if (property == null || !property.CanWrite) return;
+
+                var targetType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+                if (targetType.FullName == "InsERT.Moria.IDataSystemowa")
+                {
+                    dynamic dataSystemowa = PobierzMenedzera("IDataSystemowa");
+                    if (dataSystemowa == null) return;
+
+                    dataSystemowa.UstawKontekstDaty(data);
+                    property.SetValue(target, dataSystemowa);
+                    return;
+                }
+
+                UstawJesliMozna(target, propertyName, data);
+            }
+            catch (Exception ex)
+            {
+                string targetTypeName = "brak";
+                try { targetTypeName = target?.GetType().FullName ?? "brak"; } catch { }
+                _logger.LogDebug("Nie udało się ustawić daty systemowej {Property} na {Type}: {Message}", propertyName, targetTypeName, ex.Message);
+            }
+        }
+
         private bool CzyDaneNiekompletne(dynamic manager)
         {
             try { return manager.DaneKompletne == false; }
@@ -574,27 +1030,150 @@ namespace NexoBridge.Services
 
         private string PobierzBledyWalidacji(object bo)
         {
+            var wyniki = new List<string>();
             dynamic boDyn = bo;
-            try
-            {
-                var invalid = (IEnumerable)boDyn.InvalidData;
-                if (invalid != null)
-                {
-                    var bledy = invalid.Cast<dynamic>()
-                        .Select(e =>
-                        {
-                            try { return (string)e.Komunikat ?? (string)e.Tresc ?? (string)e.Opis; }
-                            catch { return e.ToString(); }
-                        })
-                        .Where(e => !string.IsNullOrWhiteSpace(e))
-                        .ToList();
 
-                    if (bledy.Count > 0) return string.Join(" | ", bledy);
+            foreach (string propertyName in new[] { "InvalidData", "ErrorInfo", "DataErrorInfo", "Bledy", "Błędy", "Ostrzezenia", "Komunikaty" })
+            {
+                try
+                {
+                    var property = bo.GetType().GetProperty(propertyName);
+                    if (property == null) continue;
+
+                    object raw = property.GetValue(bo);
+                    foreach (string opis in OpiszWartoscWalidacji(raw))
+                    {
+                        wyniki.Add($"{propertyName}: {opis}");
+                    }
+                }
+                catch { }
+            }
+
+            return wyniki.Count > 0
+                ? string.Join(" | ", wyniki.Distinct().Take(20))
+                : "Brak szczegółów walidacji";
+        }
+
+        private IEnumerable<string> OpiszWartoscWalidacji(object raw)
+        {
+            if (raw == null) yield break;
+
+            if (raw is string text)
+            {
+                if (!string.IsNullOrWhiteSpace(text)) yield return text;
+                yield break;
+            }
+
+            if (raw is IEnumerable enumerable)
+            {
+                foreach (object item in enumerable)
+                {
+                    string opis = OpiszElementWalidacji(item);
+                    if (!string.IsNullOrWhiteSpace(opis)) yield return opis;
+                }
+                yield break;
+            }
+
+            string single = OpiszElementWalidacji(raw);
+            if (!string.IsNullOrWhiteSpace(single)) yield return single;
+        }
+
+        private string OpiszElementWalidacji(object item)
+        {
+            if (item == null) return null;
+
+            foreach (string propertyName in new[] { "Komunikat", "Tresc", "Treść", "Opis", "Message", "ErrorMessage", "WlasnyKomunikatBledu", "TrescBledu" })
+            {
+                if (TryReadStringProperty(item, propertyName, out string value))
+                {
+                    return value;
                 }
             }
-            catch { }
 
-            return "Brak szczegółów w InvalidData";
+            string opis = item.ToString();
+            return string.IsNullOrWhiteSpace(opis) ? null : opis;
+        }
+
+        private bool TryReadStringProperty(object source, string propertyName, out string value)
+        {
+            value = null;
+            if (source == null) return false;
+
+            try
+            {
+                var property = source.GetType().GetProperty(propertyName);
+                if (property == null || !property.CanRead) return false;
+
+                object rawValue = property.GetValue(source);
+                string text = rawValue?.ToString();
+                if (string.IsNullOrWhiteSpace(text)) return false;
+
+                value = text.Trim();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void LogujDiagnostykeJpk(string sciezka, object manager, object plik)
+        {
+            _logger.LogWarning("[VAT JPK DIAG] Ścieżka={Sciezka}; Manager={Manager}; Plik={Plik}",
+                sciezka,
+                OpiszObiektDiagnostycznie(manager, 25),
+                OpiszObiektDiagnostycznie(plik, 35));
+        }
+
+        private string OpiszObiektDiagnostycznie(object obj, int maxProperties)
+        {
+            if (obj == null) return "brak";
+
+            try
+            {
+                var props = obj.GetType()
+                    .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                    .Where(p => p.CanRead && CzyProstyTyp(p.PropertyType))
+                    .OrderBy(p => p.Name)
+                    .Take(maxProperties)
+                    .Select(p =>
+                    {
+                        try
+                        {
+                            object value = p.GetValue(obj);
+                            return $"{p.Name}={FormatujWartoscDiagnostyczna(value)}";
+                        }
+                        catch (Exception ex)
+                        {
+                            return $"{p.Name}=<błąd odczytu: {ex.Message}>";
+                        }
+                    })
+                    .ToList();
+
+                return $"{obj.GetType().FullName}: {string.Join(", ", props)}";
+            }
+            catch (Exception ex)
+            {
+                return $"{obj.GetType().FullName}: błąd diagnostyki {ex.Message}";
+            }
+        }
+
+        private bool CzyProstyTyp(Type type)
+        {
+            type = Nullable.GetUnderlyingType(type) ?? type;
+            return type.IsPrimitive
+                || type.IsEnum
+                || type == typeof(string)
+                || type == typeof(decimal)
+                || type == typeof(DateTime)
+                || type == typeof(Guid);
+        }
+
+        private string FormatujWartoscDiagnostyczna(object value)
+        {
+            if (value == null) return "brak";
+            if (value is DateTime date) return date.ToString("yyyy-MM-dd");
+            return value.ToString();
         }
 
         private string OpiszJpk(object jpk)
@@ -669,6 +1248,25 @@ namespace NexoBridge.Services
                 if (metoda != null) return metoda.MakeGenericMethod(typSzukany).Invoke(_sfera, null);
             }
             return null;
+        }
+
+        private sealed class DisposableAction : IDisposable
+        {
+            private readonly Action _dispose;
+            private bool _disposed;
+
+            public DisposableAction(Action dispose)
+            {
+                _dispose = dispose;
+            }
+
+            public void Dispose()
+            {
+                if (_disposed) return;
+
+                _disposed = true;
+                _dispose?.Invoke();
+            }
         }
     }
 }
