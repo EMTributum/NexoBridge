@@ -1,7 +1,12 @@
 using InsERT.Moria.ModelDanych;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Text;
+using System.Xml.Linq;
 
 namespace NexoBridge.Services
 {
@@ -88,6 +93,9 @@ namespace NexoBridge.Services
             miesiacRozliczeniowy = PobierzDateSciezki(
                 dokument,
                 "DokumentElektroniczny.OpisDokumentu.MiesiacRozliczeniowy");
+            if (miesiacRozliczeniowy.HasValue) return miesiacRozliczeniowy.Value.Date;
+
+            miesiacRozliczeniowy = PobierzDataOtrzymaniaZEpp(dokument);
             if (miesiacRozliczeniowy.HasValue) return miesiacRozliczeniowy.Value.Date;
 
             return PobierzDateDokumentuTechnicznego(dokument);
@@ -200,6 +208,155 @@ namespace NexoBridge.Services
             if (DateTime.TryParse(current.ToString(), out DateTime parsed)) return parsed;
 
             return null;
+        }
+
+        private static DateTime? PobierzDataOtrzymaniaZEpp(DokumentDoKsiegowania dokument)
+        {
+            object xmlObj = PobierzWlasciwosc(dokument, "DokumentDoKsiegowaniaXML");
+            if (xmlObj == null) return null;
+
+            string xml = PobierzWlasciwosc(xmlObj, "XML") as string;
+            if (string.IsNullOrWhiteSpace(xml))
+            {
+                xml = RozpakujXmlDokumentu(PobierzWlasciwosc(xmlObj, "XMLSkompresowany") as byte[]);
+            }
+
+            if (string.IsNullOrWhiteSpace(xml)) return null;
+
+            string epp = WyciagnijEppZXml(xml);
+            if (string.IsNullOrWhiteSpace(epp)) return null;
+
+            return PobierzDateOtrzymaniaZNaglowkaEpp(epp);
+        }
+
+        private static string RozpakujXmlDokumentu(byte[] compressed)
+        {
+            if (compressed == null || compressed.Length == 0) return null;
+
+            try
+            {
+                using (var input = new MemoryStream(compressed))
+                using (var zlib = new ZLibStream(input, CompressionMode.Decompress))
+                using (var reader = new StreamReader(zlib, Encoding.UTF8, true))
+                {
+                    return reader.ReadToEnd();
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string WyciagnijEppZXml(string xml)
+        {
+            try
+            {
+                return XDocument.Parse(xml).Root?.Element("Dokument")?.Value;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static DateTime? PobierzDateOtrzymaniaZNaglowkaEpp(string epp)
+        {
+            using (var reader = new StringReader(epp))
+            {
+                bool naglowek = false;
+                string line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    string trimmed = line.Trim();
+                    if (trimmed.Length == 0) continue;
+
+                    if (trimmed.Equals("[NAGLOWEK]", StringComparison.OrdinalIgnoreCase))
+                    {
+                        naglowek = true;
+                        continue;
+                    }
+
+                    if (!naglowek) continue;
+                    if (trimmed.StartsWith("[", StringComparison.Ordinal))
+                    {
+                        naglowek = false;
+                        continue;
+                    }
+
+                    var fields = PodzielLinieCsvEpp(trimmed);
+                    naglowek = false;
+
+                    if (fields.Count <= 23 || !CzyNaglowekLogistyki(fields[0])) continue;
+
+                    DateTime? dataOtrzymania = ParsujDateEpp(fields[23]);
+                    if (dataOtrzymania.HasValue) return dataOtrzymania.Value.Date;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool CzyNaglowekLogistyki(string typ)
+        {
+            if (string.IsNullOrWhiteSpace(typ)) return false;
+
+            string normalized = typ.Trim().ToUpperInvariant();
+            return normalized == "FZ" ||
+                   normalized == "FS" ||
+                   normalized == "FZK" ||
+                   normalized == "FSK" ||
+                   normalized == "PA";
+        }
+
+        private static DateTime? ParsujDateEpp(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw) || raw.Length < 8) return null;
+
+            string date = raw.Trim().Substring(0, 8);
+            if (DateTime.TryParseExact(date, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsed))
+            {
+                return parsed;
+            }
+
+            return null;
+        }
+
+        private static List<string> PodzielLinieCsvEpp(string line)
+        {
+            var fields = new List<string>();
+            var current = new StringBuilder();
+            bool inQuotes = false;
+
+            for (int i = 0; i < line.Length; i++)
+            {
+                char c = line[i];
+                if (c == '"')
+                {
+                    if (inQuotes && i + 1 < line.Length && line[i + 1] == '"')
+                    {
+                        current.Append('"');
+                        i++;
+                    }
+                    else
+                    {
+                        inQuotes = !inQuotes;
+                    }
+                    continue;
+                }
+
+                if (c == ',' && !inQuotes)
+                {
+                    fields.Add(current.ToString());
+                    current.Clear();
+                    continue;
+                }
+
+                current.Append(c);
+            }
+
+            fields.Add(current.ToString());
+            return fields;
         }
 
         private static object PobierzWlasciwosc(object source, string propertyName)
