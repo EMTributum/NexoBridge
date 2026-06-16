@@ -27,7 +27,7 @@ namespace NexoBridge.Services
             List<Tuple<DokumentDoKsiegowania, SchematImportu>> Zatwierdzone,
             List<DokumentDoKsiegowania> Oczekujace,
             List<DokumentDoKsiegowania> BrakSchematu,
-            List<DokumentDoKsiegowania> BledneSchematy)> DekretujAsync(Func<int, string, Task> raportujPostep)
+            List<DokumentDoKsiegowania> BledneSchematy)> DekretujAsync(DateTime dataRozliczenia, Func<int, string, Task> raportujPostep)
         {
             await raportujPostep(70, "Analiza dokumentów oczekujących...");
             var menedzerDokumentow = _sfera.PodajObiektTypu<IDokumentyDoKsiegowania>();
@@ -35,15 +35,9 @@ namespace NexoBridge.Services
             var menedzerOkresow = _sfera.PodajObiektTypu<InsERT.Moria.Ksiegowosc.IOkresyObrachunkowe>();
 
             var wszystkieOczekujace = menedzerDokumentow.Dane.Wszystkie().Where(d => (int)d.StatusKsiegowy == 2).ToList();
-            var pominieteAmortyzacjeCzastkowe = wszystkieOczekujace.Where(CzyCzastkowaAmortyzacja).ToList();
-            var oczekujace = wszystkieOczekujace.Except(pominieteAmortyzacjeCzastkowe).ToList();
-
-            if (pominieteAmortyzacjeCzastkowe.Count > 0)
-            {
-                _logger.LogInformation("[AMORTYZACJA CZĄSTKOWA POMINIĘTA] Nie dekretuję cząstkowych odpisów AM, bo dekretowana ma być wyłącznie amortyzacja zbiorcza AMZ. Liczba={Count}; dokumenty={Dokumenty}",
-                    pominieteAmortyzacjeCzastkowe.Count,
-                    OpiszDokumenty(pominieteAmortyzacjeCzastkowe));
-            }
+            var wybor = WaitingRoomDocumentFilter.SelectForPeriod(wszystkieOczekujace, dataRozliczenia);
+            LogujWyborPoczekalni(wybor, dataRozliczenia);
+            var oczekujace = wybor.Included;
 
             if (oczekujace.Count == 0)
             {
@@ -161,34 +155,36 @@ namespace NexoBridge.Services
             catch { return 0; }
         }
 
-        private bool CzyCzastkowaAmortyzacja(DokumentDoKsiegowania dokument)
-        {
-            if (dokument == null) return false;
-
-            try
-            {
-                if (dokument.OperacjaAMZ != null) return false;
-            }
-            catch { }
-
-            try
-            {
-                var operacja = dokument.OperacjaST;
-                if (operacja == null) return false;
-
-                return operacja is OperacjaAM || operacja.GetType().Name.Contains("OperacjaAM");
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
         private string OpiszDokumenty(IEnumerable<DokumentDoKsiegowania> dokumenty)
         {
             if (dokumenty == null) return "brak";
             var opisy = dokumenty.Take(100).Select(InvoiceDocumentMatcher.Describe).ToList();
             return opisy.Count == 0 ? "brak" : string.Join(" || ", opisy);
+        }
+
+        private void LogujWyborPoczekalni(WaitingRoomDocumentSelection wybor, DateTime dataRozliczenia)
+        {
+            if (wybor == null) return;
+
+            _logger.LogInformation("[POCZEKALNIA FILTR] Okres={Okres}; wszystkie={All}; doDekretacji={Included}; pozaOkresem={OutsidePeriod}; bezDaty={MissingDate}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
+                dataRozliczenia.ToString("yyyy-MM"),
+                wybor.Total,
+                wybor.Included.Count,
+                wybor.OutsidePeriod.Count,
+                wybor.MissingDate.Count,
+                wybor.PartialAmortization.Count,
+                wybor.EmployeeBillsWithSubject.Count);
+
+            LogujPominiete("[POCZEKALNIA POZA OKRESEM]", wybor.OutsidePeriod);
+            LogujPominiete("[POCZEKALNIA BEZ DATY]", wybor.MissingDate);
+            LogujPominiete("[AMORTYZACJA CZĄSTKOWA POMINIĘTA]", wybor.PartialAmortization);
+            LogujPominiete("[RACHUNEK PRACOWNICZY Z PODMIOTEM POMINIĘTY]", wybor.EmployeeBillsWithSubject);
+        }
+
+        private void LogujPominiete(string prefix, List<DokumentDoKsiegowania> dokumenty)
+        {
+            if (dokumenty == null || dokumenty.Count == 0) return;
+            _logger.LogInformation("{Prefix} Liczba={Count}; dokumenty={Dokumenty}", prefix, dokumenty.Count, OpiszDokumenty(dokumenty));
         }
     }
 }

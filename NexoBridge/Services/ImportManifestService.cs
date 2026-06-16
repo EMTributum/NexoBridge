@@ -72,6 +72,28 @@ namespace NexoBridge.Services
 
         public List<DokumentDoKsiegowania> PobierzDokumentyWPoczekalni()
         {
+            return PobierzWszystkieOczekujace();
+        }
+
+        public List<DokumentDoKsiegowania> PobierzDokumentyWPoczekalni(DateTime dataRozliczenia)
+        {
+            var wszystkieOczekujace = PobierzWszystkieOczekujace();
+            var wybor = WaitingRoomDocumentFilter.SelectForPeriod(wszystkieOczekujace, dataRozliczenia);
+
+            _logger.LogInformation("[MANIFEST POCZEKALNIA FILTR] Okres={Okres}; wszystkie={All}; wOkresieDoObslugi={Included}; pozaOkresem={OutsidePeriod}; bezDaty={MissingDate}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
+                dataRozliczenia.ToString("yyyy-MM"),
+                wybor.Total,
+                wybor.Included.Count,
+                wybor.OutsidePeriod.Count,
+                wybor.MissingDate.Count,
+                wybor.PartialAmortization.Count,
+                wybor.EmployeeBillsWithSubject.Count);
+
+            return wybor.Included;
+        }
+
+        private List<DokumentDoKsiegowania> PobierzWszystkieOczekujace()
+        {
             var menedzerDokumentow = _sfera.PodajObiektTypu<IDokumentyDoKsiegowania>();
             return menedzerDokumentow.Dane.Wszystkie()
                 .Where(d => (int)d.StatusKsiegowy == 2)
@@ -120,7 +142,7 @@ namespace NexoBridge.Services
 
             foreach (var doc in oczekujace)
             {
-                if (CzyCzastkowaAmortyzacja(doc)) continue;
+                if (WaitingRoomDocumentFilter.CzyCzastkowaAmortyzacja(doc)) continue;
                 if (matchedWaitingRoomNumbers.Contains(doc.Nr)) continue;
                 if (manifest.Any(x => x.WaitingRoomNr == doc.Nr)) continue;
 
@@ -203,29 +225,6 @@ namespace NexoBridge.Services
         {
             string cleaned = value?.Trim();
             return string.IsNullOrWhiteSpace(cleaned) ? null : cleaned;
-        }
-
-        private bool CzyCzastkowaAmortyzacja(DokumentDoKsiegowania dokument)
-        {
-            if (dokument == null) return false;
-
-            try
-            {
-                if (dokument.OperacjaAMZ != null) return false;
-            }
-            catch { }
-
-            try
-            {
-                var operacja = dokument.OperacjaST;
-                if (operacja == null) return false;
-
-                return operacja is OperacjaAM || operacja.GetType().Name.Contains("OperacjaAM");
-            }
-            catch
-            {
-                return false;
-            }
         }
 
         private string OpiszRaport(DocumentProcessingReport report)

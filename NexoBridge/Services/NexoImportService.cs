@@ -89,7 +89,7 @@ namespace NexoBridge.Services
                     await importProgress.ReportAsync(5, "Pobieranie i analiza plików EPP...");
                     await _parserService.ParseAndSyncAsync(job, importProgress.ReportAsync);
 
-                    var oczekujacePoImporcie = _manifestService.PobierzDokumentyWPoczekalni();
+                    var oczekujacePoImporcie = _manifestService.PobierzDokumentyWPoczekalni(dataRozliczenia);
                     _manifestService.AktualizujPoPoczekalni(finalReport.Documents, oczekujacePoImporcie);
                     await _ksefNumberAssignmentService.PrzypiszPrzedDekretacjaAsync(job, finalReport.Documents, importProgress.ReportAsync);
                     await importProgress.CompleteAsync("Import faktur i audyt KSeF w Poczekalni zakończone.");
@@ -128,11 +128,11 @@ namespace NexoBridge.Services
                 var decreeProgress = progress.BeginSegment((maImportFaktur || job.CalculateAmortization) ? JobProgressPlan.DecreeUnits : JobProgressPlan.SkipDecreeUnits);
                 if (wymagaDekretacji)
                 {
-                    var oczekujacePrzedDekretacja = _manifestService.PobierzDokumentyWPoczekalni();
+                    var oczekujacePrzedDekretacja = _manifestService.PobierzDokumentyWPoczekalni(dataRozliczenia);
                     _manifestService.AktualizujPoPoczekalni(finalReport.Documents, oczekujacePrzedDekretacja);
 
                     await decreeProgress.ReportAsync(5, "Dekretacja dokumentów...");
-                    var (rezultat, zatwierdzone, oczekujace, brakSchematu, bledneSchematy) = await _accountingService.DekretujAsync(decreeProgress.ReportAsync);
+                    var (rezultat, zatwierdzone, oczekujace, brakSchematu, bledneSchematy) = await _accountingService.DekretujAsync(dataRozliczenia, decreeProgress.ReportAsync);
                     zatwierdzoneCount = zatwierdzone.Count;
                     AktualizujStatusyDekretacji(finalReport.Documents, rezultat, zatwierdzone, brakSchematu, bledneSchematy);
                     await decreeProgress.CompleteAsync($"Dekretacja zakończona. Zadekretowano {zatwierdzoneCount} dok.");
