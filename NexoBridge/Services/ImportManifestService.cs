@@ -80,12 +80,12 @@ namespace NexoBridge.Services
             var wszystkieOczekujace = PobierzWszystkieOczekujace();
             var wybor = WaitingRoomDocumentFilter.SelectForPeriod(wszystkieOczekujace, dataRozliczenia);
 
-            _logger.LogInformation("[MANIFEST POCZEKALNIA FILTR] Okres={Okres}; wszystkie={All}; wOkresieDoObslugi={Included}; pozaOkresem={OutsidePeriod}; bezDaty={MissingDate}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
+            _logger.LogInformation("[MANIFEST POCZEKALNIA FILTR] Okres={Okres}; wszystkie={All}; wOkresieDoObslugi={Included}; pozaOkresem={OutsidePeriod}; bezMiesiacaKsiegowego={MissingAccountingPeriod}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
                 dataRozliczenia.ToString("yyyy-MM"),
                 wybor.Total,
                 wybor.Included.Count,
                 wybor.OutsidePeriod.Count,
-                wybor.MissingDate.Count,
+                wybor.MissingAccountingPeriod.Count,
                 wybor.PartialAmortization.Count,
                 wybor.EmployeeBillsWithSubject.Count);
 

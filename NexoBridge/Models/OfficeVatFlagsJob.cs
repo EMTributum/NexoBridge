@@ -46,5 +46,10 @@ namespace NexoBridge.Models
         public bool? AlwaysUseNipUe { get; set; }
         public bool? SmeVatPayer { get; set; }
         public string Guardian { get; set; }
+        public string AccountingProgram { get; set; }
+        public bool? RachmistrzActive { get; set; }
+        public bool? RewizorActive { get; set; }
+        public bool? GratyfikantActive { get; set; }
+        public int? AccountingFormCode { get; set; }
     }
 }

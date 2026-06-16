@@ -123,6 +123,7 @@ namespace NexoBridge.Services
                     "Grupy",
                     "FlagaWlasna",
                     "KlientBiura",
+                    "KlientBiura.BazaDanych",
                     "OpiekunPodstawowy",
                     "OpiekunPodstawowy.Uzytkownik",
                     "OpiekunPodstawowy.Uzytkownik.Osoba"
@@ -142,6 +143,10 @@ namespace NexoBridge.Services
             var groupNames = PobierzNazwyGrup(podmiot);
             string vatUeFlagName = SafeString(SafeObj(podmiot, "FlagaWlasna"), "Nazwa");
             string guardian = PobierzOpiekuna(podmiot);
+            object bazaKlienta = SafeObj(klient, "BazaDanych");
+            bool? rachmistrzActive = SafeBool(bazaKlienta, "AktywnyRachmistrz");
+            bool? rewizorActive = SafeBool(bazaKlienta, "AktywnyRewizor");
+            bool? gratyfikantActive = SafeBool(bazaKlienta, "AktywnyGratyfikant");
 
             return new OfficeVatFlagsItem
             {
@@ -158,10 +163,37 @@ namespace NexoBridge.Services
                 NipUe = nipUe,
                 AlwaysUseNipUe = SafeBool(podmiot, "ZawszeStosujNIPUE"),
                 SmeVatPayer = SafeBool(firma, "PodatnikSme"),
-                Guardian = guardian
+                Guardian = guardian,
+                AccountingProgram = OkreslProgramKsiegowy(rachmistrzActive, rewizorActive),
+                RachmistrzActive = rachmistrzActive,
+                RewizorActive = rewizorActive,
+                GratyfikantActive = gratyfikantActive,
+                AccountingFormCode = SafeInt(klient, "FormaKsiegowosci")
             };
         }
 
+        private string OkreslProgramKsiegowy(bool? rachmistrzActive, bool? rewizorActive)
+        {
+            bool rachmistrz = rachmistrzActive == true;
+            bool rewizor = rewizorActive == true;
+
+            if (rachmistrz && rewizor)
+            {
+                return "Rachmistrz+Rewizor";
+            }
+
+            if (rewizor)
+            {
+                return "Rewizor";
+            }
+
+            if (rachmistrz)
+            {
+                return "Rachmistrz";
+            }
+
+            return null;
+        }
         private List<string> PobierzNazwyGrup(object podmiot)
         {
             var result = new List<string>();
@@ -220,7 +252,7 @@ namespace NexoBridge.Services
             {
                 _logger.LogDebug(
                     ex,
-                    "Nie uda³o siê pobraæ opiekuna dla podmiotu ID {Id}: {Message}",
+                    "Nie udaï¿½o siï¿½ pobraï¿½ opiekuna dla podmiotu ID {Id}: {Message}",
                     SafeInt(podmiot, "Id"),
                     ex.GetBaseException().Message);
 

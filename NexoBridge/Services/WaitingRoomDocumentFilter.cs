@@ -9,14 +9,14 @@ namespace NexoBridge.Services
     {
         public List<DokumentDoKsiegowania> Included { get; } = new List<DokumentDoKsiegowania>();
         public List<DokumentDoKsiegowania> OutsidePeriod { get; } = new List<DokumentDoKsiegowania>();
-        public List<DokumentDoKsiegowania> MissingDate { get; } = new List<DokumentDoKsiegowania>();
+        public List<DokumentDoKsiegowania> MissingAccountingPeriod { get; } = new List<DokumentDoKsiegowania>();
         public List<DokumentDoKsiegowania> PartialAmortization { get; } = new List<DokumentDoKsiegowania>();
         public List<DokumentDoKsiegowania> EmployeeBillsWithSubject { get; } = new List<DokumentDoKsiegowania>();
 
         public int Total =>
             Included.Count +
             OutsidePeriod.Count +
-            MissingDate.Count +
+            MissingAccountingPeriod.Count +
             PartialAmortization.Count +
             EmployeeBillsWithSubject.Count;
     }
@@ -34,7 +34,6 @@ namespace NexoBridge.Services
         {
             var selection = new WaitingRoomDocumentSelection();
             DateTime periodStart = new DateTime(dataRozliczenia.Year, dataRozliczenia.Month, 1);
-            DateTime nextPeriodStart = periodStart.AddMonths(1);
 
             foreach (var document in documents ?? Enumerable.Empty<DokumentDoKsiegowania>())
             {
@@ -46,15 +45,15 @@ namespace NexoBridge.Services
                     continue;
                 }
 
-                DateTime? documentDate = PobierzDateDokumentu(document);
-                if (!documentDate.HasValue)
+                DateTime? accountingPeriod = PobierzMiesiacKsiegowyDokumentu(document);
+                if (!accountingPeriod.HasValue)
                 {
-                    selection.MissingDate.Add(document);
+                    selection.MissingAccountingPeriod.Add(document);
                     continue;
                 }
 
-                DateTime date = documentDate.Value.Date;
-                if (date < periodStart || date >= nextPeriodStart)
+                DateTime period = new DateTime(accountingPeriod.Value.Year, accountingPeriod.Value.Month, 1);
+                if (period != periodStart)
                 {
                     selection.OutsidePeriod.Add(document);
                     continue;
@@ -70,6 +69,28 @@ namespace NexoBridge.Services
             }
 
             return selection;
+        }
+
+        public static DateTime? PobierzMiesiacKsiegowyDokumentu(DokumentDoKsiegowania dokument)
+        {
+            if (dokument == null) return null;
+
+            DateTime? miesiacRozliczeniowy = PobierzDateSciezki(
+                dokument,
+                "PortalBiura2DokumentOdKlienta.OpisDokumentu.MiesiacRozliczeniowy");
+            if (miesiacRozliczeniowy.HasValue) return miesiacRozliczeniowy.Value.Date;
+
+            miesiacRozliczeniowy = PobierzDateSciezki(
+                dokument,
+                "PortalFirmyDokumentZPortaluFirmy.OpisDokumentu.MiesiacRozliczeniowy");
+            if (miesiacRozliczeniowy.HasValue) return miesiacRozliczeniowy.Value.Date;
+
+            miesiacRozliczeniowy = PobierzDateSciezki(
+                dokument,
+                "DokumentElektroniczny.OpisDokumentu.MiesiacRozliczeniowy");
+            if (miesiacRozliczeniowy.HasValue) return miesiacRozliczeniowy.Value.Date;
+
+            return PobierzDateDokumentuTechnicznego(dokument);
         }
 
         public static bool CzyCzastkowaAmortyzacja(DokumentDoKsiegowania dokument)
@@ -95,16 +116,11 @@ namespace NexoBridge.Services
             }
         }
 
-        public static DateTime? PobierzDateDokumentu(DokumentDoKsiegowania dokument)
+        private static DateTime? PobierzDateDokumentuTechnicznego(DokumentDoKsiegowania dokument)
         {
             if (dokument == null) return null;
 
-            DateTime? data = PobierzDateWlasciwosci(dokument, "Data");
-            if (data.HasValue) return data.Value.Date;
-
-            data = PobierzDateWlasciwosci(dokument, "DataWystawienia");
-            if (data.HasValue) return data.Value.Date;
-
+            DateTime? data;
             foreach (var rachunek in PobierzRachunkiPracownicze(dokument))
             {
                 data = PobierzDateWlasciwosci(rachunek, "Data");
@@ -166,6 +182,22 @@ namespace NexoBridge.Services
             if (value is DateTime dateTime) return dateTime;
             if (value is DateTimeOffset dateTimeOffset) return dateTimeOffset.DateTime;
             if (DateTime.TryParse(value.ToString(), out DateTime parsed)) return parsed;
+
+            return null;
+        }
+
+        private static DateTime? PobierzDateSciezki(object source, string path)
+        {
+            object current = source;
+            foreach (string propertyName in path.Split('.'))
+            {
+                current = PobierzWlasciwosc(current, propertyName);
+                if (current == null) return null;
+            }
+
+            if (current is DateTime dateTime) return dateTime;
+            if (current is DateTimeOffset dateTimeOffset) return dateTimeOffset.DateTime;
+            if (DateTime.TryParse(current.ToString(), out DateTime parsed)) return parsed;
 
             return null;
         }

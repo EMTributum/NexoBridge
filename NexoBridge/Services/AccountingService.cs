@@ -166,17 +166,17 @@ namespace NexoBridge.Services
         {
             if (wybor == null) return;
 
-            _logger.LogInformation("[POCZEKALNIA FILTR] Okres={Okres}; wszystkie={All}; doDekretacji={Included}; pozaOkresem={OutsidePeriod}; bezDaty={MissingDate}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
+            _logger.LogInformation("[POCZEKALNIA FILTR] Okres={Okres}; wszystkie={All}; doDekretacji={Included}; pozaOkresem={OutsidePeriod}; bezMiesiacaKsiegowego={MissingAccountingPeriod}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
                 dataRozliczenia.ToString("yyyy-MM"),
                 wybor.Total,
                 wybor.Included.Count,
                 wybor.OutsidePeriod.Count,
-                wybor.MissingDate.Count,
+                wybor.MissingAccountingPeriod.Count,
                 wybor.PartialAmortization.Count,
                 wybor.EmployeeBillsWithSubject.Count);
 
             LogujPominiete("[POCZEKALNIA POZA OKRESEM]", wybor.OutsidePeriod);
-            LogujPominiete("[POCZEKALNIA BEZ DATY]", wybor.MissingDate);
+            LogujPominiete("[POCZEKALNIA BEZ MIESIĄCA KSIĘGOWEGO]", wybor.MissingAccountingPeriod);
             LogujPominiete("[AMORTYZACJA CZĄSTKOWA POMINIĘTA]", wybor.PartialAmortization);
             LogujPominiete("[RACHUNEK PRACOWNICZY Z PODMIOTEM POMINIĘTY]", wybor.EmployeeBillsWithSubject);
         }
