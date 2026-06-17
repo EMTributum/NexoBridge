@@ -1,4 +1,5 @@
-using InsERT.Moria.ModelDanych;
+﻿using InsERT.Moria.ModelDanych;
+using NexoBridge.Models;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -17,13 +18,17 @@ namespace NexoBridge.Services
         public List<DokumentDoKsiegowania> MissingAccountingPeriod { get; } = new List<DokumentDoKsiegowania>();
         public List<DokumentDoKsiegowania> PartialAmortization { get; } = new List<DokumentDoKsiegowania>();
         public List<DokumentDoKsiegowania> EmployeeBillsWithSubject { get; } = new List<DokumentDoKsiegowania>();
+        public List<DokumentDoKsiegowania> RecoveredFromCurrentPackage { get; } = new List<DokumentDoKsiegowania>();
+        public List<DokumentDoKsiegowania> AmbiguousCurrentPackageMatch { get; } = new List<DokumentDoKsiegowania>();
+        public Dictionary<int, string> AccountingPeriodSources { get; } = new Dictionary<int, string>();
 
         public int Total =>
             Included.Count +
             OutsidePeriod.Count +
             MissingAccountingPeriod.Count +
             PartialAmortization.Count +
-            EmployeeBillsWithSubject.Count;
+            EmployeeBillsWithSubject.Count +
+            AmbiguousCurrentPackageMatch.Count;
     }
 
     public static class WaitingRoomDocumentFilter
@@ -35,22 +40,53 @@ namespace NexoBridge.Services
             "ZaliczkaRachunkuDoUmowyPracowniczej"
         };
 
+        private sealed class PackagePeriodMatch
+        {
+            public DateTime? Period { get; set; }
+            public string Source { get; set; }
+            public bool Ambiguous { get; set; }
+        }
+
         public static WaitingRoomDocumentSelection SelectForPeriod(IEnumerable<DokumentDoKsiegowania> documents, DateTime dataRozliczenia)
+        {
+            return SelectForPeriod(documents, dataRozliczenia, null);
+        }
+
+        public static WaitingRoomDocumentSelection SelectForPeriod(IEnumerable<DokumentDoKsiegowania> documents, DateTime dataRozliczenia, ImportPackageContext packageContext)
         {
             var selection = new WaitingRoomDocumentSelection();
             DateTime periodStart = new DateTime(dataRozliczenia.Year, dataRozliczenia.Month, 1);
+            var allDocuments = (documents ?? Enumerable.Empty<DokumentDoKsiegowania>()).Where(d => d != null).ToList();
+            var packagePeriods = BuildPackagePeriodMatches(allDocuments, packageContext, periodStart);
 
-            foreach (var document in documents ?? Enumerable.Empty<DokumentDoKsiegowania>())
+            foreach (var document in allDocuments)
             {
-                if (document == null) continue;
-
                 if (CzyCzastkowaAmortyzacja(document))
                 {
                     selection.PartialAmortization.Add(document);
                     continue;
                 }
 
-                DateTime? accountingPeriod = PobierzMiesiacKsiegowyDokumentu(document);
+                DateTime? accountingPeriod = null;
+                string periodSource = null;
+
+                if (packagePeriods.TryGetValue(document.Nr, out var packagePeriod))
+                {
+                    if (packagePeriod.Ambiguous)
+                    {
+                        selection.AmbiguousCurrentPackageMatch.Add(document);
+                        continue;
+                    }
+
+                    accountingPeriod = packagePeriod.Period;
+                    periodSource = packagePeriod.Source;
+                }
+                else
+                {
+                    accountingPeriod = PobierzMiesiacKsiegowyDokumentu(document);
+                    periodSource = accountingPeriod.HasValue ? "sfera" : null;
+                }
+
                 if (!accountingPeriod.HasValue)
                 {
                     selection.MissingAccountingPeriod.Add(document);
@@ -61,16 +97,23 @@ namespace NexoBridge.Services
                 if (period != periodStart)
                 {
                     selection.OutsidePeriod.Add(document);
+                    selection.AccountingPeriodSources[document.Nr] = periodSource ?? "unknown";
                     continue;
                 }
 
                 if (CzyRachunekDoUmowyPracowniczejZPodmiotem(document))
                 {
                     selection.EmployeeBillsWithSubject.Add(document);
+                    selection.AccountingPeriodSources[document.Nr] = periodSource ?? "unknown";
                     continue;
                 }
 
                 selection.Included.Add(document);
+                selection.AccountingPeriodSources[document.Nr] = periodSource ?? "unknown";
+                if (periodSource?.StartsWith("currentPackage", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    selection.RecoveredFromCurrentPackage.Add(document);
+                }
             }
 
             return selection;
@@ -122,6 +165,35 @@ namespace NexoBridge.Services
             {
                 return false;
             }
+        }
+
+        private static Dictionary<int, PackagePeriodMatch> BuildPackagePeriodMatches(List<DokumentDoKsiegowania> allDocuments, ImportPackageContext packageContext, DateTime periodStart)
+        {
+            var result = new Dictionary<int, PackagePeriodMatch>();
+            if (packageContext == null || packageContext.Metadata == null || packageContext.Metadata.Count == 0) return result;
+
+            foreach (var metadata in packageContext.Metadata)
+            {
+                var match = InvoiceDocumentMatcher.Match(allDocuments, metadata);
+                if (match.Document == null) continue;
+
+                if (result.TryGetValue(match.Document.Nr, out var existing))
+                {
+                    if (existing.Period != periodStart.Date)
+                    {
+                        existing.Ambiguous = true;
+                    }
+                    continue;
+                }
+
+                result[match.Document.Nr] = new PackagePeriodMatch
+                {
+                    Period = periodStart.Date,
+                    Source = "currentPackageManifest"
+                };
+            }
+
+            return result;
         }
 
         private static DateTime? PobierzDateDokumentuTechnicznego(DokumentDoKsiegowania dokument)
@@ -366,7 +438,10 @@ namespace NexoBridge.Services
             try
             {
                 var property = source.GetType().GetProperty(propertyName);
-                return property?.GetValue(source);
+                if (property != null) return property.GetValue(source);
+
+                var field = source.GetType().GetField(propertyName);
+                return field?.GetValue(source);
             }
             catch
             {
@@ -375,3 +450,4 @@ namespace NexoBridge.Services
         }
     }
 }
+

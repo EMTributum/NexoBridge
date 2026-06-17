@@ -63,6 +63,8 @@ namespace NexoBridge.Services
             int zatwierdzoneCount = 0;
             bool maImportFaktur = JobProgressPlan.HasInvoiceImport(job);
             bool amortyzacjaWygenerowalaDokumenty = false;
+            EppImportResult importResult = null;
+            ImportPackageContext packageContext = null;
 
             _logger.LogInformation("Rozpoczynam zintegrowane przetwarzanie zadania: {JobId}. Baza docelowa: {Database} za {Miesiac}/{Rok}. Flagi: ImportInvoices={ImportInvoices}, Files={Files}, CalculateAmortization={CalculateAmortization}, CalculatePit={CalculatePit}, CalculateVat={CalculateVat}",
                 job.JobId,
@@ -87,10 +89,12 @@ namespace NexoBridge.Services
                 if (maImportFaktur)
                 {
                     await importProgress.ReportAsync(5, "Pobieranie i analiza plików EPP...");
-                    await _parserService.ParseAndSyncAsync(job, importProgress.ReportAsync);
+                    importResult = await _parserService.ParseAndSyncAsync(job, importProgress.ReportAsync);
+                    packageContext = ImportPackageContext.FromJob(job, importResult);
+                    _logger.LogInformation("[EPP IMPORT CONTEXT] JobId={JobId}; obiekty={Objects}; naglowki={Headers}; ksefDopisane={KsefAssigned}", job.JobId, importResult.ObjectsCount, importResult.Headers.Count, importResult.KsefAssignedCount);
 
-                    var oczekujacePoImporcie = _manifestService.PobierzDokumentyWPoczekalni(dataRozliczenia);
-                    _manifestService.AktualizujPoPoczekalni(finalReport.Documents, oczekujacePoImporcie);
+                    var wyborPoImporcie = _manifestService.PobierzWyborDokumentowWPoczekalni(dataRozliczenia, packageContext);
+                    _manifestService.AktualizujPoPoczekalni(finalReport.Documents, wyborPoImporcie);
                     await _ksefNumberAssignmentService.PrzypiszPrzedDekretacjaAsync(job, finalReport.Documents, importProgress.ReportAsync);
                     await importProgress.CompleteAsync("Import faktur i audyt KSeF w Poczekalni zakończone.");
                 }
@@ -128,11 +132,11 @@ namespace NexoBridge.Services
                 var decreeProgress = progress.BeginSegment((maImportFaktur || job.CalculateAmortization) ? JobProgressPlan.DecreeUnits : JobProgressPlan.SkipDecreeUnits);
                 if (wymagaDekretacji)
                 {
-                    var oczekujacePrzedDekretacja = _manifestService.PobierzDokumentyWPoczekalni(dataRozliczenia);
-                    _manifestService.AktualizujPoPoczekalni(finalReport.Documents, oczekujacePrzedDekretacja);
+                    var wyborPrzedDekretacja = _manifestService.PobierzWyborDokumentowWPoczekalni(dataRozliczenia, packageContext);
+                    _manifestService.AktualizujPoPoczekalni(finalReport.Documents, wyborPrzedDekretacja);
 
                     await decreeProgress.ReportAsync(5, "Dekretacja dokumentów...");
-                    var (rezultat, zatwierdzone, oczekujace, brakSchematu, bledneSchematy) = await _accountingService.DekretujAsync(dataRozliczenia, decreeProgress.ReportAsync);
+                    var (rezultat, zatwierdzone, oczekujace, brakSchematu, bledneSchematy) = await _accountingService.DekretujAsync(dataRozliczenia, packageContext, decreeProgress.ReportAsync);
                     zatwierdzoneCount = zatwierdzone.Count;
                     AktualizujStatusyDekretacji(finalReport.Documents, rezultat, zatwierdzone, brakSchematu, bledneSchematy);
                     await decreeProgress.CompleteAsync($"Dekretacja zakończona. Zadekretowano {zatwierdzoneCount} dok.");
@@ -373,9 +377,13 @@ namespace NexoBridge.Services
                 d.AttachmentStatus == "notAttached" ||
                 d.DecreeStatus == "noSchema" ||
                 d.DecreeStatus == "schemaError" ||
+                d.DecreeStatus == "skippedMissingAccountingPeriod" ||
+                d.DecreeStatus == "skippedAmbiguousMatch" ||
                 d.DecreeStatus == "resultMissing" ||
                 d.DecreeStatus == "noResultEntries");
         }
     }
 }
+
+
 

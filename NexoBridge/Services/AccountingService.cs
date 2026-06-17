@@ -3,6 +3,7 @@ using InsERT.Moria.ImportKsiegowy;
 using InsERT.Moria.ModelDanych;
 using InsERT.Moria.Sfera;
 using Microsoft.Extensions.Logging;
+using NexoBridge.Models;
 using NexoBridge.Infrastructure;
 using System;
 using System.Collections.Generic;
@@ -27,7 +28,7 @@ namespace NexoBridge.Services
             List<Tuple<DokumentDoKsiegowania, SchematImportu>> Zatwierdzone,
             List<DokumentDoKsiegowania> Oczekujace,
             List<DokumentDoKsiegowania> BrakSchematu,
-            List<DokumentDoKsiegowania> BledneSchematy)> DekretujAsync(DateTime dataRozliczenia, Func<int, string, Task> raportujPostep)
+            List<DokumentDoKsiegowania> BledneSchematy)> DekretujAsync(DateTime dataRozliczenia, ImportPackageContext packageContext, Func<int, string, Task> raportujPostep)
         {
             await raportujPostep(70, "Analiza dokumentów oczekujących...");
             var menedzerDokumentow = _sfera.PodajObiektTypu<IDokumentyDoKsiegowania>();
@@ -35,7 +36,7 @@ namespace NexoBridge.Services
             var menedzerOkresow = _sfera.PodajObiektTypu<InsERT.Moria.Ksiegowosc.IOkresyObrachunkowe>();
 
             var wszystkieOczekujace = menedzerDokumentow.Dane.Wszystkie().Where(d => (int)d.StatusKsiegowy == 2).ToList();
-            var wybor = WaitingRoomDocumentFilter.SelectForPeriod(wszystkieOczekujace, dataRozliczenia);
+            var wybor = WaitingRoomDocumentFilter.SelectForPeriod(wszystkieOczekujace, dataRozliczenia, packageContext);
             LogujWyborPoczekalni(wybor, dataRozliczenia);
             var oczekujace = wybor.Included;
 
@@ -166,12 +167,14 @@ namespace NexoBridge.Services
         {
             if (wybor == null) return;
 
-            _logger.LogInformation("[POCZEKALNIA FILTR] Okres={Okres}; wszystkie={All}; doDekretacji={Included}; pozaOkresem={OutsidePeriod}; bezMiesiacaKsiegowego={MissingAccountingPeriod}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
+            _logger.LogInformation("[POCZEKALNIA FILTR] Okres={Okres}; wszystkie={All}; doDekretacji={Included}; pozaOkresem={OutsidePeriod}; bezMiesiacaKsiegowego={MissingAccountingPeriod}; odzyskaneZPaczki={RecoveredFromPackage}; niejednoznaczneZPaczki={AmbiguousFromPackage}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
                 dataRozliczenia.ToString("yyyy-MM"),
                 wybor.Total,
                 wybor.Included.Count,
                 wybor.OutsidePeriod.Count,
                 wybor.MissingAccountingPeriod.Count,
+                wybor.RecoveredFromCurrentPackage.Count,
+                wybor.AmbiguousCurrentPackageMatch.Count,
                 wybor.PartialAmortization.Count,
                 wybor.EmployeeBillsWithSubject.Count);
 
@@ -188,4 +191,5 @@ namespace NexoBridge.Services
         }
     }
 }
+
 

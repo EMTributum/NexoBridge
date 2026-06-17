@@ -58,7 +58,7 @@ namespace NexoBridge.Services
                     KsefStatus = "notProvided",
                     AttachmentStatus = "pending",
                     DecreeStatus = "pending",
-                    Warnings = new List<string> { "Wpis manifestu utworzony z załącznika, bo nie znaleziono odpowiadających metadanych faktury." }
+                    Warnings = new List<string> { "Wpis manifestu utworzony z zalacznika, bo nie znaleziono odpowiadajacych metadanych faktury." }
                 });
             }
 
@@ -77,19 +77,31 @@ namespace NexoBridge.Services
 
         public List<DokumentDoKsiegowania> PobierzDokumentyWPoczekalni(DateTime dataRozliczenia)
         {
-            var wszystkieOczekujace = PobierzWszystkieOczekujace();
-            var wybor = WaitingRoomDocumentFilter.SelectForPeriod(wszystkieOczekujace, dataRozliczenia);
+            return PobierzWyborDokumentowWPoczekalni(dataRozliczenia, null).Included;
+        }
 
-            _logger.LogInformation("[MANIFEST POCZEKALNIA FILTR] Okres={Okres}; wszystkie={All}; wOkresieDoObslugi={Included}; pozaOkresem={OutsidePeriod}; bezMiesiacaKsiegowego={MissingAccountingPeriod}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
+        public List<DokumentDoKsiegowania> PobierzDokumentyWPoczekalni(DateTime dataRozliczenia, ImportPackageContext packageContext)
+        {
+            return PobierzWyborDokumentowWPoczekalni(dataRozliczenia, packageContext).Included;
+        }
+
+        public WaitingRoomDocumentSelection PobierzWyborDokumentowWPoczekalni(DateTime dataRozliczenia, ImportPackageContext packageContext)
+        {
+            var wszystkieOczekujace = PobierzWszystkieOczekujace();
+            var wybor = WaitingRoomDocumentFilter.SelectForPeriod(wszystkieOczekujace, dataRozliczenia, packageContext);
+
+            _logger.LogInformation("[MANIFEST POCZEKALNIA FILTR] Okres={Okres}; wszystkie={All}; wOkresieDoObslugi={Included}; pozaOkresem={OutsidePeriod}; bezMiesiacaKsiegowego={MissingAccountingPeriod}; odzyskaneZPaczki={RecoveredFromPackage}; niejednoznaczneZPaczki={AmbiguousFromPackage}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
                 dataRozliczenia.ToString("yyyy-MM"),
                 wybor.Total,
                 wybor.Included.Count,
                 wybor.OutsidePeriod.Count,
                 wybor.MissingAccountingPeriod.Count,
+                wybor.RecoveredFromCurrentPackage.Count,
+                wybor.AmbiguousCurrentPackageMatch.Count,
                 wybor.PartialAmortization.Count,
                 wybor.EmployeeBillsWithSubject.Count);
 
-            return wybor.Included;
+            return wybor;
         }
 
         private List<DokumentDoKsiegowania> PobierzWszystkieOczekujace()
@@ -98,6 +110,27 @@ namespace NexoBridge.Services
             return menedzerDokumentow.Dane.Wszystkie()
                 .Where(d => (int)d.StatusKsiegowy == 2)
                 .ToList();
+        }
+
+        public void AktualizujPoPoczekalni(List<DocumentProcessingReport> manifest, WaitingRoomDocumentSelection wybor)
+        {
+            if (wybor == null)
+            {
+                AktualizujPoPoczekalni(manifest, new List<DokumentDoKsiegowania>());
+                return;
+            }
+
+            AktualizujPoPoczekalni(manifest, wybor.Included);
+            AktualizujPominietePrzezFiltr(
+                manifest,
+                wybor.MissingAccountingPeriod,
+                "skippedMissingAccountingPeriod",
+                "Dokument zostal znaleziony w Poczekalni, ale NexoBridge nie potrafil odczytac miesiaca ksiegowego. Nie przekazano go do dekretacji.");
+            AktualizujPominietePrzezFiltr(
+                manifest,
+                wybor.AmbiguousCurrentPackageMatch,
+                "skippedAmbiguousMatch",
+                "Dokument zostal znaleziony w Poczekalni, ale dopasowanie do aktualnej paczki bylo niejednoznaczne. Nie przekazano go do dekretacji.");
         }
 
         public void AktualizujPoPoczekalni(List<DocumentProcessingReport> manifest, List<DokumentDoKsiegowania> oczekujace)
@@ -131,7 +164,8 @@ namespace NexoBridge.Services
                 else if (match.Status == "ambiguous")
                 {
                     item.WaitingRoomStatus = "ambiguous";
-                    DodajWarning(item, $"Nie można jednoznacznie dopasować dokumentu w Poczekalni. {match.Reason} Kandydaci: {ListaDoLogu(match.Candidates)}");
+                    item.DecreeStatus = "skippedAmbiguousMatch";
+                    DodajWarning(item, $"Nie mozna jednoznacznie dopasowac dokumentu w Poczekalni. {match.Reason} Kandydaci: {ListaDoLogu(match.Candidates)}");
                 }
                 else
                 {
@@ -164,12 +198,47 @@ namespace NexoBridge.Services
                 });
             }
 
-            _logger.LogInformation("[MANIFEST POCZEKALNIA] wpisy={Count}; znalezione={Found}; nieznalezione={NotFound}; niejednoznaczne={Ambiguous}; dodatkowe={Extra}",
+            _logger.LogInformation("[MANIFEST POCZEKALNIA] wpisy={Count}; znalezione={Found}; nieznalezione={NotFound}; niejednoznaczne={Ambiguous}; pominieteBrakMiesiaca={SkippedMissingPeriod}; pominieteNiejednoznaczne={SkippedAmbiguous}; dodatkowe={Extra}",
                 manifest.Count,
                 manifest.Count(d => d.WaitingRoomStatus == "found" && d.Source == "frontendPackage"),
                 manifest.Count(d => d.WaitingRoomStatus == "notFound"),
                 manifest.Count(d => d.WaitingRoomStatus == "ambiguous"),
+                manifest.Count(d => d.DecreeStatus == "skippedMissingAccountingPeriod"),
+                manifest.Count(d => d.DecreeStatus == "skippedAmbiguousMatch"),
                 manifest.Count(d => d.Source == "waitingRoomExtra"));
+        }
+
+        private void AktualizujPominietePrzezFiltr(List<DocumentProcessingReport> manifest, List<DokumentDoKsiegowania> documents, string decreeStatus, string warning)
+        {
+            if (manifest == null || documents == null || documents.Count == 0) return;
+
+            foreach (var item in manifest.Where(d => d.Source == "frontendPackage"))
+            {
+                var meta = new InvoiceMetadata
+                {
+                    InvoiceNumber = item.InvoiceNumber,
+                    VendorNip = item.VendorNip,
+                    KsefNumber = item.KsefNumber,
+                    PdfFileName = item.PdfFileName
+                };
+
+                var match = InvoiceDocumentMatcher.Match(documents, meta);
+                if (match.Document != null)
+                {
+                    WypelnijDanePoczekalni(item, match.Document);
+                    item.WaitingRoomStatus = "found";
+                    item.MatchStatus = match.Status;
+                    item.DecreeStatus = decreeStatus;
+                    DodajWarning(item, warning);
+                }
+                else if (match.Status == "ambiguous")
+                {
+                    item.WaitingRoomStatus = "ambiguous";
+                    item.MatchStatus = match.Status;
+                    item.DecreeStatus = "skippedAmbiguousMatch";
+                    DodajWarning(item, $"{warning} Kandydaci: {ListaDoLogu(match.Candidates)}");
+                }
+            }
         }
 
         public static DocumentProcessingReport ZnajdzRaportDlaDokumentu(List<DocumentProcessingReport> manifest, DokumentDoKsiegowania dokument)
@@ -218,7 +287,7 @@ namespace NexoBridge.Services
         {
             if (item == null || string.IsNullOrWhiteSpace(message)) return;
             if (item.Warnings == null) item.Warnings = new List<string>();
-            item.Warnings.Add(message);
+            if (!item.Warnings.Contains(message)) item.Warnings.Add(message);
         }
 
         private string Oczysc(string value)
@@ -240,4 +309,3 @@ namespace NexoBridge.Services
         }
     }
 }
-

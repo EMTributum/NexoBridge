@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 
 namespace NexoBridge.Services
@@ -24,34 +25,49 @@ namespace NexoBridge.Services
             _logger = logger;
         }
 
-        public async Task ParseAndSyncAsync(ImportJob job, Func<int, string, Task> raportujPostep)
+        public async Task<EppImportResult> ParseAndSyncAsync(ImportJob job, Func<int, string, Task> raportujPostep)
         {
-            await raportujPostep(20, "Deserializacja plików EPP...");
+            await raportujPostep(20, "Deserializacja plikow EPP...");
             var serializator = _sfera.PodajObiektTypu<ISerializatorEPP>();
             var wszystkieObiekty = new List<object>();
+            var result = new EppImportResult();
 
             foreach (var plik in job.Files)
             {
                 string tempFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".epp");
-                File.WriteAllBytes(tempFile, plik.Content);
-                var obiektyZPliku = serializator.DeserializujObiektyZPliku(tempFile);
-                var obiektyLista = ((IEnumerable<object>)obiektyZPliku).ToList();
-                int licznikLokalny = obiektyLista.Count;
-                int dopisaneKsef = UzupelnijNumeryKsefWObiektachEpp(job, obiektyLista);
+                try
+                {
+                    File.WriteAllBytes(tempFile, plik.Content);
+                    var obiektyZPliku = serializator.DeserializujObiektyZPliku(tempFile);
+                    var obiektyLista = ((IEnumerable<object>)obiektyZPliku).ToList();
+                    int licznikLokalny = obiektyLista.Count;
+                    int dopisaneKsef = UzupelnijNumeryKsefWObiektachEpp(job, obiektyLista);
+                    var naglowki = PobierzNaglowkiLogistyki(obiektyLista).ToList();
 
-                wszystkieObiekty.AddRange(obiektyLista);
-                File.Delete(tempFile);
+                    wszystkieObiekty.AddRange(obiektyLista);
+                    result.Headers.AddRange(naglowki.Select(MapujNaglowek));
+                    result.KsefAssignedCount += dopisaneKsef;
 
-                _logger.LogInformation("Rozpakowano plik EPP: {FileName} (Znaleziono {Count} obiektów, dopisano KSeF: {KsefCount})", plik.FileName, licznikLokalny, dopisaneKsef);
+                    _logger.LogInformation("Rozpakowano plik EPP: {FileName} (Znaleziono {Count} obiektow, naglowki={Headers}, dopisano KSeF: {KsefCount})",
+                        plik.FileName,
+                        licznikLokalny,
+                        naglowki.Count,
+                        dopisaneKsef);
+                }
+                finally
+                {
+                    if (File.Exists(tempFile)) File.Delete(tempFile);
+                }
             }
 
+            result.ObjectsCount = wszystkieObiekty.Count;
             if (wszystkieObiekty.Count == 0)
             {
-                _logger.LogError("Przerwano zadanie: Wszystkie pliki EPP były puste.");
-                throw new Exception("Wszystkie pliki EPP były puste!");
+                _logger.LogError("Przerwano zadanie: Wszystkie pliki EPP byly puste.");
+                throw new Exception("Wszystkie pliki EPP byly puste!");
             }
 
-            await raportujPostep(40, "Etap 1: Synchronizacja słowników Sfery...");
+            await raportujPostep(40, "Etap 1: Synchronizacja slownikow Sfery...");
             var menedzerInstancji = _sfera.PodajObiektTypu<IInstancjeBazDanych>();
             var obecnaInstancja = menedzerInstancji.Dane.Wszystkie().FirstOrDefault();
             var menedzerOdbioru = _sfera.PodajObiektTypu<IOdbiorDanychKlientaBiuraRachunkowego>();
@@ -61,6 +77,8 @@ namespace NexoBridge.Services
 
             await raportujPostep(60, "Etap 2: Wrzucanie faktur do Poczekalni...");
             operacjaDokumentow.Zapisz();
+
+            return result;
         }
 
         private int UzupelnijNumeryKsefWObiektachEpp(ImportJob job, List<object> obiekty)
@@ -79,23 +97,32 @@ namespace NexoBridge.Services
 
             foreach (var meta in metadaneZKsef)
             {
-                var kandydaci = naglowki
-                    .Where(n => PasujeNaglowek(n, meta))
+                var dopasowania = naglowki
+                    .Select(n => new { Naglowek = n, Score = ObliczDopasowanieNaglowka(n, meta) })
+                    .Where(x => x.Score > 0)
+                    .OrderByDescending(x => x.Score)
                     .ToList();
 
-                if (kandydaci.Count == 0)
+                if (dopasowania.Count == 0)
                 {
-                    _logger.LogWarning("[KSEF EPP POMINIĘTY] Nie znaleziono nagłówka EPP dla faktury z KSeF: {Numer} (NIP: {Nip}). KSeF zostanie zaraportowany jako niepotwierdzony, ale import będzie kontynuowany.", meta.InvoiceNumber, meta.VendorNip);
+                    _logger.LogWarning("[KSEF EPP POMINIETY] Nie znaleziono naglowka EPP dla faktury z KSeF: {Numer} (NIP: {Nip}). KSeF zostanie zaraportowany jako niepotwierdzony, ale import bedzie kontynuowany.", meta.InvoiceNumber, meta.VendorNip);
                     continue;
                 }
 
-                if (kandydaci.Count > 1)
+                int bestScore = dopasowania[0].Score;
+                var najlepsi = dopasowania.Where(x => x.Score == bestScore).ToList();
+                if (najlepsi.Count > 1)
                 {
-                    _logger.LogWarning("[KSEF EPP NIEJEDNOZNACZNY] Nie mogę bezpiecznie dopisać KSeF do EPP dla faktury {Numer} (NIP: {Nip}) - znaleziono {Count} nagłówków. Import będzie kontynuowany bez tego dopisania.", meta.InvoiceNumber, meta.VendorNip, kandydaci.Count);
+                    _logger.LogWarning("[KSEF EPP NIEJEDNOZNACZNY] Nie moge bezpiecznie dopisac KSeF do EPP dla faktury {Numer} (NIP: {Nip}) - znaleziono {Count} najlepszych naglowkow dla score={Score}. Kandydaci={Kandydaci}. Import bedzie kontynuowany bez tego dopisania.",
+                        meta.InvoiceNumber,
+                        meta.VendorNip,
+                        najlepsi.Count,
+                        bestScore,
+                        ListaDoLogu(najlepsi.Select(x => OpiszNaglowek(x.Naglowek))));
                     continue;
                 }
 
-                var naglowek = kandydaci[0];
+                var naglowek = najlepsi[0].Naglowek;
                 string ksefNumber = OczyscNumerKsef(meta.KsefNumber);
                 var danePowiazania = new DanePowiazaniaZKSeF
                 {
@@ -109,11 +136,12 @@ namespace NexoBridge.Services
                 DodajDanePowiazaniaDoKontenera(obiekty, danePowiazania);
                 dopisane++;
 
-                _logger.LogInformation("[KSEF EPP] Dopisano KSeF {Ksef} do nagłówka EPP: NumerDostawcy={NumerDostawcy}; PelnyNumer={PelnyNumer}; NIP={Nip}.",
+                _logger.LogInformation("[KSEF EPP] Dopisano KSeF {Ksef} do naglowka EPP: NumerDostawcy={NumerDostawcy}; PelnyNumer={PelnyNumer}; NIP={Nip}; score={Score}.",
                     ksefNumber,
                     naglowek.NumerDokumentuDostawcy,
                     naglowek.PelnyNumer,
-                    naglowek.NIP);
+                    naglowek.NIP,
+                    bestScore);
             }
 
             return dopisane;
@@ -162,15 +190,16 @@ namespace NexoBridge.Services
             }
         }
 
-        private bool PasujeNaglowek(LogistykaNaglowek naglowek, InvoiceMetadata meta)
+        private int ObliczDopasowanieNaglowka(LogistykaNaglowek naglowek, InvoiceMetadata meta)
         {
-            string nrFront = Normalizuj(meta.InvoiceNumber);
-            string nipFront = Normalizuj(meta.VendorNip).Replace("pl", "");
-            string nipEpp = Normalizuj(naglowek.NIP).Replace("pl", "");
+            string nrFront = InvoiceDocumentMatcher.Normalize(meta.InvoiceNumber);
+            string nipFront = InvoiceDocumentMatcher.NormalizeNip(meta.VendorNip);
+            string nipEpp = InvoiceDocumentMatcher.NormalizeNip(naglowek.NIP);
 
-            if (string.IsNullOrEmpty(nrFront) || string.IsNullOrEmpty(nipFront) || string.IsNullOrEmpty(nipEpp))
+            if (string.IsNullOrEmpty(nrFront) || string.IsNullOrEmpty(nipFront) || string.IsNullOrEmpty(nipEpp) ||
+                !nipEpp.EndsWith(nipFront, StringComparison.OrdinalIgnoreCase))
             {
-                return false;
+                return 0;
             }
 
             var numeryEpp = new[]
@@ -179,15 +208,82 @@ namespace NexoBridge.Services
                 naglowek.PelnyNumer,
                 naglowek.Numer.ToString()
             }
-            .Select(Normalizuj)
+            .Select(InvoiceDocumentMatcher.Normalize)
             .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-            var wariantyNumeru = InvoiceDocumentMatcher.GenerateNumberVariants(meta.InvoiceNumber).ToList();
-            return nipEpp.EndsWith(nipFront) &&
-                   numeryEpp.Any(n => n == nrFront ||
-                                       n.EndsWith(nrFront) ||
-                                       wariantyNumeru.Any(w => n == w || n.EndsWith(w) || (w.Length >= 8 && n.Contains(w))));
+            if (numeryEpp.Any(n => n == nrFront)) return 100;
+            if (numeryEpp.Any(n => n.EndsWith(nrFront, StringComparison.OrdinalIgnoreCase))) return 90;
+            if (numeryEpp.Any(n => InvoiceDocumentMatcher.IsSafeNumberMatch(nrFront, n))) return 80;
+
+            foreach (string wariant in InvoiceDocumentMatcher.GenerateNumberVariants(meta.InvoiceNumber))
+            {
+                if (numeryEpp.Any(n => n == wariant)) return 70;
+                if (numeryEpp.Any(n => n.EndsWith(wariant, StringComparison.OrdinalIgnoreCase))) return 60;
+                if (numeryEpp.Any(n => InvoiceDocumentMatcher.IsSafeNumberMatch(wariant, n))) return 50;
+            }
+
+            return 0;
+        }
+
+        private EppImportedHeader MapujNaglowek(LogistykaNaglowek naglowek)
+        {
+            object danePowiazania = PobierzWlasciwosc(naglowek, "DanePowiazaniaZKSeF");
+
+            return new EppImportedHeader
+            {
+                InvoiceNumber = naglowek.NumerDokumentuDostawcy,
+                FullNumber = naglowek.PelnyNumer,
+                VendorNip = naglowek.NIP,
+                TechnicalNumber = PobierzWlasciwosc(naglowek, "Numer")?.ToString(),
+                ReceivedDate = PobierzDate(naglowek, "DataOtrzymania")
+                    ?? PobierzDate(naglowek, "DataPrzyjecia")
+                    ?? PobierzDate(naglowek, "DataWplywu"),
+                IssueDate = PobierzDate(naglowek, "DataWystawienia"),
+                KsefAssigned = danePowiazania != null,
+                KsefNumber = PobierzWlasciwosc(danePowiazania, "NumerKSeF")?.ToString()
+            };
+        }
+
+        private DateTime? PobierzDate(object source, string propertyName)
+        {
+            object value = PobierzWlasciwosc(source, propertyName);
+            if (value == null) return null;
+            if (value is DateTime dateTime) return dateTime;
+            if (value is DateTimeOffset dateTimeOffset) return dateTimeOffset.DateTime;
+            if (DateTime.TryParse(value.ToString(), out DateTime parsed)) return parsed;
+            return null;
+        }
+
+        private object PobierzWlasciwosc(object source, string propertyName)
+        {
+            if (source == null || string.IsNullOrWhiteSpace(propertyName)) return null;
+            try
+            {
+                var prop = source.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public);
+                if (prop != null) return prop.GetValue(source);
+
+                var field = source.GetType().GetField(propertyName, BindingFlags.Instance | BindingFlags.Public);
+                return field?.GetValue(source);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private string OpiszNaglowek(LogistykaNaglowek naglowek)
+        {
+            if (naglowek == null) return "brak";
+            return $"NumerDostawcy={naglowek.NumerDokumentuDostawcy}, PelnyNumer={naglowek.PelnyNumer}, NIP={naglowek.NIP}, DataOtrzymania={PobierzDate(naglowek, "DataOtrzymania")?.ToString("yyyy-MM-dd") ?? "brak"}";
+        }
+
+        private string ListaDoLogu(IEnumerable<string> items)
+        {
+            if (items == null) return "brak";
+            var list = items.Where(x => !string.IsNullOrWhiteSpace(x)).Take(50).ToList();
+            return list.Count == 0 ? "brak" : string.Join(" || ", list);
         }
 
         private string OczyscNumerKsef(string value)
@@ -205,12 +301,6 @@ namespace NexoBridge.Services
 
             return cleaned;
         }
-
-        private string Normalizuj(string input)
-        {
-            return input == null ? "" : new string(input.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
-        }
     }
 }
-
 

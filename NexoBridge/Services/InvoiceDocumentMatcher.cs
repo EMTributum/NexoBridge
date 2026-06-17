@@ -38,39 +38,28 @@ namespace NexoBridge.Services
                 return InvoiceMatchResult.NotFound($"Brak dokumentu z NIP {meta.VendorNip}.");
             }
 
-            var variants = GenerateNumberVariants(meta.InvoiceNumber).ToList();
-            var exact = Resolve(nipCandidates, d => Normalize(d.NumerDokumentu) == numberFront, "matchedExact", numberFront);
+            var exact = Resolve(nipCandidates, d => GetNormalizedDocumentNumbers(d).Any(n => n == numberFront), "matchedExact", numberFront);
             if (exact.IsTerminal) return exact;
 
-            var suffixFull = Resolve(nipCandidates, d => Normalize(d.NumerDokumentu).EndsWith(numberFront, StringComparison.OrdinalIgnoreCase), "matchedByFullSuffix", numberFront);
+            var suffixFull = Resolve(nipCandidates, d => GetNormalizedDocumentNumbers(d).Any(n => n.EndsWith(numberFront, StringComparison.OrdinalIgnoreCase)), "matchedByFullSuffix", numberFront);
             if (suffixFull.IsTerminal) return suffixFull;
 
-            foreach (string variant in variants)
+            var truncatedFull = Resolve(nipCandidates, d => GetNormalizedDocumentNumbers(d).Any(n => IsSafeNumberMatch(numberFront, n)), "matchedByControlledTruncation", numberFront);
+            if (truncatedFull.IsTerminal) return truncatedFull;
+
+            foreach (string variant in GenerateNumberVariants(meta.InvoiceNumber))
             {
-                var byVariant = Resolve(nipCandidates, d => Normalize(d.NumerDokumentu).EndsWith(variant, StringComparison.OrdinalIgnoreCase), "matchedByVariant", variant);
-                if (byVariant.IsTerminal) return byVariant;
+                var byVariantExact = Resolve(nipCandidates, d => GetNormalizedDocumentNumbers(d).Any(n => n == variant), "matchedByVariant", variant);
+                if (byVariantExact.IsTerminal) return byVariantExact;
+
+                var byVariantSuffix = Resolve(nipCandidates, d => GetNormalizedDocumentNumbers(d).Any(n => n.EndsWith(variant, StringComparison.OrdinalIgnoreCase)), "matchedByVariantSuffix", variant);
+                if (byVariantSuffix.IsTerminal) return byVariantSuffix;
+
+                var byVariantTruncation = Resolve(nipCandidates, d => GetNormalizedDocumentNumbers(d).Any(n => IsSafeNumberMatch(variant, n)), "matchedByVariantControlledTruncation", variant);
+                if (byVariantTruncation.IsTerminal) return byVariantTruncation;
             }
 
-            foreach (string variant in variants.Where(v => v.Length >= 8))
-            {
-                var containsVariant = Resolve(nipCandidates, d => Normalize(d.NumerDokumentu).Contains(variant, StringComparison.OrdinalIgnoreCase), "matchedByContainedVariant", variant);
-                if (containsVariant.IsTerminal) return containsVariant;
-            }
-
-            InvoiceMatchResult lastAmbiguous = null;
-            foreach (string fragment in GenerateProgressiveFragments(variants))
-            {
-                var byFragment = Resolve(nipCandidates, d => Normalize(d.NumerDokumentu).Contains(fragment, StringComparison.OrdinalIgnoreCase), "matchedByProgressiveFragment", fragment);
-                if (byFragment.Status == "ambiguous")
-                {
-                    lastAmbiguous = byFragment;
-                    continue;
-                }
-
-                if (byFragment.IsTerminal) return byFragment;
-            }
-
-            return lastAmbiguous ?? InvoiceMatchResult.NotFound($"Nie znaleziono jednoznacznego dokumentu dla numeru {meta.InvoiceNumber} i NIP {meta.VendorNip}.", nipCandidates);
+            return InvoiceMatchResult.NotFound($"Nie znaleziono jednoznacznego dokumentu dla numeru {meta.InvoiceNumber} i NIP {meta.VendorNip}.", nipCandidates);
         }
 
         public static InvoiceMetadataMatchResult MatchMetadataForDocument(IEnumerable<InvoiceMetadata> metadata, DokumentDoKsiegowania document)
@@ -95,14 +84,14 @@ namespace NexoBridge.Services
                 return new InvoiceMetadataMatchResult
                 {
                     Status = "ambiguous",
-                    Reason = "Wiele wpisów metadanych pasuje do tego samego dokumentu."
+                    Reason = "Wiele wpisow metadanych pasuje do tego samego dokumentu."
                 };
             }
 
             return new InvoiceMetadataMatchResult
             {
                 Status = "notFound",
-                Reason = "Brak metadanych pasujących do dokumentu."
+                Reason = "Brak metadanych pasujacych do dokumentu."
             };
         }
 
@@ -143,6 +132,23 @@ namespace NexoBridge.Services
                 .ThenBy(v => v);
         }
 
+        public static bool IsSafeNumberMatch(string expectedNormalized, string actualNormalized)
+        {
+            if (string.IsNullOrWhiteSpace(expectedNormalized) || string.IsNullOrWhiteSpace(actualNormalized)) return false;
+            if (expectedNormalized.Length < 8 || actualNormalized.Length < 8) return false;
+
+            if (string.Equals(expectedNormalized, actualNormalized, StringComparison.OrdinalIgnoreCase)) return true;
+            if (actualNormalized.EndsWith(expectedNormalized, StringComparison.OrdinalIgnoreCase)) return true;
+
+            bool expectedWasTrimmedAtEnd = expectedNormalized.StartsWith(actualNormalized, StringComparison.OrdinalIgnoreCase) &&
+                                           expectedNormalized.Length - actualNormalized.Length <= 4;
+            if (expectedWasTrimmedAtEnd) return true;
+
+            bool actualWasTrimmedAtEnd = actualNormalized.StartsWith(expectedNormalized, StringComparison.OrdinalIgnoreCase) &&
+                                         actualNormalized.Length - expectedNormalized.Length <= 4;
+            return actualWasTrimmedAtEnd;
+        }
+
         public static string Normalize(string input)
         {
             return input == null ? string.Empty : new string(input.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
@@ -170,26 +176,26 @@ namespace NexoBridge.Services
 
             if (matches.Count > 1)
             {
-                return InvoiceMatchResult.Ambiguous($"Znaleziono {matches.Count} kandydatów dla wariantu {variant}.", matches, variant);
+                return InvoiceMatchResult.Ambiguous($"Znaleziono {matches.Count} kandydatow dla wariantu {variant}.", matches, variant);
             }
 
             return InvoiceMatchResult.Empty();
         }
 
-        private static IEnumerable<string> GenerateProgressiveFragments(IEnumerable<string> variants)
+        private static IEnumerable<string> GetNormalizedDocumentNumbers(DokumentDoKsiegowania document)
         {
-            var emitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string variant in variants.Where(v => v.Length >= 6).OrderByDescending(v => v.Length))
+            if (document == null) yield break;
+
+            string raw = document.NumerDokumentu ?? string.Empty;
+            string normalizedRaw = Normalize(raw);
+            if (!string.IsNullOrWhiteSpace(normalizedRaw)) yield return normalizedRaw;
+
+            string withoutSystemPrefix = Regex.Replace(raw, @"^(FZ|FS|FZK|FSK|PA)\s+\d+\s+", string.Empty, RegexOptions.IgnoreCase);
+            string normalizedWithoutPrefix = Normalize(withoutSystemPrefix);
+            if (!string.IsNullOrWhiteSpace(normalizedWithoutPrefix) &&
+                !string.Equals(normalizedWithoutPrefix, normalizedRaw, StringComparison.OrdinalIgnoreCase))
             {
-                for (int length = 6; length <= variant.Length; length++)
-                {
-                    int start = Math.Max(0, (variant.Length - length) / 2);
-                    string fragment = variant.Substring(start, length);
-                    if (emitted.Add(fragment))
-                    {
-                        yield return fragment;
-                    }
-                }
+                yield return normalizedWithoutPrefix;
             }
         }
 

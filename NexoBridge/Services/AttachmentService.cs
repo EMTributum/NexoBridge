@@ -164,6 +164,7 @@ namespace NexoBridge.Services
                         zalacznikBO.Dane.Opis = "Oryginał ze Scanye";
 
                         bool podpieto = false;
+                        var encjeDoPowiazania = new List<object>();
                         foreach (var wynik in wynikowe)
                         {
                             object wynikObj = (object)wynik;
@@ -173,6 +174,7 @@ namespace NexoBridge.Services
                             if (encja != null)
                             {
                                 zalacznikBO.DodajPowiazanie((dynamic)encja);
+                                encjeDoPowiazania.Add(encja);
                                 podpieto = true;
                                 _logger.LogInformation("[ZAŁĄCZNIK POWIĄZANIE] Plik={Plik}; Dokument={Numer}; wynikTyp={WynikTyp}; dokumentId={DokumentId}; encjaTyp={EncjaTyp}",
                                     zalacznik.FileName,
@@ -222,18 +224,45 @@ namespace NexoBridge.Services
                             else
                             {
                                 string bledy = WyciagnijBledySfery(zalacznikBO);
+                                int zapisaneFallback = ZapiszZalacznikiOsobno(bibliotekaZalacznikow, tempPath, encjeDoPowiazania, out string fallbackBledy);
                                 string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
-                                niepodpieteZalaczniki.Add(wpis + $" | Zapisz=false | {bledy}");
-                                if (raport != null)
+
+                                if (zapisaneFallback > 0)
                                 {
-                                    raport.AttachmentStatus = "notAttached";
-                                    ImportManifestService.DodajWarning(raport, $"Nie udało się zapisać załącznika w Sferze: {bledy}");
+                                    podpieteZalaczniki.Add(wpis + $" | fallback {zapisaneFallback}/{encjeDoPowiazania.Count}");
+                                    if (raport != null)
+                                    {
+                                        raport.AttachmentStatus = zapisaneFallback == encjeDoPowiazania.Count ? "attached" : "attachedPartial";
+                                        if (zapisaneFallback != encjeDoPowiazania.Count)
+                                        {
+                                            ImportManifestService.DodajWarning(raport, $"Załącznik zapisano tylko częściowo fallbackiem: {zapisaneFallback}/{encjeDoPowiazania.Count}. Błędy: {fallbackBledy}");
+                                        }
+                                    }
+
+                                    _logger.LogWarning("[ZAŁĄCZNIK SUKCES FALLBACK] Plik={Plik}; Dokument={Numer}; NIP={Nip}; zapisane={Saved}/{Total}; pierwotnyBlad={Bledy}; fallbackBledy={FallbackBledy}",
+                                        zalacznik.FileName,
+                                        nrSystemowy,
+                                        nipSystemowy,
+                                        zapisaneFallback,
+                                        encjeDoPowiazania.Count,
+                                        bledy,
+                                        fallbackBledy);
                                 }
-                                _logger.LogWarning("[ZAŁĄCZNIK ZAPIS NIEUDANY] Plik={Plik}; Dokument={Numer}; NIP={Nip}; Błędy={Bledy}",
-                                    zalacznik.FileName,
-                                    nrSystemowy,
-                                    nipSystemowy,
-                                    bledy);
+                                else
+                                {
+                                    niepodpieteZalaczniki.Add(wpis + $" | Zapisz=false | {bledy} | fallback=false | {fallbackBledy}");
+                                    if (raport != null)
+                                    {
+                                        raport.AttachmentStatus = "notAttached";
+                                        ImportManifestService.DodajWarning(raport, $"Nie udało się zapisać załącznika w Sferze: {bledy}. Fallback: {fallbackBledy}");
+                                    }
+                                    _logger.LogWarning("[ZAŁĄCZNIK ZAPIS NIEUDANY] Plik={Plik}; Dokument={Numer}; NIP={Nip}; Błędy={Bledy}; fallbackBledy={FallbackBledy}",
+                                        zalacznik.FileName,
+                                        nrSystemowy,
+                                        nipSystemowy,
+                                        bledy,
+                                        fallbackBledy);
+                                }
                             }
                         }
                     }
@@ -268,6 +297,40 @@ namespace NexoBridge.Services
                 ListaDoLogu(niepodpieteZalaczniki));
         }
 
+        private int ZapiszZalacznikiOsobno(dynamic bibliotekaZalacznikow, string tempPath, IEnumerable<object> encje, out string bledy)
+        {
+            var errors = new List<string>();
+            int saved = 0;
+
+            foreach (var encja in encje ?? Enumerable.Empty<object>())
+            {
+                try
+                {
+                    using (var pojedynczyBO = bibliotekaZalacznikow.Utworz())
+                    {
+                        pojedynczyBO.Wczytaj(tempPath);
+                        pojedynczyBO.Dane.Opis = "Oryginał ze Scanye";
+                        pojedynczyBO.DodajPowiazanie((dynamic)encja);
+
+                        if (pojedynczyBO.Zapisz())
+                        {
+                            saved++;
+                        }
+                        else
+                        {
+                            errors.Add($"{encja.GetType().Name}: {WyciagnijBledySfery(pojedynczyBO)}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"{encja.GetType().Name}: {ex.GetBaseException().Message}");
+                }
+            }
+
+            bledy = errors.Count == 0 ? "brak" : string.Join(" | ", errors);
+            return saved;
+        }
         private AttachmentPayload ZnajdzZalacznik(ImportJob job, DokumentDoKsiegowania dok, DocumentProcessingReport raport, out string matchStatus)
         {
             matchStatus = "none";
@@ -579,3 +642,5 @@ namespace NexoBridge.Services
         }
     }
 }
+
+
