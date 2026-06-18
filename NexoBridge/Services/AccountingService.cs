@@ -2,6 +2,7 @@ using InsERT.Moria.DokumentyDoKsiegowania;
 using InsERT.Moria.ImportKsiegowy;
 using InsERT.Moria.ModelDanych;
 using InsERT.Moria.Sfera;
+using InsERT.Moria;
 using Microsoft.Extensions.Logging;
 using NexoBridge.Models;
 using NexoBridge.Infrastructure;
@@ -36,8 +37,8 @@ namespace NexoBridge.Services
             var menedzerOkresow = _sfera.PodajObiektTypu<InsERT.Moria.Ksiegowosc.IOkresyObrachunkowe>();
 
             var wszystkieOczekujace = menedzerDokumentow.Dane.Wszystkie().Where(d => (int)d.StatusKsiegowy == 2).ToList();
-            var wybor = WaitingRoomDocumentFilter.SelectForPeriod(wszystkieOczekujace, dataRozliczenia, packageContext);
-            LogujWyborPoczekalni(wybor, dataRozliczenia);
+            var wybor = WaitingRoomDocumentFilter.SelectForNewMarker(wszystkieOczekujace, PobierzKontekstZnacznikaNowosci());
+            LogujWyborPoczekalni(wybor);
             var oczekujace = wybor.Included;
 
             if (oczekujace.Count == 0)
@@ -163,23 +164,29 @@ namespace NexoBridge.Services
             return opisy.Count == 0 ? "brak" : string.Join(" || ", opisy);
         }
 
-        private void LogujWyborPoczekalni(WaitingRoomDocumentSelection wybor, DateTime dataRozliczenia)
+        private NewDocumentMarkerContext PobierzKontekstZnacznikaNowosci()
+        {
+            var parametryImportu = _sfera.PodajObiektTypu<IParametryImportuKsiegowego>();
+            var parametrImportu = parametryImportu?.DaneDomyslne?.Domyslny;
+            var dataSystemowa = _sfera.PodajObiektTypu<IDataSystemowa>();
+
+            return new NewDocumentMarkerContext(parametrImportu, dataSystemowa);
+        }
+
+        private void LogujWyborPoczekalni(WaitingRoomDocumentSelection wybor)
         {
             if (wybor == null) return;
 
-            _logger.LogInformation("[POCZEKALNIA FILTR] Okres={Okres}; wszystkie={All}; doDekretacji={Included}; pozaOkresem={OutsidePeriod}; bezMiesiacaKsiegowego={MissingAccountingPeriod}; odzyskaneZPaczki={RecoveredFromPackage}; niejednoznaczneZPaczki={AmbiguousFromPackage}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
-                dataRozliczenia.ToString("yyyy-MM"),
+            _logger.LogInformation("[POCZEKALNIA FILTR N] wszystkie={All}; doDekretacji={Included}; noweN={IncludedByNewMarker}; wyjatkiKadrowe={IncludedPayrollException}; bezN={SkippedNotNew}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
                 wybor.Total,
                 wybor.Included.Count,
-                wybor.OutsidePeriod.Count,
-                wybor.MissingAccountingPeriod.Count,
-                wybor.RecoveredFromCurrentPackage.Count,
-                wybor.AmbiguousCurrentPackageMatch.Count,
+                wybor.IncludedByNewMarker.Count,
+                wybor.IncludedPayrollException.Count,
+                wybor.SkippedNotNew.Count,
                 wybor.PartialAmortization.Count,
                 wybor.EmployeeBillsWithSubject.Count);
 
-            LogujPominiete("[POCZEKALNIA POZA OKRESEM]", wybor.OutsidePeriod);
-            LogujPominiete("[POCZEKALNIA BEZ MIESIĄCA KSIĘGOWEGO]", wybor.MissingAccountingPeriod);
+            LogujPominiete("[POCZEKALNIA BEZ N POMINIĘTA]", wybor.SkippedNotNew);
             LogujPominiete("[AMORTYZACJA CZĄSTKOWA POMINIĘTA]", wybor.PartialAmortization);
             LogujPominiete("[RACHUNEK PRACOWNICZY Z PODMIOTEM POMINIĘTY]", wybor.EmployeeBillsWithSubject);
         }

@@ -377,7 +377,9 @@ namespace NexoBridge.Services
                 d.AttachmentStatus == "notAttached" ||
                 d.DecreeStatus == "noSchema" ||
                 d.DecreeStatus == "schemaError" ||
-                d.DecreeStatus == "skippedMissingAccountingPeriod" ||
+                d.DecreeStatus == "skippedNotNew" ||
+                d.DecreeStatus == "skippedEmployeeBillWithSubject" ||
+                d.DecreeStatus == "skippedPartialAmortization" ||
                 d.DecreeStatus == "skippedAmbiguousMatch" ||
                 d.DecreeStatus == "resultMissing" ||
                 d.DecreeStatus == "noResultEntries");

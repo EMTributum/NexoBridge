@@ -1,6 +1,8 @@
 using InsERT.Moria.DokumentyDoKsiegowania;
+using InsERT.Moria.ImportKsiegowy;
 using InsERT.Moria.ModelDanych;
 using InsERT.Moria.Sfera;
+using InsERT.Moria;
 using Microsoft.Extensions.Logging;
 using NexoBridge.Models;
 using System;
@@ -88,16 +90,14 @@ namespace NexoBridge.Services
         public WaitingRoomDocumentSelection PobierzWyborDokumentowWPoczekalni(DateTime dataRozliczenia, ImportPackageContext packageContext)
         {
             var wszystkieOczekujace = PobierzWszystkieOczekujace();
-            var wybor = WaitingRoomDocumentFilter.SelectForPeriod(wszystkieOczekujace, dataRozliczenia, packageContext);
+            var wybor = WaitingRoomDocumentFilter.SelectForNewMarker(wszystkieOczekujace, PobierzKontekstZnacznikaNowosci());
 
-            _logger.LogInformation("[MANIFEST POCZEKALNIA FILTR] Okres={Okres}; wszystkie={All}; wOkresieDoObslugi={Included}; pozaOkresem={OutsidePeriod}; bezMiesiacaKsiegowego={MissingAccountingPeriod}; odzyskaneZPaczki={RecoveredFromPackage}; niejednoznaczneZPaczki={AmbiguousFromPackage}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
-                dataRozliczenia.ToString("yyyy-MM"),
+            _logger.LogInformation("[MANIFEST POCZEKALNIA FILTR N] wszystkie={All}; doObslugi={Included}; noweN={IncludedByNewMarker}; wyjatkiKadrowe={IncludedPayrollException}; bezN={SkippedNotNew}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
                 wybor.Total,
                 wybor.Included.Count,
-                wybor.OutsidePeriod.Count,
-                wybor.MissingAccountingPeriod.Count,
-                wybor.RecoveredFromCurrentPackage.Count,
-                wybor.AmbiguousCurrentPackageMatch.Count,
+                wybor.IncludedByNewMarker.Count,
+                wybor.IncludedPayrollException.Count,
+                wybor.SkippedNotNew.Count,
                 wybor.PartialAmortization.Count,
                 wybor.EmployeeBillsWithSubject.Count);
 
@@ -112,6 +112,15 @@ namespace NexoBridge.Services
                 .ToList();
         }
 
+        private NewDocumentMarkerContext PobierzKontekstZnacznikaNowosci()
+        {
+            var parametryImportu = _sfera.PodajObiektTypu<IParametryImportuKsiegowego>();
+            var parametrImportu = parametryImportu?.DaneDomyslne?.Domyslny;
+            var dataSystemowa = _sfera.PodajObiektTypu<IDataSystemowa>();
+
+            return new NewDocumentMarkerContext(parametrImportu, dataSystemowa);
+        }
+
         public void AktualizujPoPoczekalni(List<DocumentProcessingReport> manifest, WaitingRoomDocumentSelection wybor)
         {
             if (wybor == null)
@@ -120,23 +129,34 @@ namespace NexoBridge.Services
                 return;
             }
 
-            AktualizujPoPoczekalni(manifest, wybor.Included);
+            AktualizujPoPoczekalni(manifest, wybor.Included, wybor.IncludedPayrollException.Select(d => d.Nr).ToHashSet());
             AktualizujPominietePrzezFiltr(
                 manifest,
-                wybor.MissingAccountingPeriod,
-                "skippedMissingAccountingPeriod",
-                "Dokument zostal znaleziony w Poczekalni, ale NexoBridge nie potrafil odczytac miesiaca ksiegowego. Nie przekazano go do dekretacji.");
+                wybor.SkippedNotNew,
+                "skippedNotNew",
+                "Dokument zostal znaleziony w Poczekalni, ale nie ma statusu N. Nie przekazano go do dekretacji.");
             AktualizujPominietePrzezFiltr(
                 manifest,
-                wybor.AmbiguousCurrentPackageMatch,
-                "skippedAmbiguousMatch",
-                "Dokument zostal znaleziony w Poczekalni, ale dopasowanie do aktualnej paczki bylo niejednoznaczne. Nie przekazano go do dekretacji.");
+                wybor.EmployeeBillsWithSubject,
+                "skippedEmployeeBillWithSubject",
+                "Rachunek do umowy pracowniczej ma podmiot, wiec zostal pozostawiony w Poczekalni.");
+            AktualizujPominietePrzezFiltr(
+                manifest,
+                wybor.PartialAmortization,
+                "skippedPartialAmortization",
+                "Pominieto amortyzacje czastkowa. Do dekretacji trafia tylko dokument zbiorczy.");
         }
 
         public void AktualizujPoPoczekalni(List<DocumentProcessingReport> manifest, List<DokumentDoKsiegowania> oczekujace)
         {
+            AktualizujPoPoczekalni(manifest, oczekujace, new HashSet<int>());
+        }
+
+        private void AktualizujPoPoczekalni(List<DocumentProcessingReport> manifest, List<DokumentDoKsiegowania> oczekujace, HashSet<int> payrollExceptionNumbers)
+        {
             if (manifest == null) return;
             var matchedWaitingRoomNumbers = new HashSet<int>();
+            payrollExceptionNumbers ??= new HashSet<int>();
 
             foreach (var item in manifest.Where(d => d.Source == "frontendPackage"))
             {
@@ -186,7 +206,9 @@ namespace NexoBridge.Services
                     InvoiceNumber = doc.NumerDokumentu,
                     VendorNip = doc.PodmiotHistoria?.NIP,
                     KsefNumber = Oczysc(doc.NumerKSeF),
-                    MatchStatus = "extraWaitingRoomDocument",
+                    MatchStatus = payrollExceptionNumbers.Contains(doc.Nr)
+                        ? "includedPayrollException"
+                        : "includedByNewMarker",
                     WaitingRoomStatus = "found",
                     WaitingRoomId = doc.Id.ToString(),
                     WaitingRoomNr = doc.Nr,
@@ -198,13 +220,14 @@ namespace NexoBridge.Services
                 });
             }
 
-            _logger.LogInformation("[MANIFEST POCZEKALNIA] wpisy={Count}; znalezione={Found}; nieznalezione={NotFound}; niejednoznaczne={Ambiguous}; pominieteBrakMiesiaca={SkippedMissingPeriod}; pominieteNiejednoznaczne={SkippedAmbiguous}; dodatkowe={Extra}",
+            _logger.LogInformation("[MANIFEST POCZEKALNIA] wpisy={Count}; znalezione={Found}; nieznalezione={NotFound}; niejednoznaczne={Ambiguous}; pominieteBezN={SkippedNotNew}; pominieteRachunkiZPodmiotem={SkippedEmployeeBillWithSubject}; pominieteAmortyzacjeCzastkowe={SkippedPartialAmortization}; dodatkowe={Extra}",
                 manifest.Count,
                 manifest.Count(d => d.WaitingRoomStatus == "found" && d.Source == "frontendPackage"),
                 manifest.Count(d => d.WaitingRoomStatus == "notFound"),
                 manifest.Count(d => d.WaitingRoomStatus == "ambiguous"),
-                manifest.Count(d => d.DecreeStatus == "skippedMissingAccountingPeriod"),
-                manifest.Count(d => d.DecreeStatus == "skippedAmbiguousMatch"),
+                manifest.Count(d => d.DecreeStatus == "skippedNotNew"),
+                manifest.Count(d => d.DecreeStatus == "skippedEmployeeBillWithSubject"),
+                manifest.Count(d => d.DecreeStatus == "skippedPartialAmortization"),
                 manifest.Count(d => d.Source == "waitingRoomExtra"));
         }
 
