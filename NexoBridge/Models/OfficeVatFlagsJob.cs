@@ -10,6 +10,7 @@ namespace NexoBridge.Models
         public string Password { get; set; }
         public string OfficeDatabaseName { get; set; }
         public string Nip { get; set; }
+        public bool SyncDatabaseNamesOnly { get; set; }
     }
 
     public class OfficeVatFlagsReport
@@ -27,7 +28,24 @@ namespace NexoBridge.Models
         public int ClientsWithoutNip { get; set; }
         public OfficeVatFlagsItem Item { get; set; }
         public List<OfficeVatFlagsItem> Items { get; set; } = new List<OfficeVatFlagsItem>();
+        public List<OfficeDatabaseNameMapItem> DatabaseMappings { get; set; } = new List<OfficeDatabaseNameMapItem>();
         public List<string> Warnings { get; set; } = new List<string>();
+    }
+
+    public class OfficeDatabaseNameMapItem
+    {
+        public int? ClientId { get; set; }
+        public string Nip { get; set; }
+        public string NormalizedNip { get; set; }
+        public string Name { get; set; }
+        public string ShortName { get; set; }
+        public bool? Active { get; set; }
+        public string DatabaseName { get; set; }
+        public string DatabaseServerName { get; set; }
+        public string AccountingProgram { get; set; }
+        public bool? RachmistrzActive { get; set; }
+        public bool? RewizorActive { get; set; }
+        public bool? GratyfikantActive { get; set; }
     }
 
     public class OfficeVatFlagsItem
@@ -47,6 +65,8 @@ namespace NexoBridge.Models
         public bool? SmeVatPayer { get; set; }
         public string Guardian { get; set; }
         public string AccountingProgram { get; set; }
+        public string DatabaseName { get; set; }
+        public string DatabaseServerName { get; set; }
         public bool? RachmistrzActive { get; set; }
         public bool? RewizorActive { get; set; }
         public bool? GratyfikantActive { get; set; }

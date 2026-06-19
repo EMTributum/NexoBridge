@@ -14,6 +14,8 @@ namespace NexoBridge.Services
     {
         private readonly Uchwyt _sfera;
         private readonly ILogger<OfficeVatFlagsService> _logger;
+        private object _connectionDataResolver;
+        private bool _connectionDataResolverChecked;
 
         public OfficeVatFlagsService(Uchwyt sfera, ILogger<OfficeVatFlagsService> logger)
         {
@@ -56,6 +58,8 @@ namespace NexoBridge.Services
                 report.Items.AddRange(items.OrderBy(x => x.Name ?? x.ShortName ?? x.Nip).ThenBy(x => x.Nip));
             }
 
+            UzupelnijMapowanieBaz(report);
+
             if (report.Warnings.Any() && report.Status == "SUCCESS")
             {
                 report.Status = "PARTIAL_SUCCESS";
@@ -63,6 +67,39 @@ namespace NexoBridge.Services
             }
 
             await raportujPostep(100, "Odczyt flag VAT/VAT-UE z Biura zakonczony.");
+            return report;
+        }
+
+        public async Task<OfficeVatFlagsReport> PobierzNazwyBazDanychAsync(OfficeVatFlagsJob job, Func<int, string, Task> raportujPostep)
+        {
+            var report = new OfficeVatFlagsReport
+            {
+                JobId = job.JobId,
+                Status = "SUCCESS",
+                Message = "Odczytano mapowanie NIP -> nazwa bazy danych klientow Biura.",
+                OfficeDatabaseName = job.OfficeDatabaseName,
+                Source = "Biuro",
+                Precision = "databaseNameMap"
+            };
+
+            await raportujPostep(30, "Odczyt klientow i nazw baz danych z Biura...");
+            var items = PobierzKlientowBiura(report)
+                .OrderBy(x => x.Name ?? x.ShortName ?? x.Nip)
+                .ThenBy(x => x.Nip)
+                .ToList();
+
+            report.Items.AddRange(items);
+            UzupelnijMapowanieBaz(report);
+
+            int withoutDatabaseName = report.DatabaseMappings.Count(x => string.IsNullOrWhiteSpace(x.DatabaseName));
+            if (withoutDatabaseName > 0)
+            {
+                report.Status = "PARTIAL_SUCCESS";
+                report.Message = "Odczytano mapowanie NIP -> nazwa bazy danych klientow Biura z ostrzezeniami.";
+                report.Warnings.Add($"Nie udalo sie odczytac nazwy bazy danych dla {withoutDatabaseName} klientow Biura.");
+            }
+
+            await raportujPostep(100, "Synchronizacja nazw baz danych klientow Biura zakonczona.");
             return report;
         }
 
@@ -147,6 +184,7 @@ namespace NexoBridge.Services
             bool? rachmistrzActive = SafeBool(bazaKlienta, "AktywnyRachmistrz");
             bool? rewizorActive = SafeBool(bazaKlienta, "AktywnyRewizor");
             bool? gratyfikantActive = SafeBool(bazaKlienta, "AktywnyGratyfikant");
+            var danePolaczenia = PobierzDanePolaczeniaBazy(bazaKlienta);
 
             return new OfficeVatFlagsItem
             {
@@ -165,11 +203,80 @@ namespace NexoBridge.Services
                 SmeVatPayer = SafeBool(firma, "PodatnikSme"),
                 Guardian = guardian,
                 AccountingProgram = OkreslProgramKsiegowy(rachmistrzActive, rewizorActive),
+                DatabaseName = danePolaczenia.DatabaseName,
+                DatabaseServerName = danePolaczenia.ServerName,
                 RachmistrzActive = rachmistrzActive,
                 RewizorActive = rewizorActive,
                 GratyfikantActive = gratyfikantActive,
                 AccountingFormCode = SafeInt(klient, "FormaKsiegowosci")
             };
+        }
+
+        private void UzupelnijMapowanieBaz(OfficeVatFlagsReport report)
+        {
+            report.DatabaseMappings.Clear();
+            report.DatabaseMappings.AddRange(report.Items
+                .Where(x => !string.IsNullOrWhiteSpace(x.NormalizedNip))
+                .GroupBy(x => x.NormalizedNip)
+                .Select(g => g.First())
+                .Select(x => new OfficeDatabaseNameMapItem
+                {
+                    ClientId = x.ClientId,
+                    Nip = x.Nip,
+                    NormalizedNip = x.NormalizedNip,
+                    Name = x.Name,
+                    ShortName = x.ShortName,
+                    Active = x.Active,
+                    DatabaseName = x.DatabaseName,
+                    DatabaseServerName = x.DatabaseServerName,
+                    AccountingProgram = x.AccountingProgram,
+                    RachmistrzActive = x.RachmistrzActive,
+                    RewizorActive = x.RewizorActive,
+                    GratyfikantActive = x.GratyfikantActive
+                }));
+        }
+
+        private DatabaseConnectionInfo PobierzDanePolaczeniaBazy(object bazaKlienta)
+        {
+            var result = new DatabaseConnectionInfo();
+            if (bazaKlienta == null)
+            {
+                return result;
+            }
+
+            try
+            {
+                Guid? databaseId = SafeGuid(bazaKlienta, "Id");
+                byte[] dataBytes = SafeBytes(bazaKlienta, "DanePolaczenia");
+                object resolver = PobierzResolverDanychPolaczenia();
+
+                if (!databaseId.HasValue || dataBytes == null || dataBytes.Length == 0 || resolver == null)
+                {
+                    return result;
+                }
+
+                object loginInfo = resolver.GetType().GetMethod("Read")?.Invoke(resolver, new object[] { databaseId.Value, dataBytes });
+                result.DatabaseName = SafeString(loginInfo, "DatabaseName");
+                result.ServerName = SafeString(loginInfo, "ServerName");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Nie udalo sie odczytac danych polaczenia bazy klienta Biura: {Message}", ex.GetBaseException().Message);
+            }
+
+            return result;
+        }
+
+        private object PobierzResolverDanychPolaczenia()
+        {
+            if (_connectionDataResolverChecked)
+            {
+                return _connectionDataResolver;
+            }
+
+            _connectionDataResolverChecked = true;
+            _connectionDataResolver = PobierzMenedzera("IConnectionDataResolver");
+            return _connectionDataResolver;
         }
 
         private string OkreslProgramKsiegowy(bool? rachmistrzActive, bool? rewizorActive)
@@ -278,29 +385,83 @@ namespace NexoBridge.Services
         {
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
-                if (assembly.FullName.StartsWith("System.") || assembly.FullName.StartsWith("Microsoft."))
-                {
-                    continue;
-                }
-
-                Type[] types;
-                try
-                {
-                    types = assembly.GetTypes();
-                }
-                catch (ReflectionTypeLoadException ex)
-                {
-                    types = ex.Types.Where(t => t != null).ToArray();
-                }
-                catch
-                {
-                    continue;
-                }
-
-                var found = types.FirstOrDefault(t => t != null && t.IsInterface && t.Name == nazwa);
+                var found = ZnajdzTypInterfejsu(assembly, nazwa);
                 if (found != null)
                 {
                     return found;
+                }
+            }
+
+            foreach (string assemblyName in new[] { "InsERT.Moria.API.Private", "InsERT.Moria.API", "InsERT.Moria.KlienciBiura" })
+            {
+                var assembly = ZaladujAssembly(assemblyName);
+                var found = ZnajdzTypInterfejsu(assembly, nazwa);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+
+            return null;
+        }
+
+        private Type ZnajdzTypInterfejsu(Assembly assembly, string nazwa)
+        {
+            if (assembly == null ||
+                assembly.FullName.StartsWith("System.") ||
+                assembly.FullName.StartsWith("Microsoft."))
+            {
+                return null;
+            }
+
+            Type[] types;
+            try
+            {
+                types = assembly.GetTypes();
+            }
+            catch (ReflectionTypeLoadException ex)
+            {
+                types = ex.Types.Where(t => t != null).ToArray();
+            }
+            catch
+            {
+                return null;
+            }
+
+            return types.FirstOrDefault(t => t != null && t.IsInterface && t.Name == nazwa);
+        }
+
+        private Assembly ZaladujAssembly(string assemblyName)
+        {
+            try
+            {
+                return Assembly.Load(assemblyName);
+            }
+            catch
+            {
+                string baseDirectory = AppContext.BaseDirectory;
+                string localPath = System.IO.Path.Combine(baseDirectory, assemblyName + ".dll");
+                if (System.IO.File.Exists(localPath))
+                {
+                    try
+                    {
+                        return Assembly.LoadFrom(localPath);
+                    }
+                    catch { }
+                }
+
+                string nexoPath = Environment.GetEnvironmentVariable("NEXO_BIN_PATH");
+                if (!string.IsNullOrWhiteSpace(nexoPath))
+                {
+                    string nexoDllPath = System.IO.Path.Combine(nexoPath, assemblyName + ".dll");
+                    if (System.IO.File.Exists(nexoDllPath))
+                    {
+                        try
+                        {
+                            return Assembly.LoadFrom(nexoDllPath);
+                        }
+                        catch { }
+                    }
                 }
             }
 
@@ -372,6 +533,38 @@ namespace NexoBridge.Services
             }
 
             return null;
+        }
+
+        private Guid? SafeGuid(object obj, string propertyName)
+        {
+            var value = SafeObj(obj, propertyName);
+            if (value == null)
+            {
+                return null;
+            }
+
+            if (value is Guid guidValue)
+            {
+                return guidValue;
+            }
+
+            if (Guid.TryParse(value.ToString(), out var parsedGuid))
+            {
+                return parsedGuid;
+            }
+
+            return null;
+        }
+
+        private byte[] SafeBytes(object obj, string propertyName)
+        {
+            return SafeObj(obj, propertyName) as byte[];
+        }
+
+        private sealed class DatabaseConnectionInfo
+        {
+            public string DatabaseName { get; set; }
+            public string ServerName { get; set; }
         }
 
         private string NormalizujIdPodatkowy(string value)

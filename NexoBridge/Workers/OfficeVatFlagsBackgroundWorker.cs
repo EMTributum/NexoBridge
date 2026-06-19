@@ -41,8 +41,11 @@ namespace NexoBridge.Workers
             while (!stoppingToken.IsCancellationRequested)
             {
                 OfficeVatFlagsJob job = await _jobQueue.DequeueAsync(stoppingToken);
-                _workerLogger.LogInformation("Rozpoczynam odczyt flag VAT/VAT-UE z Biura: {JobId} (Baza: {Database}, NIP: {Nip})",
-                    job.JobId, job.OfficeDatabaseName, job.Nip);
+                _workerLogger.LogInformation("Rozpoczynam {Mode} z Biura: {JobId} (Baza: {Database}, NIP: {Nip})",
+                    job.SyncDatabaseNamesOnly ? "synchronizacje nazw baz danych klientow" : "odczyt flag VAT/VAT-UE",
+                    job.JobId,
+                    job.OfficeDatabaseName,
+                    job.Nip);
 
                 try
                 {
@@ -54,7 +57,12 @@ namespace NexoBridge.Workers
 
                         var serviceLogger = _loggerFactory.CreateLogger<OfficeVatFlagsService>();
                         var service = new OfficeVatFlagsService(silnik.Sfera, serviceLogger);
-                        var report = await service.PobierzFlagiAsync(job, async (procent, wiadomosc) =>
+                        var report = job.SyncDatabaseNamesOnly
+                            ? await service.PobierzNazwyBazDanychAsync(job, async (procent, wiadomosc) =>
+                            {
+                                await WyslijPostep(job.JobId, procent, wiadomosc);
+                            })
+                            : await service.PobierzFlagiAsync(job, async (procent, wiadomosc) =>
                         {
                             await WyslijPostep(job.JobId, procent, wiadomosc);
                         });

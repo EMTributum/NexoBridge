@@ -235,7 +235,7 @@ namespace NexoBridge.Services
         {
             if (manifest == null || documents == null || documents.Count == 0) return;
 
-            foreach (var item in manifest.Where(d => d.Source == "frontendPackage"))
+            foreach (var item in manifest.Where(d => d.Source == "frontendPackage" && !d.WaitingRoomNr.HasValue))
             {
                 var meta = new InvoiceMetadata
                 {
