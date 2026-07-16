@@ -45,6 +45,7 @@ namespace NexoBridge.Models
         public string InvoiceNumber { get; set; }
         public string VendorNip { get; set; }
         public string KsefNumber { get; set; }
+        public string KsefCode { get; set; }
         public string PdfFileName { get; set; }
     }
 }

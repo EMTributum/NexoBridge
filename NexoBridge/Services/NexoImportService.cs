@@ -152,8 +152,9 @@ namespace NexoBridge.Services
                             Func<int, string, Task> attachmentsReporter = attachmentsProgress.ReportAsync;
                             await attachmentsProgress.ReportAsync(5, "Podpinanie załączników PDF...");
                             await _attachmentService.PodepnijZalacznikiAsync(job, rezultat, zatwierdzone, finalReport.Documents, attachmentsReporter);
+                            await _ksefNumberAssignmentService.PrzypiszKodyPoDekretacjiAsync(job, rezultat, zatwierdzone, finalReport.Documents, attachmentsReporter);
                             await _ksefNumberAssignmentService.ZweryfikujPoDekretacjiAsync(job, rezultat, zatwierdzone, finalReport.Documents, attachmentsReporter);
-                            await attachmentsProgress.CompleteAsync("Obsługa załączników i weryfikacja KSeF zakończona.");
+                            await attachmentsProgress.CompleteAsync("Obsługa załączników oraz danych KSeF zakończona.");
                         }
                         else
                         {

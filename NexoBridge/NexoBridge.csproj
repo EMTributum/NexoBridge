@@ -45,16 +45,18 @@
   </ItemGroup>
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
     <PropertyGroup>
-      <PostBuildCommands>
-        <![CDATA[
-copy /y "$(nexoSdkBinPath)Xml.pak" "$(TargetDir)\Xml.pak"
-copy /y "$(nexoSdkBinPath)ijwhost.dll" "$(TargetDir)\ijwhost.dll"
-copy /y "$(nexoSdkBinPath)Microsoft.Data.SqlClient.SNI.dll" "$(TargetDir)\Microsoft.Data.SqlClient.SNI.dll"
-if exist "$(nexoSdkNarzedziaPath)PackageAndInstallerBuilder.exe" (call "$(nexoSdkNarzedziaPath)PackageAndInstallerBuilder.exe" /PlikKonfiguracji:Konfiguracja.xml /KatalogDocelowy:"$(TargetDir)\") else (echo Nie można zbudować pakietu i instalatora, ponieważ nie istnieje plik: "$(nexoSdkNarzedziaPath)PackageAndInstallerBuilder.exe")
-        ]]>
-      </PostBuildCommands>
+      <NexoPackageBuilderPath>$(nexoSdkNarzedziaPath)PackageAndInstallerBuilder.exe</NexoPackageBuilderPath>
+      <NexoPackageConfigPath>$(MSBuildProjectDirectory)\Konfiguracja.xml</NexoPackageConfigPath>
     </PropertyGroup>
-    <Exec Command="$(PostBuildCommands)" />
+    <ItemGroup>
+      <NexoSdkRuntimeFile Include="$(nexoSdkBinPath)Xml.pak" Condition="Exists('$(nexoSdkBinPath)Xml.pak')" />
+      <NexoSdkRuntimeFile Include="$(nexoSdkBinPath)ijwhost.dll" Condition="Exists('$(nexoSdkBinPath)ijwhost.dll')" />
+      <NexoSdkRuntimeFile Include="$(nexoSdkBinPath)Microsoft.Data.SqlClient.SNI.dll" Condition="Exists('$(nexoSdkBinPath)Microsoft.Data.SqlClient.SNI.dll')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NexoSdkRuntimeFile)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" Condition="'@(NexoSdkRuntimeFile)' != ''" />
+    <Message Importance="high" Text="Pominięto kopiowanie plików SDK nexo - nie znaleziono plików w $(nexoSdkBinPath)." Condition="'@(NexoSdkRuntimeFile)' == ''" />
+    <Message Importance="high" Text="Pominięto budowanie pakietu nexo - brak $(NexoPackageBuilderPath) lub $(NexoPackageConfigPath)." Condition="!Exists('$(NexoPackageBuilderPath)') Or !Exists('$(NexoPackageConfigPath)')" />
+    <Exec Command="&quot;$(NexoPackageBuilderPath)&quot; /PlikKonfiguracji:&quot;$(NexoPackageConfigPath)&quot; /KatalogDocelowy:&quot;$(TargetDir)&quot;" Condition="Exists('$(NexoPackageBuilderPath)') And Exists('$(NexoPackageConfigPath)')" />
   </Target>
 	<ItemGroup>
 		<Reference Include="NexoDLLs\AngleSharp.dll" />

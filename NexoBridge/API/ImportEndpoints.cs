@@ -39,8 +39,9 @@ namespace NexoBridge.API
 
                 string typZlecenia = job.ImportInvoices ? "Import + Kalkulacje" : "Tylko Kalkulacje";
                 int ksefCount = job.InvoicesMetadata?.Count(m => !string.IsNullOrWhiteSpace(m.KsefNumber)) ?? 0;
-                Log.Information("Zlecenie {JobId} dodane do kolejki (Baza: {Database}, Typ: {Typ}, Pliki EPP: {FileCount}, Załączniki PDF: {AttachmentCount}, Numery KSeF: {KsefCount})",
-                    job.JobId, job.DatabaseName, typZlecenia, job.Files?.Count ?? 0, job.Attachments?.Count ?? 0, ksefCount);
+                int ksefCodeCount = job.InvoicesMetadata?.Count(m => !string.IsNullOrWhiteSpace(m.KsefCode)) ?? 0;
+                Log.Information("Zlecenie {JobId} dodane do kolejki (Baza: {Database}, Typ: {Typ}, Pliki EPP: {FileCount}, Załączniki PDF: {AttachmentCount}, Numery KSeF: {KsefCount}, Kody KSeF: {KsefCodeCount})",
+                    job.JobId, job.DatabaseName, typZlecenia, job.Files?.Count ?? 0, job.Attachments?.Count ?? 0, ksefCount, ksefCodeCount);
 
                 return Results.Accepted(value: new { JobId = job.JobId, Message = "Zlecenie dodane do kolejki." });
             });

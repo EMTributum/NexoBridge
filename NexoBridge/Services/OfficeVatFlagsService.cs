@@ -16,6 +16,18 @@ namespace NexoBridge.Services
         private readonly ILogger<OfficeVatFlagsService> _logger;
         private object _connectionDataResolver;
         private bool _connectionDataResolverChecked;
+        private object _databaseNameConverter;
+        private bool _databaseNameConverterChecked;
+        private int _databaseConnectionMissingBase;
+        private int _databaseConnectionMissingId;
+        private int _databaseConnectionMissingBytes;
+        private int _databaseConnectionMissingResolver;
+        private int _databaseConnectionResolverFromEnvironment;
+        private int _databaseConnectionEmptyResult;
+        private int _databaseConnectionExceptions;
+        private string _databaseConnectionFirstException;
+        private string _officeDatabaseName;
+        private const string ProductDatabaseNamePrefix = "Nexo_";
 
         public OfficeVatFlagsService(Uchwyt sfera, ILogger<OfficeVatFlagsService> logger)
         {
@@ -36,6 +48,7 @@ namespace NexoBridge.Services
                 Nip = job.Nip,
                 NormalizedNip = NormalizujIdPodatkowy(job.Nip)
             };
+            _officeDatabaseName = job.OfficeDatabaseName;
 
             await raportujPostep(30, "Odczyt klientow Biura...");
             var items = PobierzKlientowBiura(report);
@@ -81,6 +94,7 @@ namespace NexoBridge.Services
                 Source = "Biuro",
                 Precision = "databaseNameMap"
             };
+            _officeDatabaseName = job.OfficeDatabaseName;
 
             await raportujPostep(30, "Odczyt klientow i nazw baz danych z Biura...");
             var items = PobierzKlientowBiura(report)
@@ -90,6 +104,7 @@ namespace NexoBridge.Services
 
             report.Items.AddRange(items);
             UzupelnijMapowanieBaz(report);
+            DodajDiagnostykeOdczytuBaz(report);
 
             int withoutDatabaseName = report.DatabaseMappings.Count(x => string.IsNullOrWhiteSpace(x.DatabaseName));
             if (withoutDatabaseName > 0)
@@ -164,11 +179,11 @@ namespace NexoBridge.Services
                     "OpiekunPodstawowy",
                     "OpiekunPodstawowy.Uzytkownik",
                     "OpiekunPodstawowy.Uzytkownik.Osoba"
-                })).Cast<dynamic>();
+                })).Cast<dynamic>().ToList();
             }
             catch
             {
-                return ((IEnumerable)mgrPodmioty.Dane.Wszystkie()).Cast<dynamic>();
+                return ((IEnumerable)mgrPodmioty.Dane.Wszystkie()).Cast<dynamic>().ToList();
             }
         }
 
@@ -236,37 +251,141 @@ namespace NexoBridge.Services
                 }));
         }
 
+        private void DodajDiagnostykeOdczytuBaz(OfficeVatFlagsReport report)
+        {
+            int missingDatabaseName = report.DatabaseMappings.Count(x => string.IsNullOrWhiteSpace(x.DatabaseName));
+            if (missingDatabaseName == 0)
+            {
+                return;
+            }
+
+            string diagnostic = $"Diagnostyka odczytu nazw baz: brakNazwyBazy={missingDatabaseName}, brakObiektuBazy={_databaseConnectionMissingBase}, brakId={_databaseConnectionMissingId}, brakDanePolaczenia={_databaseConnectionMissingBytes}, brakResolvera={_databaseConnectionMissingResolver}, resolverZeSrodowiska={_databaseConnectionResolverFromEnvironment}, pustyWynikResolvera={_databaseConnectionEmptyResult}, wyjatki={_databaseConnectionExceptions}, pierwszyWyjatek={_databaseConnectionFirstException ?? "brak"}.";
+            if (!report.Warnings.Contains(diagnostic))
+            {
+                report.Warnings.Add(diagnostic);
+            }
+
+            _logger.LogWarning("[OFFICE DATABASE NAMES DIAG] {Diagnostic}", diagnostic);
+        }
+
         private DatabaseConnectionInfo PobierzDanePolaczeniaBazy(object bazaKlienta)
         {
             var result = new DatabaseConnectionInfo();
             if (bazaKlienta == null)
             {
+                _databaseConnectionMissingBase++;
                 return result;
             }
 
             try
             {
                 Guid? databaseId = SafeGuid(bazaKlienta, "Id");
+                Guid? officeDatabaseId = SafeGuid(bazaKlienta, "IdDlaBiura");
                 byte[] dataBytes = SafeBytes(bazaKlienta, "DanePolaczenia");
-                object resolver = PobierzResolverDanychPolaczenia();
+                object converter = PobierzKonwerterNazwyBazyDanych();
 
-                if (!databaseId.HasValue || dataBytes == null || dataBytes.Length == 0 || resolver == null)
+                if (!databaseId.HasValue || dataBytes == null || dataBytes.Length == 0 || converter == null)
                 {
+                    if (!databaseId.HasValue)
+                    {
+                        _databaseConnectionMissingId++;
+                    }
+
+                    if (dataBytes == null || dataBytes.Length == 0)
+                    {
+                        _databaseConnectionMissingBytes++;
+                    }
+
+                    if (converter == null)
+                    {
+                        _databaseConnectionMissingResolver++;
+                    }
+
                     return result;
                 }
 
-                object loginInfo = resolver.GetType().GetMethod("Read")?.Invoke(resolver, new object[] { databaseId.Value, dataBytes });
-                result.DatabaseName = SafeString(loginInfo, "DatabaseName");
-                result.ServerName = SafeString(loginInfo, "ServerName");
+                result.DatabaseName = OdczytajNazweBazyPrzezKonwerter(converter, databaseId.Value, dataBytes);
+                if (string.IsNullOrWhiteSpace(result.DatabaseName) && officeDatabaseId.HasValue && officeDatabaseId.Value != databaseId.Value)
+                {
+                    result.DatabaseName = OdczytajNazweBazyPrzezKonwerter(converter, officeDatabaseId.Value, dataBytes);
+                }
+
+                if (string.IsNullOrWhiteSpace(result.DatabaseName))
+                {
+                    _databaseConnectionEmptyResult++;
+                }
             }
             catch (Exception ex)
             {
+                _databaseConnectionExceptions++;
+                _databaseConnectionFirstException ??= ex.GetBaseException().Message;
                 _logger.LogDebug(ex, "Nie udalo sie odczytac danych polaczenia bazy klienta Biura: {Message}", ex.GetBaseException().Message);
             }
 
             return result;
         }
 
+        private object PobierzKonwerterNazwyBazyDanych()
+        {
+            if (_databaseNameConverterChecked)
+            {
+                return _databaseNameConverter;
+            }
+
+            _databaseNameConverterChecked = true;
+            object resolver = PobierzResolverDanychPolaczenia();
+            if (resolver == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                var assembly = ZaladujAssembly("InsERT.Moria.API.UI");
+                var converterType = assembly?.GetType("InsERT.Moria.KlienciBiura.UI.DanePolaczeniaToNazwaBazyDanychConverter");
+                _databaseNameConverter = converterType == null
+                    ? null
+                    : Activator.CreateInstance(converterType, resolver, ProductDatabaseNamePrefix);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Nie udalo sie utworzyc konwertera nazwy bazy klienta Biura: {Message}", ex.GetBaseException().Message);
+                _databaseNameConverter = null;
+            }
+
+            return _databaseNameConverter;
+        }
+
+        private string OdczytajNazweBazyPrzezKonwerter(object converter, Guid databaseId, byte[] dataBytes)
+        {
+            try
+            {
+                object value = converter.GetType()
+                    .GetMethod("Convert")
+                    ?.Invoke(converter, new object[] { new object[] { databaseId, dataBytes }, typeof(string), ProductDatabaseNamePrefix, System.Globalization.CultureInfo.InvariantCulture });
+
+                return ZapewnijPelnaNazweBazy(value?.ToString());
+            }
+            catch (Exception ex)
+            {
+                _databaseConnectionExceptions++;
+                _databaseConnectionFirstException ??= ex.GetBaseException().Message;
+                _logger.LogDebug(ex, "Nie udalo sie skonwertowac danych polaczenia klienta Biura na nazwe bazy: {Message}", ex.GetBaseException().Message);
+                return null;
+            }
+        }
+
+        private string ZapewnijPelnaNazweBazy(string databaseName)
+        {
+            if (string.IsNullOrWhiteSpace(databaseName))
+            {
+                return null;
+            }
+
+            return databaseName.StartsWith(ProductDatabaseNamePrefix, StringComparison.OrdinalIgnoreCase)
+                ? databaseName
+                : ProductDatabaseNamePrefix + databaseName;
+        }
         private object PobierzResolverDanychPolaczenia()
         {
             if (_connectionDataResolverChecked)
@@ -275,8 +394,126 @@ namespace NexoBridge.Services
             }
 
             _connectionDataResolverChecked = true;
-            _connectionDataResolver = PobierzMenedzera("IConnectionDataResolver");
+            _connectionDataResolver =
+                PobierzOpcjonalnegoMenedzera("IConnectionDataResolver") ??
+                PobierzUslugeZKontenera("IConnectionDataResolver") ??
+                UtworzResolverDanychPolaczeniaZFabryki() ??
+                UtworzResolverDanychPolaczeniaZParametrowSrodowiska();
+
             return _connectionDataResolver;
+        }
+
+        private object UtworzResolverDanychPolaczeniaZFabryki()
+        {
+            try
+            {
+                object dbConnectionFactory = PobierzUslugeZKontenera("IDbConnectionFactory");
+                if (dbConnectionFactory == null)
+                {
+                    return null;
+                }
+
+                var assembly = ZaladujAssembly("InsERT.Moria.KlienciBiura");
+                var scramblerType = assembly?.GetType("InsERT.Moria.KlienciBiura.ConnectionDataScrambler");
+                return scramblerType == null ? null : Activator.CreateInstance(scramblerType, dbConnectionFactory);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Nie udalo sie utworzyc ConnectionDataScrambler dla danych polaczenia klientow Biura: {Message}", ex.GetBaseException().Message);
+                return null;
+            }
+        }
+
+        private object UtworzResolverDanychPolaczeniaZParametrowSrodowiska()
+        {
+            try
+            {
+                string server = Environment.GetEnvironmentVariable("DB_SERVER");
+                string dbUser = Environment.GetEnvironmentVariable("DB_USER");
+                string dbPass = Environment.GetEnvironmentVariable("DB_PASS");
+
+                if (string.IsNullOrWhiteSpace(server) ||
+                    string.IsNullOrWhiteSpace(_officeDatabaseName) ||
+                    string.IsNullOrWhiteSpace(dbUser))
+                {
+                    return null;
+                }
+
+                var dbAccessAssembly = ZaladujAssembly("InsERT.Mox.DatabaseAccess");
+                var sqlLoginInfoType = dbAccessAssembly?.GetType("InsERT.Mox.DatabaseAccess.SqlLoginInfo");
+                var sqlConnectionFactoryType = dbAccessAssembly?.GetType("InsERT.Mox.DatabaseAccess.SqlConnectionFactory");
+                if (sqlLoginInfoType == null || sqlConnectionFactoryType == null)
+                {
+                    return null;
+                }
+
+                object sqlLoginInfo = Activator.CreateInstance(sqlLoginInfoType, server, _officeDatabaseName, dbUser, dbPass);
+                object dbConnectionFactory = Activator.CreateInstance(sqlConnectionFactoryType, sqlLoginInfo);
+
+                var klientBiuraAssembly = ZaladujAssembly("InsERT.Moria.KlienciBiura");
+                var scramblerType = klientBiuraAssembly?.GetType("InsERT.Moria.KlienciBiura.ConnectionDataScrambler");
+                object resolver = scramblerType == null ? null : Activator.CreateInstance(scramblerType, dbConnectionFactory);
+                if (resolver != null)
+                {
+                    _databaseConnectionResolverFromEnvironment++;
+                }
+
+                return resolver;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Nie udalo sie utworzyc ConnectionDataScrambler z parametrow srodowiska: {Message}", ex.GetBaseException().Message);
+                return null;
+            }
+        }
+
+        private object PobierzUslugeZKontenera(string nazwaInterfejsu)
+        {
+            try
+            {
+                Type typSzukany = ZnajdzTypInterfejsu(nazwaInterfejsu);
+                object kontener = PobierzKontenerSfery();
+                if (typSzukany == null || kontener == null)
+                {
+                    return null;
+                }
+
+                var getObject = kontener.GetType()
+                    .GetMethods()
+                    .FirstOrDefault(m => m.Name == "GetObject" && m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == typeof(Type));
+
+                return getObject?.Invoke(kontener, new object[] { typSzukany });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Nie udalo sie pobrac uslugi {Service} z kontenera Sfery: {Message}", nazwaInterfejsu, ex.GetBaseException().Message);
+                return null;
+            }
+        }
+
+        private object PobierzKontenerSfery()
+        {
+            try
+            {
+                for (Type type = _sfera.GetType(); type != null; type = type.BaseType)
+                {
+                    var container = type
+                        .GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+                        .Select(f => f.GetValue(_sfera))
+                        .FirstOrDefault(v => v != null && v.GetType().GetInterfaces().Any(i => i.FullName == "InsERT.Mox.Runtime.IInjectionContainer"));
+
+                    if (container != null)
+                    {
+                        return container;
+                    }
+                }
+
+                return null;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private string OkreslProgramKsiegowy(bool? rachmistrzActive, bool? rewizorActive)
@@ -381,6 +618,19 @@ namespace NexoBridge.Services
             return metoda?.MakeGenericMethod(typSzukany).Invoke(_sfera, null);
         }
 
+        private object PobierzOpcjonalnegoMenedzera(string nazwaInterfejsu)
+        {
+            try
+            {
+                return PobierzMenedzera(nazwaInterfejsu);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Nie udalo sie pobrac opcjonalnego menedzera {Manager}: {Message}", nazwaInterfejsu, ex.GetBaseException().Message);
+                return null;
+            }
+        }
+
         private Type ZnajdzTypInterfejsu(string nazwa)
         {
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
@@ -392,7 +642,14 @@ namespace NexoBridge.Services
                 }
             }
 
-            foreach (string assemblyName in new[] { "InsERT.Moria.API.Private", "InsERT.Moria.API", "InsERT.Moria.KlienciBiura" })
+            foreach (string assemblyName in new[]
+            {
+                "InsERT.Moria.API.Private",
+                "InsERT.Moria.API",
+                "InsERT.Moria.KlienciBiura",
+                "InsERT.Mox.DatabaseAccess",
+                "InsERT.Mox.Core"
+            })
             {
                 var assembly = ZaladujAssembly(assemblyName);
                 var found = ZnajdzTypInterfejsu(assembly, nazwa);

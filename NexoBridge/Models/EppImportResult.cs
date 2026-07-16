@@ -22,6 +22,7 @@ namespace NexoBridge.Models
         public DateTime? IssueDate { get; set; }
         public bool KsefAssigned { get; set; }
         public string KsefNumber { get; set; }
+        public string KsefCode { get; set; }
 
         public InvoiceMetadata ToInvoiceMetadata()
         {
@@ -29,7 +30,8 @@ namespace NexoBridge.Models
             {
                 InvoiceNumber = !string.IsNullOrWhiteSpace(InvoiceNumber) ? InvoiceNumber : FullNumber,
                 VendorNip = VendorNip,
-                KsefNumber = KsefNumber
+                KsefNumber = KsefNumber,
+                KsefCode = KsefCode
             };
         }
     }

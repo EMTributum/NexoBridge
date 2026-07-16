@@ -1,4 +1,5 @@
 using InsERT.Moria.DokumentyDoKsiegowania;
+using InsERT.Moria.EwidencjaVAT;
 using InsERT.Moria.ModelDanych;
 using InsERT.Moria.Sfera;
 using Microsoft.Extensions.Logging;
@@ -152,7 +153,7 @@ namespace NexoBridge.Services
                 var dokumentZrodlowy = zatwierdzone[i].Item1;
                 var raport = ImportManifestService.ZnajdzRaportDlaDokumentu(manifest, dokumentZrodlowy);
                 var meta = raport != null
-                    ? new InvoiceMetadata { InvoiceNumber = raport.InvoiceNumber, VendorNip = raport.VendorNip, KsefNumber = raport.KsefNumber, PdfFileName = raport.PdfFileName }
+                    ? new InvoiceMetadata { InvoiceNumber = raport.InvoiceNumber, VendorNip = raport.VendorNip, KsefNumber = raport.KsefNumber, KsefCode = raport.KsefCode, PdfFileName = raport.PdfFileName }
                     : ZnajdzMetadaneDlaDokumentu(metadaneZKsef, dokumentZrodlowy);
 
                 if (meta == null || string.IsNullOrWhiteSpace(OczyscNumerKsef(meta.KsefNumber)))
@@ -221,16 +222,369 @@ namespace NexoBridge.Services
                 ListaDoLogu(problemy));
         }
 
+        public async Task PrzypiszKodyPoDekretacjiAsync(
+            ImportJob job,
+            dynamic rezultat,
+            List<Tuple<DokumentDoKsiegowania, SchematImportu>> zatwierdzone,
+            List<DocumentProcessingReport> manifest,
+            Func<int, string, Task> raportujPostep)
+        {
+            var metadaneZKodami = PobierzMetadaneZKodem(job).ToList();
+            if (metadaneZKodami.Count == 0)
+            {
+                return;
+            }
+
+            if (rezultat == null || zatwierdzone == null || zatwierdzone.Count == 0)
+            {
+                foreach (var meta in metadaneZKodami)
+                {
+                    UstawStatusKoduKsef(ZnajdzRaport(manifest, meta), "notAssignedAfterDecree", "Nie przeniesiono technicznego kodu KSeF, bo dekretacja nie zwróciła wyników.");
+                }
+
+                _logger.LogWarning("[KSEF CODE POMINIĘTO] Brak wyników dekretacji dla zadania {JobId}. Kody={Codes}",
+                    job.JobId,
+                    ListaDoLogu(metadaneZKodami.Select(m => $"{m.InvoiceNumber}/{m.VendorNip}->{OczyscKodKsef(m.KsefCode)}")));
+                return;
+            }
+
+            await raportujPostep(94, "Uzupełnianie kodów KSeF na zapisach VAT...");
+
+            object mgrVat = PobierzMenedzera("IZapisyWEwidencjiVAT");
+            if (mgrVat == null)
+            {
+                foreach (var meta in metadaneZKodami)
+                {
+                    UstawStatusKoduKsef(ZnajdzRaport(manifest, meta), "notAssignedAfterDecree", "Nie przeniesiono technicznego kodu KSeF, bo nie udało się pobrać menedżera zapisów VAT.");
+                }
+
+                _logger.LogWarning("[KSEF CODE BŁĄD] Nie udało się pobrać IZapisyWEwidencjiVAT dla zadania {JobId}.", job.JobId);
+                return;
+            }
+
+            var listaWynikow = PobierzWynikoweOperacje(rezultat);
+            int zapisane = 0;
+            var problemy = new List<string>();
+
+            for (int i = 0; i < zatwierdzone.Count; i++)
+            {
+                var dokumentZrodlowy = zatwierdzone[i].Item1;
+                var raport = ImportManifestService.ZnajdzRaportDlaDokumentu(manifest, dokumentZrodlowy);
+                var meta = raport != null
+                    ? new InvoiceMetadata { InvoiceNumber = raport.InvoiceNumber, VendorNip = raport.VendorNip, KsefNumber = raport.KsefNumber, KsefCode = raport.KsefCode, PdfFileName = raport.PdfFileName }
+                    : ZnajdzMetadaneDlaDokumentu(metadaneZKodami, dokumentZrodlowy);
+
+                string kod = OczyscKodKsef(meta?.KsefCode);
+                if (string.IsNullOrWhiteSpace(kod))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(OczyscNumerKsef(meta?.KsefNumber)))
+                {
+                    _logger.LogInformation("[KSEF CODE POMINIĘTO] Dokument {Numer} ma realny numer KSeF, więc kod techniczny {Kod} nie jest przenoszony.",
+                        dokumentZrodlowy?.NumerDokumentu,
+                        kod);
+                    continue;
+                }
+
+                if (!TryMapujKodKsef(kod, out byte wartoscKodu))
+                {
+                    string warning = $"Nieobsługiwany techniczny kod KSeF: {kod}. Obsługiwane wartości: BFK, OFF, DI.";
+                    UstawStatusKoduKsef(raport, "unsupportedCode", warning);
+                    problemy.Add($"{dokumentZrodlowy?.NumerDokumentu}: {warning}");
+                    _logger.LogWarning("[KSEF CODE NIEOBSŁUGIWANY] Dokument={Numer}; NIP={Nip}; kod={Kod}",
+                        dokumentZrodlowy?.NumerDokumentu,
+                        dokumentZrodlowy?.PodmiotHistoria?.NIP,
+                        kod);
+                    continue;
+                }
+
+                if (i >= listaWynikow.Count)
+                {
+                    string warning = $"Brak wyniku dekretacji pod indeksem {i}; nie przeniesiono technicznego kodu KSeF {kod}.";
+                    UstawStatusKoduKsef(raport, "notAssignedAfterDecree", warning);
+                    problemy.Add($"{dokumentZrodlowy?.NumerDokumentu}: brak wyniku dekretacji");
+                    continue;
+                }
+
+                object wynikOperacji = listaWynikow[i];
+                var wynikowe = PobierzWynikoweZapisy(wynikOperacji);
+                var zapisyVat = ZnajdzZapisyVat(mgrVat, wynikowe, dokumentZrodlowy).ToList();
+                if (zapisyVat.Count == 0)
+                {
+                    string warning = $"Nie znaleziono wynikowego zapisu VAT; nie przeniesiono technicznego kodu KSeF {kod}.";
+                    UstawStatusKoduKsef(raport, "noVatResult", warning);
+                    problemy.Add($"{dokumentZrodlowy?.NumerDokumentu}: brak zapisu VAT");
+                    _logger.LogWarning("[KSEF CODE BRAK VAT] Dokument={Numer}; NIP={Nip}; kod={Kod}; wyniki={Wyniki}",
+                        dokumentZrodlowy?.NumerDokumentu,
+                        dokumentZrodlowy?.PodmiotHistoria?.NIP,
+                        kod,
+                        string.Join("; ", wynikowe.Select(w => $"{w?.GetType().Name}: dokumentId={PobierzDokumentId(w)}")));
+                    continue;
+                }
+
+                int zapisaneDlaDokumentu = 0;
+                var bledyDlaDokumentu = new List<string>();
+                foreach (var zapisVat in zapisyVat)
+                {
+                    if (UstawKodNaZapisieVat(mgrVat, zapisVat, wartoscKodu, kod, out string szczegoly))
+                    {
+                        zapisaneDlaDokumentu++;
+                    }
+                    else
+                    {
+                        bledyDlaDokumentu.Add(szczegoly);
+                    }
+                }
+
+                if (zapisaneDlaDokumentu == zapisyVat.Count)
+                {
+                    zapisane++;
+                    UstawStatusKoduKsef(raport, "assignedAfterDecree", null);
+                    _logger.LogInformation("[KSEF CODE OK] Dokument {Numer}; NIP={Nip}; kod={Kod}; zapisyVAT={Count}.",
+                        dokumentZrodlowy?.NumerDokumentu,
+                        dokumentZrodlowy?.PodmiotHistoria?.NIP,
+                        kod,
+                        zapisyVat.Count);
+                }
+                else if (zapisaneDlaDokumentu > 0)
+                {
+                    string warning = $"Techniczny kod KSeF {kod} przeniesiono tylko częściowo: {zapisaneDlaDokumentu}/{zapisyVat.Count}. Błędy: {ListaDoLogu(bledyDlaDokumentu)}";
+                    UstawStatusKoduKsef(raport, "assignedPartiallyAfterDecree", warning);
+                    problemy.Add($"{dokumentZrodlowy?.NumerDokumentu}: kod częściowo");
+                    _logger.LogWarning("[KSEF CODE CZĘŚCIOWO] Dokument={Numer}; NIP={Nip}; kod={Kod}; zapisane={Saved}/{Total}; błędy={Errors}",
+                        dokumentZrodlowy?.NumerDokumentu,
+                        dokumentZrodlowy?.PodmiotHistoria?.NIP,
+                        kod,
+                        zapisaneDlaDokumentu,
+                        zapisyVat.Count,
+                        ListaDoLogu(bledyDlaDokumentu));
+                }
+                else
+                {
+                    string warning = $"Nie przeniesiono technicznego kodu KSeF {kod}. Błędy: {ListaDoLogu(bledyDlaDokumentu)}";
+                    UstawStatusKoduKsef(raport, "notAssignedAfterDecree", warning);
+                    problemy.Add($"{dokumentZrodlowy?.NumerDokumentu}: kod nieprzeniesiony");
+                    _logger.LogWarning("[KSEF CODE BŁĄD] Dokument={Numer}; NIP={Nip}; kod={Kod}; błędy={Errors}",
+                        dokumentZrodlowy?.NumerDokumentu,
+                        dokumentZrodlowy?.PodmiotHistoria?.NIP,
+                        kod,
+                        ListaDoLogu(bledyDlaDokumentu));
+                }
+            }
+
+            _logger.LogInformation("[KSEF CODE PODSUMOWANIE] JobId={JobId}; otrzymane={Received}; przeniesione={Assigned}; problemy={Problems}",
+                job.JobId,
+                metadaneZKodami.Count,
+                zapisane,
+                ListaDoLogu(problemy));
+        }
+
         private IEnumerable<InvoiceMetadata> PobierzMetadaneZKsef(ImportJob job)
         {
             return (job.InvoicesMetadata ?? new List<InvoiceMetadata>())
                 .Where(m => !string.IsNullOrWhiteSpace(OczyscNumerKsef(m.KsefNumber)));
         }
 
+        private IEnumerable<InvoiceMetadata> PobierzMetadaneZKodem(ImportJob job)
+        {
+            return (job.InvoicesMetadata ?? new List<InvoiceMetadata>())
+                .Where(m => string.IsNullOrWhiteSpace(OczyscNumerKsef(m.KsefNumber)))
+                .Where(m => !string.IsNullOrWhiteSpace(OczyscKodKsef(m.KsefCode)));
+        }
+
         private InvoiceMetadata ZnajdzMetadaneDlaDokumentu(IEnumerable<InvoiceMetadata> metadane, DokumentDoKsiegowania dokument)
         {
             var match = InvoiceDocumentMatcher.MatchMetadataForDocument(metadane, dokument);
             return match.Metadata;
+        }
+
+        private List<dynamic> PobierzWynikoweOperacje(dynamic rezultat)
+        {
+            if (rezultat == null) return new List<dynamic>();
+            try { return ((System.Collections.IEnumerable)rezultat).Cast<dynamic>().ToList(); }
+            catch { return new List<dynamic>(); }
+        }
+
+        private IEnumerable<object> ZnajdzZapisyVat(object mgrVat, IEnumerable<dynamic> wynikowe, DokumentDoKsiegowania dokumentZrodlowy)
+        {
+            var zapisy = new List<object>();
+
+            foreach (var wynik in wynikowe ?? Enumerable.Empty<dynamic>())
+            {
+                string typ = wynik?.GetType().Name ?? "";
+                if (!ZawieraTyp(typ, "VAT"))
+                {
+                    continue;
+                }
+
+                object encja = ZnajdzFizycznaEncje(mgrVat, PobierzDokumentId(wynik));
+                DodajUnikalny(zapisy, encja);
+            }
+
+            try
+            {
+                DodajUnikalny(zapisy, dokumentZrodlowy?.WynikowyZapisWEwidencjiVAT);
+            }
+            catch { }
+
+            try
+            {
+                DodajUnikalny(zapisy, dokumentZrodlowy?.ZrodlowyZapisWEwidencjiVAT);
+            }
+            catch { }
+
+            return zapisy;
+        }
+
+        private void DodajUnikalny(List<object> lista, object encja)
+        {
+            if (lista == null || encja == null) return;
+
+            string id = PobierzWlasciwosc(encja, "Id")?.ToString();
+            if (!string.IsNullOrWhiteSpace(id) && lista.Any(x => string.Equals(PobierzWlasciwosc(x, "Id")?.ToString(), id, StringComparison.OrdinalIgnoreCase)))
+            {
+                return;
+            }
+
+            if (lista.Any(x => ReferenceEquals(x, encja)))
+            {
+                return;
+            }
+
+            lista.Add(encja);
+        }
+
+        private bool UstawKodNaZapisieVat(object mgrVat, object zapisVat, byte wartoscKodu, string kod, out string szczegoly)
+        {
+            szczegoly = "brak";
+            dynamic zapisBO = null;
+
+            try
+            {
+                dynamic menedzerVat = mgrVat;
+                zapisBO = menedzerVat.Znajdz((dynamic)zapisVat);
+                if (zapisBO == null)
+                {
+                    szczegoly = "Nie udało się otworzyć zapisu VAT przez IZapisyWEwidencjiVAT.Znajdz().";
+                    return false;
+                }
+
+                object dane = zapisBO.Dane;
+                string numerKsef = OczyscNumerKsef(PobierzWlasciwosc(dane, "NumerKSeF")?.ToString());
+                if (!string.IsNullOrWhiteSpace(numerKsef))
+                {
+                    szczegoly = $"Zapis VAT ma już realny numer KSeF {numerKsef}; kod {kod} pozostawiono pusty.";
+                    return true;
+                }
+
+                byte? obecnaWartosc = PobierzByteNullable(dane, "WystepowanieFakturKsef");
+                if (obecnaWartosc.HasValue && obecnaWartosc.Value == wartoscKodu)
+                {
+                    szczegoly = $"Kod {kod} był już ustawiony na zapisie VAT.";
+                    return true;
+                }
+
+                UstawWlasciwosc(dane, "WystepowanieFakturKsef", (byte?)wartoscKodu);
+                bool zapisano = zapisBO.Zapisz();
+                if (!zapisano)
+                {
+                    szczegoly = WyciagnijBledySfery(zapisBO);
+                    return false;
+                }
+
+                szczegoly = $"Ustawiono kod {kod}.";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                szczegoly = ex.GetBaseException().Message;
+                return false;
+            }
+            finally
+            {
+                try { ((IDisposable)zapisBO)?.Dispose(); } catch { }
+            }
+        }
+
+        private byte? PobierzByteNullable(object source, string propertyName)
+        {
+            object value = PobierzWlasciwosc(source, propertyName);
+            if (value == null) return null;
+
+            try
+            {
+                return Convert.ToByte(value);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private object PobierzWlasciwosc(object source, string propertyName)
+        {
+            if (source == null || string.IsNullOrWhiteSpace(propertyName)) return null;
+            try
+            {
+                var prop = source.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public);
+                if (prop != null) return prop.GetValue(source);
+
+                var field = source.GetType().GetField(propertyName, BindingFlags.Instance | BindingFlags.Public);
+                return field?.GetValue(source);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private void UstawWlasciwosc(object source, string propertyName, object value)
+        {
+            var prop = source?.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public);
+            if (prop == null || !prop.CanWrite)
+            {
+                throw new InvalidOperationException($"Nie znaleziono zapisywalnej właściwości {propertyName} na {source?.GetType().FullName ?? "null"}.");
+            }
+
+            prop.SetValue(source, value);
+        }
+
+        private string WyciagnijBledySfery(dynamic obiektBO)
+        {
+            try
+            {
+                var bledy = ((IEnumerable<dynamic>)obiektBO.Bledy)
+                    .Select(e =>
+                    {
+                        try { return (string)e.Komunikat ?? (string)e.Tresc ?? (string)e.Opis; }
+                        catch { return e.ToString(); }
+                    })
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .ToList();
+
+                if (bledy.Count > 0) return string.Join(" | ", bledy);
+            }
+            catch { }
+
+            try
+            {
+                var invalidData = (System.Collections.IEnumerable)obiektBO.InvalidData;
+                if (invalidData != null)
+                {
+                    var bledy = invalidData.Cast<dynamic>().Select(e =>
+                    {
+                        try { return (string)e.Komunikat ?? (string)e.Tresc ?? (string)e.Opis; }
+                        catch { return e.ToString(); }
+                    }).Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
+
+                    if (bledy.Any()) return string.Join(" | ", bledy);
+                }
+            }
+            catch { }
+
+            return "brak szczegółów walidacji";
         }
 
         private DocumentProcessingReport ZnajdzRaport(List<DocumentProcessingReport> manifest, InvoiceMetadata meta)
@@ -251,6 +605,16 @@ namespace NexoBridge.Services
         {
             if (raport == null) return;
             raport.KsefStatus = status;
+            if (!string.IsNullOrWhiteSpace(warning))
+            {
+                ImportManifestService.DodajWarning(raport, warning);
+            }
+        }
+
+        private void UstawStatusKoduKsef(DocumentProcessingReport raport, string status, string warning)
+        {
+            if (raport == null) return;
+            raport.KsefCodeStatus = status;
             if (!string.IsNullOrWhiteSpace(warning))
             {
                 ImportManifestService.DodajWarning(raport, warning);
@@ -359,6 +723,39 @@ namespace NexoBridge.Services
             string cleaned = value?.Trim();
             if (string.IsNullOrWhiteSpace(cleaned)) return null;
             return PusteLubTechniczneKodyKsef.Contains(cleaned) ? null : cleaned;
+        }
+
+        private string OczyscKodKsef(string value)
+        {
+            string cleaned = value?.Trim();
+            if (string.IsNullOrWhiteSpace(cleaned)) return null;
+
+            string normalized = cleaned.ToUpperInvariant();
+            if (normalized == "BRAK" || normalized == "NONE" || normalized == "NULL" || normalized == "NIE DOTYCZY")
+            {
+                return null;
+            }
+
+            return normalized;
+        }
+
+        private bool TryMapujKodKsef(string kod, out byte wartosc)
+        {
+            switch (OczyscKodKsef(kod))
+            {
+                case "BFK":
+                    wartosc = (byte)WystepowanieFakturKSeF.BFK;
+                    return true;
+                case "OFF":
+                    wartosc = (byte)WystepowanieFakturKSeF.OFF;
+                    return true;
+                case "DI":
+                    wartosc = (byte)WystepowanieFakturKSeF.DI;
+                    return true;
+                default:
+                    wartosc = 0;
+                    return false;
+            }
         }
 
         private bool PorownajKsef(string left, string right)

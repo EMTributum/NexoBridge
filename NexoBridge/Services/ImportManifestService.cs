@@ -33,8 +33,10 @@ namespace NexoBridge.Services
                     InvoiceNumber = meta.InvoiceNumber,
                     VendorNip = meta.VendorNip,
                     KsefNumber = Oczysc(meta.KsefNumber),
+                    KsefCode = Oczysc(meta.KsefCode),
                     PdfFileName = meta.PdfFileName,
                     KsefStatus = string.IsNullOrWhiteSpace(Oczysc(meta.KsefNumber)) ? "notProvided" : "pending",
+                    KsefCodeStatus = string.IsNullOrWhiteSpace(Oczysc(meta.KsefCode)) ? "notProvided" : "pending",
                     AttachmentStatus = string.IsNullOrWhiteSpace(meta.PdfFileName) ? "notProvided" : "pending",
                     DecreeStatus = "pending"
                 };
@@ -58,6 +60,7 @@ namespace NexoBridge.Services
                     VendorNip = attachment.VendorNip,
                     PdfFileName = attachment.FileName,
                     KsefStatus = "notProvided",
+                    KsefCodeStatus = "notProvided",
                     AttachmentStatus = "pending",
                     DecreeStatus = "pending",
                     Warnings = new List<string> { "Wpis manifestu utworzony z zalacznika, bo nie znaleziono odpowiadajacych metadanych faktury." }
@@ -165,6 +168,7 @@ namespace NexoBridge.Services
                     InvoiceNumber = item.InvoiceNumber,
                     VendorNip = item.VendorNip,
                     KsefNumber = item.KsefNumber,
+                    KsefCode = item.KsefCode,
                     PdfFileName = item.PdfFileName
                 };
 
@@ -206,6 +210,7 @@ namespace NexoBridge.Services
                     InvoiceNumber = doc.NumerDokumentu,
                     VendorNip = doc.PodmiotHistoria?.NIP,
                     KsefNumber = Oczysc(doc.NumerKSeF),
+                    KsefCode = null,
                     MatchStatus = payrollExceptionNumbers.Contains(doc.Nr)
                         ? "includedPayrollException"
                         : "includedByNewMarker",
@@ -215,6 +220,7 @@ namespace NexoBridge.Services
                     WaitingRoomNumber = doc.NumerDokumentu,
                     WaitingRoomNip = doc.PodmiotHistoria?.NIP,
                     KsefStatus = string.IsNullOrWhiteSpace(Oczysc(doc.NumerKSeF)) ? "notProvided" : "presentInWaitingRoom",
+                    KsefCodeStatus = "notProvided",
                     AttachmentStatus = "notProvided",
                     DecreeStatus = "pending"
                 });
@@ -242,6 +248,7 @@ namespace NexoBridge.Services
                     InvoiceNumber = item.InvoiceNumber,
                     VendorNip = item.VendorNip,
                     KsefNumber = item.KsefNumber,
+                    KsefCode = item.KsefCode,
                     PdfFileName = item.PdfFileName
                 };
 
@@ -281,6 +288,7 @@ namespace NexoBridge.Services
                         InvoiceNumber = d.InvoiceNumber,
                         VendorNip = d.VendorNip,
                         KsefNumber = d.KsefNumber,
+                        KsefCode = d.KsefCode,
                         PdfFileName = d.PdfFileName
                     })
                 })
@@ -321,7 +329,7 @@ namespace NexoBridge.Services
 
         private string OpiszRaport(DocumentProcessingReport report)
         {
-            return $"source={report.Source}, invoice={report.InvoiceNumber}, nip={report.VendorNip}, ksef={(string.IsNullOrWhiteSpace(report.KsefNumber) ? "brak" : report.KsefNumber)}, pdf={(string.IsNullOrWhiteSpace(report.PdfFileName) ? "brak" : report.PdfFileName)}";
+            return $"source={report.Source}, invoice={report.InvoiceNumber}, nip={report.VendorNip}, ksef={(string.IsNullOrWhiteSpace(report.KsefNumber) ? "brak" : report.KsefNumber)}, ksefCode={(string.IsNullOrWhiteSpace(report.KsefCode) ? "brak" : report.KsefCode)}, pdf={(string.IsNullOrWhiteSpace(report.PdfFileName) ? "brak" : report.PdfFileName)}";
         }
 
         private string ListaDoLogu(IEnumerable<string> items)

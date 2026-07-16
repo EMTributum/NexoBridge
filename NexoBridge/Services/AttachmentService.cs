@@ -384,7 +384,7 @@ namespace NexoBridge.Services
 
             var opisy = metadane
                 .Take(200)
-                .Select(m => $"invoiceNumber={m.InvoiceNumber}, vendorNip={m.VendorNip}, ksefNumber={m.KsefNumber}, pdfFileName={m.PdfFileName}")
+                .Select(m => $"invoiceNumber={m.InvoiceNumber}, vendorNip={m.VendorNip}, ksefNumber={m.KsefNumber}, ksefCode={m.KsefCode}, pdfFileName={m.PdfFileName}")
                 .ToList();
 
             return ListaDoLogu(opisy);

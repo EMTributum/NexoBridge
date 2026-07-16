@@ -1,7 +1,8 @@
-﻿using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.DependencyInjection;
 using System;
-using System.IO;
 using DotNetEnv;
 using NexoBridge.API;
 using NexoBridge.Services;
@@ -15,6 +16,9 @@ namespace NexoBridge
 {
     public class Program
     {
+        private const long DefaultMaxRequestBodySizeMb = 30;
+        private const string MaxRequestBodySizeEnvName = "NEXO_BRIDGE_MAX_REQUEST_BODY_MB";
+
         public static void Main(string[] args)
         {
             Env.Load();
@@ -41,12 +45,23 @@ namespace NexoBridge
             {
                 Log.Information("Uruchamianie mikroserwisu NexoBridge...");
 
+                long maxRequestBodySizeMb = ReadMaxRequestBodySizeMb();
+                long maxRequestBodySizeBytes = maxRequestBodySizeMb * 1024L * 1024L;
+
                 var builder = WebApplication.CreateBuilder(args);
 
                 // =====================================================================
                 // 2. PODPIĘCIE SERILOGA DO HOSTA APLIKACJI
                 // =====================================================================
                 builder.Host.UseSerilog();
+                builder.WebHost.ConfigureKestrel(options =>
+                {
+                    options.Limits.MaxRequestBodySize = maxRequestBodySizeBytes;
+                });
+                builder.Services.Configure<FormOptions>(options =>
+                {
+                    options.MultipartBodyLengthLimit = maxRequestBodySizeBytes;
+                });
 
                 // 3. Rejestrujemy aplikację jako oficjalną Usługę Windows
                 builder.Services.AddWindowsService(options =>
@@ -65,6 +80,12 @@ namespace NexoBridge
                               .AllowCredentials(); // Wymagane dla SignalR
                     });
                 });
+
+                Log.Information(
+                    "Aktywny limit request body w NexoBridge: {MaxRequestBodySizeMb} MB ({MaxRequestBodySizeBytes} B).",
+                    maxRequestBodySizeMb,
+                    maxRequestBodySizeBytes
+                );
 
                 builder.Services.AddSignalR();
                 builder.Services.AddSingleton<JobQueue>();
@@ -97,6 +118,28 @@ namespace NexoBridge
                 // Zapewnia zrzucenie ostatnich logów z pamięci do pliku przed zamknięciem
                 Log.CloseAndFlush();
             }
+        }
+
+        private static long ReadMaxRequestBodySizeMb()
+        {
+            string rawValue = Environment.GetEnvironmentVariable(MaxRequestBodySizeEnvName);
+            if (string.IsNullOrWhiteSpace(rawValue))
+            {
+                return DefaultMaxRequestBodySizeMb;
+            }
+
+            if (long.TryParse(rawValue, out long parsedValue) && parsedValue > 0)
+            {
+                return parsedValue;
+            }
+
+            Log.Warning(
+                "Nieprawidłowa wartość zmiennej {EnvName}='{EnvValue}'. Używam domyślnego limitu {DefaultMaxRequestBodySizeMb} MB.",
+                MaxRequestBodySizeEnvName,
+                rawValue,
+                DefaultMaxRequestBodySizeMb
+            );
+            return DefaultMaxRequestBodySizeMb;
         }
     }
 }

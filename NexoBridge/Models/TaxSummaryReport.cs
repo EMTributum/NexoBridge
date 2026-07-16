@@ -27,6 +27,8 @@ namespace NexoBridge.Models
         public string InvoiceNumber { get; set; }
         public string VendorNip { get; set; }
         public string KsefNumber { get; set; }
+        public string KsefCode { get; set; }
+        public string KsefCodeStatus { get; set; } = "notProvided";
         public string PdfFileName { get; set; }
 
         public string MatchStatus { get; set; } = "pending";

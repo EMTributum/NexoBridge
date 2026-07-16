@@ -107,7 +107,7 @@ namespace NexoBridge.Workers
 
         private async Task WylijPostep(string jobId, int procent, string wiadomosc)
         {
-            await _hubContext.Clients.Group(jobId).SendAsync("ReceiveProgress", procent, wiadomosc);
+            await _hubContext.Clients.Group(jobId).SendAsync("ReceiveProgress", procent, wiadomosc, jobId);
         }
     }
 }
