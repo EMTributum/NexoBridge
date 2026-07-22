@@ -55,7 +55,20 @@ namespace NexoBridge.Services
 
             if (!string.IsNullOrWhiteSpace(report.NormalizedNip))
             {
-                report.Item = items.FirstOrDefault(x => x.NormalizedNip == report.NormalizedNip);
+                var matches = items
+                    .Where(x => x.NormalizedNip == report.NormalizedNip)
+                    .ToList();
+
+                if (matches.Count > 1)
+                {
+                    _logger.LogWarning(
+                        "[OFFICE CLIENT DUPLICATE NIP] NIP={Nip}; count={Count}; candidates={Candidates}",
+                        report.NormalizedNip,
+                        matches.Count,
+                        string.Join(" || ", matches.Select(OpiszKlientaBiura)));
+                }
+
+                report.Item = WybierzNajlepszyRekordKlienta(matches);
                 if (report.Item == null)
                 {
                     report.Status = "NOT_FOUND";
@@ -68,7 +81,9 @@ namespace NexoBridge.Services
             }
             else
             {
-                report.Items.AddRange(items.OrderBy(x => x.Name ?? x.ShortName ?? x.Nip).ThenBy(x => x.Nip));
+                report.Items.AddRange(WybierzNajlepszeRekordyPoNip(items)
+                    .OrderBy(x => x.Name ?? x.ShortName ?? x.Nip)
+                    .ThenBy(x => x.Nip));
             }
 
             UzupelnijMapowanieBaz(report);
@@ -98,6 +113,9 @@ namespace NexoBridge.Services
 
             await raportujPostep(30, "Odczyt klientow i nazw baz danych z Biura...");
             var items = PobierzKlientowBiura(report)
+                .ToList();
+
+            items = WybierzNajlepszeRekordyPoNip(items)
                 .OrderBy(x => x.Name ?? x.ShortName ?? x.Nip)
                 .ThenBy(x => x.Nip)
                 .ToList();
@@ -233,7 +251,7 @@ namespace NexoBridge.Services
             report.DatabaseMappings.AddRange(report.Items
                 .Where(x => !string.IsNullOrWhiteSpace(x.NormalizedNip))
                 .GroupBy(x => x.NormalizedNip)
-                .Select(g => g.First())
+                .Select(g => WybierzNajlepszyRekordKlienta(g))
                 .Select(x => new OfficeDatabaseNameMapItem
                 {
                     ClientId = x.ClientId,
@@ -249,6 +267,51 @@ namespace NexoBridge.Services
                     RewizorActive = x.RewizorActive,
                     GratyfikantActive = x.GratyfikantActive
                 }));
+        }
+
+        private List<OfficeVatFlagsItem> WybierzNajlepszeRekordyPoNip(IEnumerable<OfficeVatFlagsItem> items)
+        {
+            return items
+                .Where(x => !string.IsNullOrWhiteSpace(x.NormalizedNip))
+                .GroupBy(x => x.NormalizedNip)
+                .Select(g =>
+                {
+                    var candidates = g.ToList();
+                    if (candidates.Count > 1)
+                    {
+                        _logger.LogWarning(
+                            "[OFFICE CLIENT DUPLICATE NIP] NIP={Nip}; count={Count}; selected={Selected}; candidates={Candidates}",
+                            g.Key,
+                            candidates.Count,
+                            OpiszKlientaBiura(WybierzNajlepszyRekordKlienta(candidates)),
+                            string.Join(" || ", candidates.Select(OpiszKlientaBiura)));
+                    }
+
+                    return WybierzNajlepszyRekordKlienta(candidates);
+                })
+                .Where(x => x != null)
+                .ToList();
+        }
+
+        private OfficeVatFlagsItem WybierzNajlepszyRekordKlienta(IEnumerable<OfficeVatFlagsItem> candidates)
+        {
+            return candidates?
+                .OrderByDescending(x => x.Active == true)
+                .ThenByDescending(x => x.RachmistrzActive == true || x.RewizorActive == true)
+                .ThenByDescending(x => !string.IsNullOrWhiteSpace(x.DatabaseName))
+                .ThenByDescending(x => !string.IsNullOrWhiteSpace(x.Guardian))
+                .ThenBy(x => x.ClientId ?? int.MaxValue)
+                .FirstOrDefault();
+        }
+
+        private string OpiszKlientaBiura(OfficeVatFlagsItem item)
+        {
+            if (item == null)
+            {
+                return "null";
+            }
+
+            return $"clientId={item.ClientId}, nip={item.Nip}, active={item.Active}, name={item.Name ?? item.ShortName}, program={item.AccountingProgram}, db={item.DatabaseName ?? "brak"}";
         }
 
         private void DodajDiagnostykeOdczytuBaz(OfficeVatFlagsReport report)

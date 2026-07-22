@@ -376,6 +376,11 @@ namespace NexoBridge.Services
                 d.AttachmentStatus == "notFound" ||
                 d.AttachmentStatus == "ambiguous" ||
                 d.AttachmentStatus == "notAttached" ||
+                d.AttachmentStatus == "attachedPartial" ||
+                d.AttachmentStatus == "attachedPendingVerification" ||
+                d.AttachmentStatus == "attachedUnverified" ||
+                d.AttachmentStatus == "notVisibleAfterSave" ||
+                d.AttachmentStatus == "verificationFailed" ||
                 d.DecreeStatus == "noSchema" ||
                 d.DecreeStatus == "schemaError" ||
                 d.DecreeStatus == "skippedNotNew" ||

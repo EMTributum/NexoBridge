@@ -71,7 +71,23 @@ namespace NexoBridge.Workers
                         var accService = new AccountingService(silnik.Sfera, accLogger);
                         var pitService = new PitCalculationService(silnik.Sfera, pitLogger);
                         var vatService = new VatCalculationService(silnik.Sfera, vatLogger);
-                        var attService = new AttachmentService(silnik.Sfera, attLogger);
+                        var attService = new AttachmentService(
+                            silnik.Sfera,
+                            attLogger,
+                            (auditJob, auditProgress) =>
+                            {
+                                var auditEngine = new SferaEngine();
+                                try
+                                {
+                                    auditEngine.Uruchom(auditJob.Username, auditJob.Password, auditJob.DatabaseName, auditProgress);
+                                    return auditEngine;
+                                }
+                                catch
+                                {
+                                    auditEngine.Dispose();
+                                    throw;
+                                }
+                            });
                         var ksefService = new KsefNumberAssignmentService(silnik.Sfera, ksefLogger);
 
                         // 4. Budujemy "Dyrygenta", z pełnym, nowym składem orkiestry

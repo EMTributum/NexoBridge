@@ -18,6 +18,7 @@ namespace NexoBridge
     {
         private const long DefaultMaxRequestBodySizeMb = 30;
         private const string MaxRequestBodySizeEnvName = "NEXO_BRIDGE_MAX_REQUEST_BODY_MB";
+        private const string LogLevelEnvName = "NEXO_LOG_LEVEL";
 
         public static void Main(string[] args)
         {
@@ -26,24 +27,38 @@ namespace NexoBridge
             // =====================================================================
             // 1. INICJALIZACJA SERILOGA NA SAMYM POCZĄTKU
             // =====================================================================
+            LogEventLevel minimumLogLevel = ReadMinimumLogLevel();
             Log.Logger = new LoggerConfiguration()
-                .MinimumLevel.Information()
+                .MinimumLevel.Debug()
                 .MinimumLevel.Override("Microsoft", LogEventLevel.Warning) // Wycisza spam z ASP.NET
                 .Enrich.FromLogContext()
                 // Format dla konsoli (kolorowy, czytelny)
-                .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+                .WriteTo.Console(
+                    restrictedToMinimumLevel: minimumLogLevel,
+                    outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
                 // Format dla pliku tekstowego (nowy plik codziennie)
                 .WriteTo.File(
                     path: "Logs/nexobridge-.log",
                     rollingInterval: RollingInterval.Day,
                     retainedFileCountLimit: 14,
+                    restrictedToMinimumLevel: minimumLogLevel,
                     outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}"
                 )
+                .WriteTo.Logger(logger => logger
+                    .Filter.ByIncludingOnly(IsAttachmentServiceLog)
+                    .WriteTo.File(
+                        path: "Logs/nexobridge-attachments-debug-.log",
+                        rollingInterval: RollingInterval.Day,
+                        retainedFileCountLimit: 14,
+                        restrictedToMinimumLevel: LogEventLevel.Debug,
+                        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}"
+                    ))
                 .CreateLogger();
 
             try
             {
                 Log.Information("Uruchamianie mikroserwisu NexoBridge...");
+                Log.Information("Poziom głównego logowania NexoBridge: {LogLevel}. Pełna diagnostyka załączników trafia do Logs/nexobridge-attachments-debug-.log.", minimumLogLevel);
 
                 long maxRequestBodySizeMb = ReadMaxRequestBodySizeMb();
                 long maxRequestBodySizeBytes = maxRequestBodySizeMb * 1024L * 1024L;
@@ -140,6 +155,30 @@ namespace NexoBridge
                 DefaultMaxRequestBodySizeMb
             );
             return DefaultMaxRequestBodySizeMb;
+        }
+
+        private static LogEventLevel ReadMinimumLogLevel()
+        {
+            string rawValue = Environment.GetEnvironmentVariable(LogLevelEnvName);
+            if (string.IsNullOrWhiteSpace(rawValue))
+            {
+                return LogEventLevel.Information;
+            }
+
+            return Enum.TryParse(rawValue.Trim(), ignoreCase: true, out LogEventLevel parsedLevel)
+                ? parsedLevel
+                : LogEventLevel.Information;
+        }
+
+        private static bool IsAttachmentServiceLog(LogEvent logEvent)
+        {
+            if (logEvent == null || !logEvent.Properties.TryGetValue("SourceContext", out LogEventPropertyValue sourceContext))
+            {
+                return false;
+            }
+
+            string value = sourceContext.ToString().Trim('"');
+            return string.Equals(value, typeof(AttachmentService).FullName, StringComparison.Ordinal);
         }
     }
 }
