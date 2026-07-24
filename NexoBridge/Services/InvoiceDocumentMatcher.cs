@@ -62,9 +62,37 @@ namespace NexoBridge.Services
             return InvoiceMatchResult.NotFound($"Nie znaleziono jednoznacznego dokumentu dla numeru {meta.InvoiceNumber} i NIP {meta.VendorNip}.", nipCandidates);
         }
 
+        public static InvoiceMatchResult MatchByExactKsefAndNip(IEnumerable<DokumentDoKsiegowania> documents, InvoiceMetadata meta)
+        {
+            string nipFront = NormalizeNip(meta?.VendorNip);
+            string ksefFront = NormalizeKsef(meta?.KsefNumber);
+            if (string.IsNullOrWhiteSpace(nipFront) || string.IsNullOrWhiteSpace(ksefFront))
+            {
+                return InvoiceMatchResult.Empty();
+            }
+
+            var matches = (documents ?? Enumerable.Empty<DokumentDoKsiegowania>())
+                .Where(d => string.Equals(NormalizeNip(d.PodmiotHistoria?.NIP), nipFront, StringComparison.OrdinalIgnoreCase))
+                .Where(d => string.Equals(NormalizeKsef(d.NumerKSeF), ksefFront, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (matches.Count == 1)
+            {
+                return InvoiceMatchResult.Matched("matchedByExactKsefAndNip", matches[0], ksefFront);
+            }
+
+            if (matches.Count > 1)
+            {
+                return InvoiceMatchResult.Ambiguous($"Znaleziono {matches.Count} dokumentow z tym samym NIP i numerem KSeF.", matches, ksefFront);
+            }
+
+            return InvoiceMatchResult.Empty();
+        }
+
         public static InvoiceMetadataMatchResult MatchMetadataForDocument(IEnumerable<InvoiceMetadata> metadata, DokumentDoKsiegowania document)
         {
-            var matches = (metadata ?? Enumerable.Empty<InvoiceMetadata>())
+            var metadataList = (metadata ?? Enumerable.Empty<InvoiceMetadata>()).ToList();
+            var matches = metadataList
                 .Select(m => new { Meta = m, Match = Match(new[] { document }, m) })
                 .Where(x => x.Match.Document != null)
                 .ToList();
@@ -85,6 +113,30 @@ namespace NexoBridge.Services
                 {
                     Status = "ambiguous",
                     Reason = "Wiele wpisow metadanych pasuje do tego samego dokumentu."
+                };
+            }
+
+            var ksefMatches = metadataList
+                .Select(m => new { Meta = m, Match = MatchByExactKsefAndNip(new[] { document }, m) })
+                .Where(x => x.Match.Document != null)
+                .ToList();
+
+            if (ksefMatches.Count == 1)
+            {
+                return new InvoiceMetadataMatchResult
+                {
+                    Status = ksefMatches[0].Match.Status,
+                    Metadata = ksefMatches[0].Meta,
+                    MatchedVariant = ksefMatches[0].Match.MatchedVariant
+                };
+            }
+
+            if (ksefMatches.Count > 1)
+            {
+                return new InvoiceMetadataMatchResult
+                {
+                    Status = "ambiguous",
+                    Reason = "Wiele wpisow metadanych ma ten sam NIP i numer KSeF."
                 };
             }
 
@@ -158,6 +210,12 @@ namespace NexoBridge.Services
         {
             string normalized = Normalize(input);
             return normalized.StartsWith("pl", StringComparison.OrdinalIgnoreCase) ? normalized.Substring(2) : normalized;
+        }
+
+        public static string NormalizeKsef(string input)
+        {
+            string normalized = input?.Trim();
+            return string.IsNullOrWhiteSpace(normalized) ? string.Empty : normalized;
         }
 
         public static string Describe(DokumentDoKsiegowania document)

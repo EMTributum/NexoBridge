@@ -3,6 +3,12 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.DependencyInjection;
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Runtime.Loader;
 using DotNetEnv;
 using NexoBridge.API;
 using NexoBridge.Services;
@@ -22,12 +28,18 @@ namespace NexoBridge
 
         public static void Main(string[] args)
         {
-            Env.Load();
+            LoadEnvironment();
+            RegisterNexoRuntimeResolvers();
 
             // =====================================================================
             // 1. INICJALIZACJA SERILOGA NA SAMYM POCZĄTKU
             // =====================================================================
             LogEventLevel minimumLogLevel = ReadMinimumLogLevel();
+            string logDirectory = Path.Combine(AppContext.BaseDirectory, "Logs");
+            Directory.CreateDirectory(logDirectory);
+            string mainLogPath = Path.Combine(logDirectory, "nexobridge-.log");
+            string attachmentDebugLogPath = Path.Combine(logDirectory, "nexobridge-attachments-debug-.log");
+
             Log.Logger = new LoggerConfiguration()
                 .MinimumLevel.Debug()
                 .MinimumLevel.Override("Microsoft", LogEventLevel.Warning) // Wycisza spam z ASP.NET
@@ -38,7 +50,7 @@ namespace NexoBridge
                     outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
                 // Format dla pliku tekstowego (nowy plik codziennie)
                 .WriteTo.File(
-                    path: "Logs/nexobridge-.log",
+                    path: mainLogPath,
                     rollingInterval: RollingInterval.Day,
                     retainedFileCountLimit: 14,
                     restrictedToMinimumLevel: minimumLogLevel,
@@ -47,7 +59,7 @@ namespace NexoBridge
                 .WriteTo.Logger(logger => logger
                     .Filter.ByIncludingOnly(IsAttachmentServiceLog)
                     .WriteTo.File(
-                        path: "Logs/nexobridge-attachments-debug-.log",
+                        path: attachmentDebugLogPath,
                         rollingInterval: RollingInterval.Day,
                         retainedFileCountLimit: 14,
                         restrictedToMinimumLevel: LogEventLevel.Debug,
@@ -58,7 +70,17 @@ namespace NexoBridge
             try
             {
                 Log.Information("Uruchamianie mikroserwisu NexoBridge...");
-                Log.Information("Poziom głównego logowania NexoBridge: {LogLevel}. Pełna diagnostyka załączników trafia do Logs/nexobridge-attachments-debug-.log.", minimumLogLevel);
+                Log.Information(
+                    "Poziom głównego logowania NexoBridge: {LogLevel}. Log główny: {MainLogPath}. Pełna diagnostyka załączników: {AttachmentDebugLogPath}.",
+                    minimumLogLevel,
+                    mainLogPath,
+                    attachmentDebugLogPath);
+                Log.ForContext("SourceContext", typeof(AttachmentService).FullName)
+                    .Debug(
+                        "[ZAŁĄCZNIKI DIAG START] Logger diagnostyczny załączników gotowy. Plik={AttachmentDebugLogPath}; BaseDir={BaseDirectory}; NexoRuntime={NexoRuntimeDirectory}.",
+                        attachmentDebugLogPath,
+                        AppContext.BaseDirectory,
+                        Path.Combine(AppContext.BaseDirectory, "NexoDLLs"));
 
                 long maxRequestBodySizeMb = ReadMaxRequestBodySizeMb();
                 long maxRequestBodySizeBytes = maxRequestBodySizeMb * 1024L * 1024L;
@@ -157,6 +179,18 @@ namespace NexoBridge
             return DefaultMaxRequestBodySizeMb;
         }
 
+        private static void LoadEnvironment()
+        {
+            string envPath = Path.Combine(AppContext.BaseDirectory, ".env");
+            if (File.Exists(envPath))
+            {
+                Env.Load(envPath);
+                return;
+            }
+
+            Env.Load();
+        }
+
         private static LogEventLevel ReadMinimumLogLevel()
         {
             string rawValue = Environment.GetEnvironmentVariable(LogLevelEnvName);
@@ -168,6 +202,101 @@ namespace NexoBridge
             return Enum.TryParse(rawValue.Trim(), ignoreCase: true, out LogEventLevel parsedLevel)
                 ? parsedLevel
                 : LogEventLevel.Information;
+        }
+
+        private static void RegisterNexoRuntimeResolvers()
+        {
+            string nexoRuntimeDirectory = Path.Combine(AppContext.BaseDirectory, "NexoDLLs");
+            if (!Directory.Exists(nexoRuntimeDirectory))
+            {
+                return;
+            }
+
+            AddNexoRuntimeDirectoriesToPath(nexoRuntimeDirectory);
+
+            AssemblyLoadContext.Default.Resolving += ResolveNexoManagedAssembly;
+            AssemblyLoadContext.Default.ResolvingUnmanagedDll += ResolveNexoNativeLibrary;
+            AppDomain.CurrentDomain.AssemblyResolve += ResolveNexoManagedAssemblyLegacy;
+        }
+
+        private static void AddNexoRuntimeDirectoriesToPath(string nexoRuntimeDirectory)
+        {
+            try
+            {
+                List<string> nexoDirectories = Directory
+                    .EnumerateDirectories(nexoRuntimeDirectory, "*", SearchOption.AllDirectories)
+                    .Prepend(nexoRuntimeDirectory)
+                    .ToList();
+
+                string currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+                HashSet<string> existingPathEntries = currentPath
+                    .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                List<string> missingDirectories = nexoDirectories
+                    .Where(directory => !existingPathEntries.Contains(directory))
+                    .ToList();
+
+                if (missingDirectories.Count > 0)
+                {
+                    string newPathPrefix = string.Join(Path.PathSeparator, missingDirectories);
+                    Environment.SetEnvironmentVariable("PATH", $"{newPathPrefix}{Path.PathSeparator}{currentPath}");
+                }
+            }
+            catch
+            {
+                // Resolver dalej sprobuje ladowac biblioteki po sciezce bezposredniej.
+            }
+        }
+
+        private static Assembly ResolveNexoManagedAssembly(AssemblyLoadContext context, AssemblyName assemblyName)
+        {
+            string candidatePath = FindNexoRuntimeFile($"{assemblyName.Name}.dll");
+            return string.IsNullOrWhiteSpace(candidatePath)
+                ? null
+                : context.LoadFromAssemblyPath(candidatePath);
+        }
+
+        private static Assembly ResolveNexoManagedAssemblyLegacy(object sender, ResolveEventArgs args)
+        {
+            string assemblyName = new AssemblyName(args.Name).Name;
+            string candidatePath = FindNexoRuntimeFile($"{assemblyName}.dll");
+            return string.IsNullOrWhiteSpace(candidatePath)
+                ? null
+                : Assembly.LoadFrom(candidatePath);
+        }
+
+        private static IntPtr ResolveNexoNativeLibrary(Assembly assembly, string libraryName)
+        {
+            string fileName = libraryName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+                ? libraryName
+                : $"{libraryName}.dll";
+
+            string candidatePath = FindNexoRuntimeFile(fileName);
+            return string.IsNullOrWhiteSpace(candidatePath)
+                ? IntPtr.Zero
+                : NativeLibrary.Load(candidatePath);
+        }
+
+        private static string FindNexoRuntimeFile(string fileName)
+        {
+            string nexoRuntimeDirectory = Path.Combine(AppContext.BaseDirectory, "NexoDLLs");
+            string directPath = Path.Combine(nexoRuntimeDirectory, fileName);
+            if (File.Exists(directPath))
+            {
+                return directPath;
+            }
+
+            try
+            {
+                return Directory
+                    .EnumerateFiles(nexoRuntimeDirectory, fileName, SearchOption.AllDirectories)
+                    .FirstOrDefault();
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static bool IsAttachmentServiceLog(LogEvent logEvent)

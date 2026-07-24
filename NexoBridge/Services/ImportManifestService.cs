@@ -41,6 +41,12 @@ namespace NexoBridge.Services
                     DecreeStatus = "pending"
                 };
 
+                if (!string.IsNullOrWhiteSpace(item.KsefNumber) &&
+                    string.IsNullOrWhiteSpace(InvoiceDocumentMatcher.NormalizeNip(item.VendorNip)))
+                {
+                    DodajWarning(item, "Metadane zawieraja numer KSeF, ale brakuje NIP dostawcy. Bez NIP nie uzyjemy bezpiecznego fallbacku po KSeF.");
+                }
+
                 documents.Add(item);
             }
 
@@ -173,6 +179,15 @@ namespace NexoBridge.Services
                 };
 
                 var match = InvoiceDocumentMatcher.Match(oczekujace, meta);
+                if (match.Document == null)
+                {
+                    var ksefMatch = InvoiceDocumentMatcher.MatchByExactKsefAndNip(oczekujace, meta);
+                    if (ksefMatch.Document != null || ksefMatch.Status == "ambiguous")
+                    {
+                        match = ksefMatch;
+                    }
+                }
+
                 item.MatchStatus = match.Status;
 
                 if (match.Document != null)
@@ -253,6 +268,15 @@ namespace NexoBridge.Services
                 };
 
                 var match = InvoiceDocumentMatcher.Match(documents, meta);
+                if (match.Document == null)
+                {
+                    var ksefMatch = InvoiceDocumentMatcher.MatchByExactKsefAndNip(documents, meta);
+                    if (ksefMatch.Document != null || ksefMatch.Status == "ambiguous")
+                    {
+                        match = ksefMatch;
+                    }
+                }
+
                 if (match.Document != null)
                 {
                     WypelnijDanePoczekalni(item, match.Document);
@@ -301,6 +325,31 @@ namespace NexoBridge.Services
                 metadataMatches[0].Report.WaitingRoomStatus = "found";
                 metadataMatches[0].Report.MatchStatus = metadataMatches[0].Match.Status;
                 return metadataMatches[0].Report;
+            }
+
+            var ksefMatches = manifest
+                .Where(d => d.Source == "frontendPackage")
+                .Select(d => new
+                {
+                    Report = d,
+                    Match = InvoiceDocumentMatcher.MatchByExactKsefAndNip(new[] { dokument }, new InvoiceMetadata
+                    {
+                        InvoiceNumber = d.InvoiceNumber,
+                        VendorNip = d.VendorNip,
+                        KsefNumber = d.KsefNumber,
+                        KsefCode = d.KsefCode,
+                        PdfFileName = d.PdfFileName
+                    })
+                })
+                .Where(x => x.Match.Document != null)
+                .ToList();
+
+            if (ksefMatches.Count == 1)
+            {
+                WypelnijDanePoczekalni(ksefMatches[0].Report, dokument);
+                ksefMatches[0].Report.WaitingRoomStatus = "found";
+                ksefMatches[0].Report.MatchStatus = ksefMatches[0].Match.Status;
+                return ksefMatches[0].Report;
             }
 
             return null;

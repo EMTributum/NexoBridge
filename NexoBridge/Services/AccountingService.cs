@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using NexoBridge.Models;
 using NexoBridge.Infrastructure;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -36,7 +37,10 @@ namespace NexoBridge.Services
             var menedzerImportu = _sfera.PodajObiektTypu<IOperacjeImportuKsiegowego>();
             var menedzerOkresow = _sfera.PodajObiektTypu<InsERT.Moria.Ksiegowosc.IOkresyObrachunkowe>();
 
-            var wszystkieOczekujace = menedzerDokumentow.Dane.Wszystkie().Where(d => (int)d.StatusKsiegowy == 2).ToList();
+            var wszystkieOczekujace = ((IEnumerable)menedzerDokumentow.Dane.Wszystkie())
+                .Cast<DokumentDoKsiegowania>()
+                .Where(d => (int)d.StatusKsiegowy == 2)
+                .ToList();
             var wybor = WaitingRoomDocumentFilter.SelectForNewMarker(wszystkieOczekujace, PobierzKontekstZnacznikaNowosci());
             LogujWyborPoczekalni(wybor);
             var oczekujace = wybor.Included;
@@ -47,8 +51,19 @@ namespace NexoBridge.Services
                 return (null, new List<Tuple<DokumentDoKsiegowania, SchematImportu>>(), oczekujace, new List<DokumentDoKsiegowania>(), new List<DokumentDoKsiegowania>());
             }
 
-            var obecnyOkres = menedzerOkresow.Dane.Wszystkie().ToList().LastOrDefault();
-            string nazwaOkresu = obecnyOkres != null ? obecnyOkres.Nazwa.ToString() : "BRAK_OKRESU";
+            var obecnyOkres = ((IEnumerable)menedzerOkresow.Dane.Wszystkie())
+                .Cast<object>()
+                .LastOrDefault();
+            string nazwaOkresu = "BRAK_OKRESU";
+            if (obecnyOkres != null)
+            {
+                try
+                {
+                    dynamic obecnyOkresDyn = obecnyOkres;
+                    nazwaOkresu = obecnyOkresDyn.Nazwa?.ToString() ?? nazwaOkresu;
+                }
+                catch { }
+            }
 
             await raportujPostep(80, $"Sędzia weryfikuje Warunki Wyboru dla okresu '{nazwaOkresu}'...");
             dynamic menedzerDynamiczny = menedzerImportu;

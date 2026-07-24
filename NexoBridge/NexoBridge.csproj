@@ -6,6 +6,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <nexoSdkBinPath>C:\Users\tomasz.bloch\SDKnexo\nexoSDK_58.0.2.8985\Bin\</nexoSdkBinPath>
     <nexoSdkNarzedziaPath>C:\Users\tomasz.bloch\SDKnexo\nexoSDK_58.0.2.8985\Narzedzia\</nexoSdkNarzedziaPath>
+    <NexoRuntimeSubdirectory>NexoDLLs\</NexoRuntimeSubdirectory>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <UseWPF>true</UseWPF>
@@ -43,6 +44,35 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
+  <Target Name="PlaceNexoReferencesInRuntimeSubfolder" AfterTargets="ResolveReferences" BeforeTargets="GenerateBuildDependencyFile;CopyFilesToOutputDirectory">
+    <ItemGroup>
+      <ReferenceCopyLocalPaths Update="@(ReferenceCopyLocalPaths)" Condition="$([System.String]::Copy('%(ReferenceCopyLocalPaths.FullPath)').Contains('\NexoDLLs\'))">
+        <DestinationSubDirectory>$(NexoRuntimeSubdirectory)</DestinationSubDirectory>
+        <TargetPath>$(NexoRuntimeSubdirectory)%(Filename)%(Extension)</TargetPath>
+      </ReferenceCopyLocalPaths>
+    </ItemGroup>
+  </Target>
+  <Target Name="CopyNexoRuntimeFolderToOutput" AfterTargets="CopyFilesToOutputDirectory">
+    <ItemGroup>
+      <NexoRuntimeFolderFile Include="$(MSBuildProjectDirectory)\NexoDLLs\**\*.*" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(NexoRuntimeFolderFile)"
+      DestinationFiles="@(NexoRuntimeFolderFile->'$(TargetDir)$(NexoRuntimeSubdirectory)%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true"
+      Condition="'@(NexoRuntimeFolderFile)' != ''" />
+    <Message Importance="high" Text="Skopiowano folder runtime nexo do $(TargetDir)$(NexoRuntimeSubdirectory)." Condition="'@(NexoRuntimeFolderFile)' != ''" />
+  </Target>
+  <Target Name="CopyNexoRuntimeFolderToPublish" AfterTargets="Publish" Condition="'$(PublishDir)' != ''">
+    <ItemGroup>
+      <NexoRuntimePublishFile Include="$(MSBuildProjectDirectory)\NexoDLLs\**\*.*" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(NexoRuntimePublishFile)"
+      DestinationFiles="@(NexoRuntimePublishFile->'$(PublishDir)$(NexoRuntimeSubdirectory)%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true"
+      Condition="'@(NexoRuntimePublishFile)' != ''" />
+  </Target>
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
     <PropertyGroup>
       <NexoPackageBuilderPath>$(nexoSdkNarzedziaPath)PackageAndInstallerBuilder.exe</NexoPackageBuilderPath>
@@ -52,6 +82,9 @@
       <NexoSdkRuntimeFile Include="$(nexoSdkBinPath)Xml.pak" Condition="Exists('$(nexoSdkBinPath)Xml.pak')" />
       <NexoSdkRuntimeFile Include="$(nexoSdkBinPath)ijwhost.dll" Condition="Exists('$(nexoSdkBinPath)ijwhost.dll')" />
       <NexoSdkRuntimeFile Include="$(nexoSdkBinPath)Microsoft.Data.SqlClient.SNI.dll" Condition="Exists('$(nexoSdkBinPath)Microsoft.Data.SqlClient.SNI.dll')" />
+      <NexoSdkRuntimeFile Include="$(MSBuildProjectDirectory)\NexoDLLs\Xml.pak" Condition="!Exists('$(nexoSdkBinPath)Xml.pak') And Exists('$(MSBuildProjectDirectory)\NexoDLLs\Xml.pak')" />
+      <NexoSdkRuntimeFile Include="$(MSBuildProjectDirectory)\NexoDLLs\ijwhost.dll" Condition="!Exists('$(nexoSdkBinPath)ijwhost.dll') And Exists('$(MSBuildProjectDirectory)\NexoDLLs\ijwhost.dll')" />
+      <NexoSdkRuntimeFile Include="$(MSBuildProjectDirectory)\NexoDLLs\Microsoft.Data.SqlClient.SNI.dll" Condition="!Exists('$(nexoSdkBinPath)Microsoft.Data.SqlClient.SNI.dll') And Exists('$(MSBuildProjectDirectory)\NexoDLLs\Microsoft.Data.SqlClient.SNI.dll')" />
     </ItemGroup>
     <Copy SourceFiles="@(NexoSdkRuntimeFile)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" Condition="'@(NexoSdkRuntimeFile)' != ''" />
     <Message Importance="high" Text="Pominięto kopiowanie plików SDK nexo - nie znaleziono plików w $(nexoSdkBinPath)." Condition="'@(NexoSdkRuntimeFile)' == ''" />

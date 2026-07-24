@@ -33,7 +33,7 @@ namespace NexoBridge.Services
 
         public async Task PodepnijZalacznikiAsync(
             ImportJob job,
-            dynamic rezultat,
+            object rezultat,
             List<Tuple<DokumentDoKsiegowania, SchematImportu>> zatwierdzone,
             List<DocumentProcessingReport> manifest,
             Func<int, string, Task> raportujPostep)
@@ -51,7 +51,7 @@ namespace NexoBridge.Services
                 { "EP", PobierzMenedzera("IZapisyWEP") }
             };
 
-            var listaWynikow = ((System.Collections.IEnumerable)rezultat).Cast<dynamic>().ToList();
+            var listaWynikow = ((IEnumerable)rezultat).Cast<object>().ToList();
             var podpieteZalaczniki = new List<string>();
             var niepodpieteZalaczniki = new List<string>();
             var kandydaciAudytu = new List<AttachmentAuditCandidate>();
@@ -189,8 +189,8 @@ namespace NexoBridge.Services
                         continue;
                     }
 
-                    dynamic dokumentyWynikowe = listaWynikow[i].WynikowePoprawneZapisy;
-                    if (dokumentyWynikowe == null)
+                    var wynikowe = PobierzWynikoweZapisy(listaWynikow[i]);
+                    if (wynikowe == null)
                     {
                         string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
                         niepodpieteZalaczniki.Add(wpis + " | brak WynikowePoprawneZapisy");
@@ -209,7 +209,6 @@ namespace NexoBridge.Services
                         continue;
                     }
 
-                    var wynikowe = ((System.Collections.IEnumerable)dokumentyWynikowe).Cast<dynamic>().ToList();
                     operacja.ResultEntriesCount = wynikowe.Count;
                     operacja.ResultEntriesDescription = OpiszWyniki(wynikowe);
                     _logger.LogDebug("[ZAŁĄCZNIK WYNIKOWE] Plik={Plik}; Dokument={Numer}; liczba={Count}; wyniki={Wyniki}",
@@ -218,200 +217,136 @@ namespace NexoBridge.Services
                         wynikowe.Count,
                         OpiszWyniki(wynikowe));
 
-                    using (var zalacznikBO = bibliotekaZalacznikow.Utworz())
+                    var celeDoPowiazania = new List<AttachmentTargetRef>();
+                    foreach (var wynik in wynikowe)
                     {
-                        zalacznikBO.Wczytaj(tempPath);
-                        zalacznikBO.Dane.Opis = "Oryginał ze Scanye";
-
-                        bool podpieto = false;
-                        var celeDoPowiazania = new List<AttachmentTargetRef>();
-                        foreach (var wynik in wynikowe)
+                        object wynikObj = wynik;
+                        string typWyniku = wynikObj?.GetType().Name;
+                        object dokumentId = PobierzDokumentId(wynik);
+                        AttachmentTargetRef cel = ZnajdzCelPowiazania(menedzerowie, wynik, dok);
+                        if (cel?.Entity != null)
                         {
-                            object wynikObj = (object)wynik;
-                            string typWyniku = wynikObj?.GetType().Name;
-                            object dokumentId = PobierzDokumentId(wynik);
-                            AttachmentTargetRef cel = ZnajdzCelPowiazania(menedzerowie, (object)wynik, dok);
-                            if (cel?.Entity != null)
-                            {
-                                cel.CanHaveLibrary = CzyMaBiblioteke(bibliotekaZalacznikow, cel.Entity, out string bibliotekaError);
-                                cel.LibraryCheckError = bibliotekaError;
-                                zalacznikBO.DodajPowiazanie((dynamic)cel.Entity);
-                                celeDoPowiazania.Add(cel);
-                                podpieto = true;
-                                string wynikTypLog = typWyniku ?? "brak";
-                                string encjaTypLog = cel.Entity?.GetType().FullName ?? "brak";
-                                string dokumentIdLog = dokumentId?.ToString() ?? "brak";
-                                _logger.LogDebug("[ZAŁĄCZNIK POWIĄZANIE] Plik={Plik}; Dokument={Numer}; wynikTyp={WynikTyp}; dokumentId={DokumentId}; encjaId={EncjaId}; encjaTyp={EncjaTyp}; menedzer={Manager}; czyMaBiblioteke={CzyMaBiblioteke}; bibliotekaBlad={BibliotekaBlad}",
-                                    zalacznik.FileName,
-                                    nrSystemowy,
-                                    wynikTypLog,
-                                    dokumentIdLog,
-                                    cel.EntityId,
-                                    encjaTypLog,
-                                    cel.ManagerKey,
-                                    FormatNullableBool(cel.CanHaveLibrary),
-                                    string.IsNullOrWhiteSpace(bibliotekaError) ? "brak" : bibliotekaError);
-                            }
-                            else
-                            {
-                                operacja.MissingEntityCount++;
-                                _logger.LogDebug("[ZAŁĄCZNIK BRAK ENCJI] Plik={Plik}; Dokument={Numer}; wynikTyp={WynikTyp}; dokumentId={DokumentId}",
-                                    zalacznik.FileName,
-                                    nrSystemowy,
-                                    typWyniku,
-                                    dokumentId);
-                            }
-                        }
-
-                        if (!podpieto)
-                        {
-                            string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
-                            niepodpieteZalaczniki.Add(wpis + " | brak powiązań z encjami wynikowymi");
-                            operacja.FinalStatus = "notAttached";
-                            operacja.FailureReason = "Nie znaleziono encji wynikowych do powiązania.";
-                            if (raport != null)
-                            {
-                                raport.AttachmentStatus = "notAttached";
-                                ImportManifestService.DodajWarning(raport, "Nie podpięto załącznika, bo nie znaleziono encji wynikowych do powiązania.");
-                            }
-                            _logger.LogDebug("[ZAŁĄCZNIK BEZ POWIĄZAŃ] Plik={Plik}; Dokument={Numer}; NIP={Nip}", zalacznik.FileName, nrSystemowy, nipSystemowy);
+                            cel.CanHaveLibrary = CzyMaBiblioteke(bibliotekaZalacznikow, cel.Entity, out string bibliotekaError);
+                            cel.LibraryCheckError = bibliotekaError;
+                            celeDoPowiazania.Add(cel);
+                            string wynikTypLog = typWyniku ?? "brak";
+                            string encjaTypLog = cel.Entity?.GetType().FullName ?? "brak";
+                            string dokumentIdLog = dokumentId?.ToString() ?? "brak";
+                            _logger.LogDebug("[ZAŁĄCZNIK POWIĄZANIE PLAN] Plik={Plik}; Dokument={Numer}; wynikTyp={WynikTyp}; dokumentId={DokumentId}; encjaId={EncjaId}; encjaTyp={EncjaTyp}; menedzer={Manager}; czyMaBiblioteke={CzyMaBiblioteke}; bibliotekaBlad={BibliotekaBlad}",
+                                zalacznik.FileName,
+                                nrSystemowy,
+                                wynikTypLog,
+                                dokumentIdLog,
+                                cel.EntityId,
+                                encjaTypLog,
+                                cel.ManagerKey,
+                                FormatNullableBool(cel.CanHaveLibrary),
+                                string.IsNullOrWhiteSpace(bibliotekaError) ? "brak" : bibliotekaError);
                         }
                         else
                         {
-                            _logger.LogDebug("[ZAŁĄCZNIK ZAPIS START] Plik={Plik}; Dokument={Numer}; NIP={Nip}; nazwaSfery={Skan}; bytes={Bytes}; sha256={Sha256}; powiazania={Powiazania}",
+                            operacja.MissingEntityCount++;
+                            _logger.LogDebug("[ZAŁĄCZNIK BRAK ENCJI] Plik={Plik}; Dokument={Numer}; wynikTyp={WynikTyp}; dokumentId={DokumentId}",
                                 zalacznik.FileName,
                                 nrSystemowy,
-                                nipSystemowy,
-                                bezpiecznaNazwa,
-                                zalacznik.Content?.Length ?? 0,
-                                sha256,
-                                OpiszCelePowiazania(celeDoPowiazania));
+                                typWyniku,
+                                dokumentId);
+                        }
+                    }
 
-                            bool zapisano = zalacznikBO.Zapisz();
-                            int? zapisanyZalacznikId = PobierzInt(zalacznikBO.Dane, "Id");
-                            string zapisanaNazwa = PobierzString(zalacznikBO.Dane, "Nazwa");
-                            string zapisanyTyp = PobierzString(zalacznikBO.Dane, "Typ");
-                            string invalidData = WyciagnijBledySfery(zalacznikBO);
-                            operacja.TargetsCount = celeDoPowiazania.Count;
-                            operacja.TargetsDescription = OpiszCelePowiazania(celeDoPowiazania);
-                            operacja.SaveResult = zapisano ? "primaryTrue" : "primaryFalse";
-                            operacja.SavedAttachmentId = zapisanyZalacznikId;
-                            operacja.SavedAttachmentName = zapisanaNazwa;
-                            operacja.SavedAttachmentType = zapisanyTyp;
-                            operacja.InvalidData = invalidData;
+                    if (celeDoPowiazania.Count == 0)
+                    {
+                        string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
+                        niepodpieteZalaczniki.Add(wpis + " | brak powiązań z encjami wynikowymi");
+                        operacja.FinalStatus = "notAttached";
+                        operacja.FailureReason = "Nie znaleziono encji wynikowych do powiązania.";
+                        if (raport != null)
+                        {
+                            raport.AttachmentStatus = "notAttached";
+                            ImportManifestService.DodajWarning(raport, "Nie podpięto załącznika, bo nie znaleziono encji wynikowych do powiązania.");
+                        }
+                        _logger.LogDebug("[ZAŁĄCZNIK BEZ POWIĄZAŃ] Plik={Plik}; Dokument={Numer}; NIP={Nip}", zalacznik.FileName, nrSystemowy, nipSystemowy);
+                        continue;
+                    }
 
-                            _logger.LogDebug("[ZAŁĄCZNIK ZAPIS] Plik={Plik}; Dokument={Numer}; NIP={Nip}; Zapisz={Zapisz}; zalacznikId={ZalacznikId}; powiazania={Powiazania}",
-                                zalacznik.FileName,
-                                nrSystemowy,
-                                nipSystemowy,
-                                zapisano,
-                                FormatNullableInt(zapisanyZalacznikId),
-                                celeDoPowiazania.Count);
-                            _logger.LogDebug("[ZAŁĄCZNIK ZAPIS SZCZEGÓŁY] Plik={Plik}; Dokument={Numer}; NIP={Nip}; Zapisz={Zapisz}; zalacznikId={ZalacznikId}; nazwa={Nazwa}; typ={Typ}; invalidData={InvalidData}",
-                                zalacznik.FileName,
-                                nrSystemowy,
-                                nipSystemowy,
-                                zapisano,
-                                FormatNullableInt(zapisanyZalacznikId),
-                                string.IsNullOrWhiteSpace(zapisanaNazwa) ? "brak" : zapisanaNazwa,
-                                string.IsNullOrWhiteSpace(zapisanyTyp) ? "brak" : zapisanyTyp,
-                                invalidData);
+                    _logger.LogDebug("[ZAŁĄCZNIK ZAPIS START] Plik={Plik}; Dokument={Numer}; NIP={Nip}; nazwaSfery={Skan}; bytes={Bytes}; sha256={Sha256}; powiazania={Powiazania}",
+                        zalacznik.FileName,
+                        nrSystemowy,
+                        nipSystemowy,
+                        bezpiecznaNazwa,
+                        zalacznik.Content?.Length ?? 0,
+                        sha256,
+                        OpiszCelePowiazania(celeDoPowiazania));
 
-                            if (zapisano)
+                    operacja.TargetsCount = celeDoPowiazania.Count;
+                    operacja.TargetsDescription = OpiszCelePowiazania(celeDoPowiazania);
+
+                    int zapisane = ZapiszZalacznikiOsobno(job, bibliotekaZalacznikow, tempPath, celeDoPowiazania, out string bledyZapisu, out List<AttachmentSaveResult> zapisaneCele);
+                    string wpisPodsumowania = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
+                    operacja.FallbackSavedCount = zapisane;
+                    operacja.FallbackTotalCount = celeDoPowiazania.Count;
+                    operacja.FallbackErrors = bledyZapisu;
+                    operacja.SaveResult = zapisane == celeDoPowiazania.Count ? "perTargetFull" : zapisane > 0 ? "perTargetPartial" : "perTargetFailed";
+
+                    var pierwszyZapis = zapisaneCele.FirstOrDefault();
+                    if (pierwszyZapis != null)
+                    {
+                        operacja.SavedAttachmentId = pierwszyZapis.AttachmentId;
+                        operacja.SavedAttachmentName = pierwszyZapis.AttachmentName;
+                        operacja.SavedAttachmentType = pierwszyZapis.AttachmentType;
+                    }
+
+                    if (zapisane > 0)
+                    {
+                        podpieteZalaczniki.Add(wpisPodsumowania + $" | zapisano {zapisane}/{celeDoPowiazania.Count}");
+                        operacja.FinalStatus = zapisane == celeDoPowiazania.Count ? "attachedPendingVerification" : "attachedPartial";
+                        if (raport != null)
+                        {
+                            raport.AttachmentStatus = zapisane == celeDoPowiazania.Count ? "attachedPendingVerification" : "attachedPartial";
+                            if (zapisane != celeDoPowiazania.Count)
                             {
-                                string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
-                                podpieteZalaczniki.Add(wpis);
-                                if (raport != null)
-                                {
-                                    raport.AttachmentStatus = "attachedPendingVerification";
-                                }
-                                operacja.FinalStatus = "attachedPendingVerification";
-                                kandydaciAudytu.AddRange(celeDoPowiazania.Select(cel => UtworzKandydataAudytu(
-                                    job,
-                                    zalacznik,
-                                    raport,
-                                    operacja,
-                                    cel,
-                                    bezpiecznaNazwa,
-                                    rozszerzenie,
-                                    zapisanyZalacznikId,
-                                    zapisanaNazwa,
-                                    zapisanyTyp,
-                                    sha256,
-                                    false)));
-
-                                _logger.LogDebug("[ZAŁĄCZNIK SUKCES SZCZEGÓŁY] Sfera przyjęła zapis pliku={Plik} pod nazwą '{Skan}' dla dokumentu={Numer}; NIP={Nip}; zalacznikId={ZalacznikId}; oczekujeNaAudyt=true",
-                                    zalacznik.FileName,
-                                    bezpiecznaNazwa,
-                                    nrSystemowy,
-                                    nipSystemowy,
-                                    FormatNullableInt(zapisanyZalacznikId));
-                            }
-                            else
-                            {
-                                string bledy = invalidData;
-                                int zapisaneFallback = ZapiszZalacznikiOsobno(bibliotekaZalacznikow, tempPath, celeDoPowiazania, out string fallbackBledy, out List<AttachmentSaveResult> fallbackZapisane);
-                                string wpis = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
-                                operacja.FallbackSavedCount = zapisaneFallback;
-                                operacja.FallbackTotalCount = celeDoPowiazania.Count;
-                                operacja.FallbackErrors = fallbackBledy;
-
-                                if (zapisaneFallback > 0)
-                                {
-                                    podpieteZalaczniki.Add(wpis + $" | fallback {zapisaneFallback}/{celeDoPowiazania.Count}");
-                                    operacja.SaveResult = zapisaneFallback == celeDoPowiazania.Count ? "fallbackFull" : "fallbackPartial";
-                                    operacja.FinalStatus = zapisaneFallback == celeDoPowiazania.Count ? "attachedPendingVerification" : "attachedPartial";
-                                    if (raport != null)
-                                    {
-                                        raport.AttachmentStatus = zapisaneFallback == celeDoPowiazania.Count ? "attachedPendingVerification" : "attachedPartial";
-                                        if (zapisaneFallback != celeDoPowiazania.Count)
-                                        {
-                                            ImportManifestService.DodajWarning(raport, $"Załącznik zapisano tylko częściowo fallbackiem: {zapisaneFallback}/{celeDoPowiazania.Count}. Błędy: {fallbackBledy}");
-                                        }
-                                    }
-
-                                    kandydaciAudytu.AddRange(fallbackZapisane.Select(zapis => UtworzKandydataAudytu(
-                                        job,
-                                        zalacznik,
-                                        raport,
-                                        operacja,
-                                        zapis.Target,
-                                        bezpiecznaNazwa,
-                                        rozszerzenie,
-                                        zapis.AttachmentId,
-                                        zapis.AttachmentName,
-                                        zapis.AttachmentType,
-                                        sha256,
-                                        true)));
-
-                                    _logger.LogDebug("[ZAŁĄCZNIK SUKCES FALLBACK] Plik={Plik}; Dokument={Numer}; NIP={Nip}; zapisane={Saved}/{Total}; pierwotnyBlad={Bledy}; fallbackBledy={FallbackBledy}",
-                                        zalacznik.FileName,
-                                        nrSystemowy,
-                                        nipSystemowy,
-                                        zapisaneFallback,
-                                        celeDoPowiazania.Count,
-                                        bledy,
-                                        fallbackBledy);
-                                }
-                                else
-                                {
-                                    niepodpieteZalaczniki.Add(wpis + $" | Zapisz=false | {bledy} | fallback=false | {fallbackBledy}");
-                                    operacja.FinalStatus = "notAttached";
-                                    operacja.FailureReason = $"Zapisz=false. Fallback nie zapisał żadnego powiązania. Błędy={bledy}; fallback={fallbackBledy}";
-                                    if (raport != null)
-                                    {
-                                        raport.AttachmentStatus = "notAttached";
-                                        ImportManifestService.DodajWarning(raport, $"Nie udało się zapisać załącznika w Sferze: {bledy}. Fallback: {fallbackBledy}");
-                                    }
-                                    _logger.LogDebug("[ZAŁĄCZNIK ZAPIS NIEUDANY] Plik={Plik}; Dokument={Numer}; NIP={Nip}; Błędy={Bledy}; fallbackBledy={FallbackBledy}",
-                                        zalacznik.FileName,
-                                        nrSystemowy,
-                                        nipSystemowy,
-                                        bledy,
-                                        fallbackBledy);
-                                }
+                                ImportManifestService.DodajWarning(raport, $"Załącznik zapisano tylko na części zapisów wynikowych: {zapisane}/{celeDoPowiazania.Count}. Błędy: {bledyZapisu}");
                             }
                         }
+
+                        kandydaciAudytu.AddRange(zapisaneCele.Select(zapis => UtworzKandydataAudytu(
+                            job,
+                            zalacznik,
+                            raport,
+                            operacja,
+                            zapis.Target,
+                            bezpiecznaNazwa,
+                            rozszerzenie,
+                            zapis.AttachmentId,
+                            zapis.AttachmentName,
+                            zapis.AttachmentType,
+                            sha256,
+                            zapis.SavedByFreshSession)));
+
+                        _logger.LogDebug("[ZAŁĄCZNIK ZAPIS OK] Plik={Plik}; Dokument={Numer}; NIP={Nip}; zapisane={Saved}/{Total}; tryb={Tryby}; bledy={Bledy}",
+                            zalacznik.FileName,
+                            nrSystemowy,
+                            nipSystemowy,
+                            zapisane,
+                            celeDoPowiazania.Count,
+                            ListaDoLogu(zapisaneCele.Select(z => z.SavePath)),
+                            bledyZapisu);
+                    }
+                    else
+                    {
+                        niepodpieteZalaczniki.Add(wpisPodsumowania + $" | zapis=0/{celeDoPowiazania.Count} | {bledyZapisu}");
+                        operacja.FinalStatus = "notAttached";
+                        operacja.FailureReason = $"Nie zapisano załącznika na żadnym zapisie wynikowym. Błędy={bledyZapisu}";
+                        if (raport != null)
+                        {
+                            raport.AttachmentStatus = "notAttached";
+                            ImportManifestService.DodajWarning(raport, $"Nie udało się zapisać załącznika w Sferze: {bledyZapisu}");
+                        }
+                        _logger.LogDebug("[ZAŁĄCZNIK ZAPIS NIEUDANY] Plik={Plik}; Dokument={Numer}; NIP={Nip}; Błędy={Bledy}",
+                            zalacznik.FileName,
+                            nrSystemowy,
+                            nipSystemowy,
+                            bledyZapisu);
                     }
                 }
                 catch (Exception ex)
@@ -516,7 +451,8 @@ namespace NexoBridge.Services
         }
 
         private int ZapiszZalacznikiOsobno(
-            dynamic bibliotekaZalacznikow,
+            ImportJob job,
+            object bibliotekaZalacznikow,
             string tempPath,
             IEnumerable<AttachmentTargetRef> cele,
             out string bledy,
@@ -525,50 +461,202 @@ namespace NexoBridge.Services
             var errors = new List<string>();
             zapisaneCele = new List<AttachmentSaveResult>();
             int saved = 0;
+            SferaEngine freshEngine = null;
+            Uchwyt freshSfera = null;
+            object freshBibliotekaZalacznikow = null;
 
-            foreach (var cel in cele ?? Enumerable.Empty<AttachmentTargetRef>())
+            try
             {
-                try
+                foreach (var cel in cele ?? Enumerable.Empty<AttachmentTargetRef>())
                 {
-                    using (var pojedynczyBO = bibliotekaZalacznikow.Utworz())
+                    if (ZapiszZalacznikDlaCelu(
+                        bibliotekaZalacznikow,
+                        _sfera,
+                        tempPath,
+                        cel,
+                        "currentSession",
+                        savedByFreshSession: false,
+                        out AttachmentSaveResult zapisany,
+                        out string blad))
                     {
-                        pojedynczyBO.Wczytaj(tempPath);
-                        pojedynczyBO.Dane.Opis = "Oryginał ze Scanye";
-                        pojedynczyBO.DodajPowiazanie((dynamic)cel.Entity);
+                        saved++;
+                        zapisaneCele.Add(zapisany);
+                        continue;
+                    }
 
-                        if (pojedynczyBO.Zapisz())
+                    errors.Add($"{OpiszCelPowiazania(cel)}: currentSession={blad}");
+
+                    if (_freshSferaFactory == null)
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        if (freshEngine == null)
                         {
-                            int? fallbackAttachmentId = PobierzInt(pojedynczyBO.Dane, "Id");
-                            string fallbackAttachmentName = PobierzString(pojedynczyBO.Dane, "Nazwa");
-                            string fallbackAttachmentType = PobierzString(pojedynczyBO.Dane, "Typ");
-                            saved++;
-                            zapisaneCele.Add(new AttachmentSaveResult
+                            freshEngine = _freshSferaFactory(job, (_, __) => { });
+                            freshSfera = freshEngine?.Sfera;
+                            if (freshSfera == null)
                             {
-                                Target = cel,
-                                AttachmentId = fallbackAttachmentId,
-                                AttachmentName = fallbackAttachmentName,
-                                AttachmentType = fallbackAttachmentType
-                            });
-                            _logger.LogDebug("[ZAŁĄCZNIK FALLBACK WYNIK] target={Target}; Zapisz=true; zalacznikId={ZalacznikId}; nazwa={Nazwa}; typ={Typ}",
-                                OpiszCelPowiazania(cel),
-                                FormatNullableInt(fallbackAttachmentId),
-                                fallbackAttachmentName ?? "brak",
-                                fallbackAttachmentType ?? "brak");
+                                throw new InvalidOperationException("Fabryka świeżej sesji Sfery nie zwróciła uchwytu.");
+                            }
+
+                            freshBibliotekaZalacznikow = freshSfera.PodajObiektTypu<InsERT.Moria.BibliotekaZalacznikow.IBibliotekaZalacznikow>();
+                            _logger.LogDebug("[ZAŁĄCZNIK FRESH SESSION] JobId={JobId}; Uruchomiono świeżą sesję Sfery do awaryjnego zapisu załączników.", job.JobId);
+                        }
+
+                        if (ZapiszZalacznikDlaCelu(
+                            freshBibliotekaZalacznikow,
+                            freshSfera,
+                            tempPath,
+                            cel,
+                            "freshSessionFallback",
+                            savedByFreshSession: true,
+                            out AttachmentSaveResult zapisanyFresh,
+                            out string bladFresh))
+                        {
+                            saved++;
+                            zapisaneCele.Add(zapisanyFresh);
                         }
                         else
                         {
-                            errors.Add($"{OpiszCelPowiazania(cel)}: {WyciagnijBledySfery(pojedynczyBO)}");
+                            errors.Add($"{OpiszCelPowiazania(cel)}: freshSessionFallback={bladFresh}");
                         }
                     }
+                    catch (Exception ex)
+                    {
+                        errors.Add($"{OpiszCelPowiazania(cel)}: freshSessionFallback wyjątek={ex.GetBaseException().Message}");
+                    }
                 }
-                catch (Exception ex)
-                {
-                    errors.Add($"{OpiszCelPowiazania(cel)}: {ex.GetBaseException().Message}");
-                }
+            }
+            finally
+            {
+                freshEngine?.Dispose();
             }
 
             bledy = errors.Count == 0 ? "brak" : string.Join(" | ", errors);
             return saved;
+        }
+
+        private bool ZapiszZalacznikDlaCelu(
+            object bibliotekaZalacznikow,
+            Uchwyt sfera,
+            string tempPath,
+            AttachmentTargetRef cel,
+            string savePath,
+            bool savedByFreshSession,
+            out AttachmentSaveResult zapisany,
+            out string blad)
+        {
+            zapisany = null;
+            blad = null;
+
+            try
+            {
+                object encja = ZnajdzEncjeDlaCelu(sfera, cel);
+                if (encja == null)
+                {
+                    blad = $"Nie znaleziono świeżej encji dla celu: {OpiszCelPowiazania(cel)}";
+                    return false;
+                }
+
+                var zapisanyCel = SkopiujCelZEncja(cel, encja);
+                zapisanyCel.CanHaveLibrary = CzyMaBiblioteke(bibliotekaZalacznikow, encja, out string bibliotekaError);
+                zapisanyCel.LibraryCheckError = bibliotekaError;
+
+                using (var zalacznikBO = ((dynamic)bibliotekaZalacznikow).Utworz())
+                {
+                    zalacznikBO.Wczytaj(tempPath);
+                    zalacznikBO.Dane.Opis = "Oryginał ze Scanye";
+                    zalacznikBO.DodajPowiazanie((dynamic)encja);
+
+                    if (!zalacznikBO.Zapisz())
+                    {
+                        blad = WyciagnijBledySfery(zalacznikBO);
+                        return false;
+                    }
+
+                    int? attachmentId = PobierzInt(zalacznikBO.Dane, "Id");
+                    string attachmentName = PobierzString(zalacznikBO.Dane, "Nazwa");
+                    string attachmentType = PobierzString(zalacznikBO.Dane, "Typ");
+
+                    zapisany = new AttachmentSaveResult
+                    {
+                        Target = zapisanyCel,
+                        AttachmentId = attachmentId,
+                        AttachmentName = attachmentName,
+                        AttachmentType = attachmentType,
+                        SavePath = savePath,
+                        SavedByFreshSession = savedByFreshSession
+                    };
+
+                    _logger.LogDebug("[ZAŁĄCZNIK ZAPIS TARGET OK] tryb={Tryb}; target={Target}; zalacznikId={ZalacznikId}; nazwa={Nazwa}; typ={Typ}; czyMaBiblioteke={CzyMaBiblioteke}; bibliotekaBlad={BibliotekaBlad}",
+                        savePath,
+                        OpiszCelPowiazania(zapisanyCel),
+                        FormatNullableInt(attachmentId),
+                        attachmentName ?? "brak",
+                        attachmentType ?? "brak",
+                        FormatNullableBool(zapisanyCel.CanHaveLibrary),
+                        string.IsNullOrWhiteSpace(bibliotekaError) ? "brak" : bibliotekaError);
+
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                blad = ex.GetBaseException().Message;
+                return false;
+            }
+        }
+
+        private object ZnajdzEncjeDlaCelu(Uchwyt sfera, AttachmentTargetRef cel)
+        {
+            if (sfera == null || cel == null)
+            {
+                return null;
+            }
+
+            string nazwaInterfejsu = PobierzInterfejsMenedzera(cel.ManagerKey);
+            if (string.IsNullOrWhiteSpace(nazwaInterfejsu))
+            {
+                return null;
+            }
+
+            dynamic manager = PobierzMenedzera(nazwaInterfejsu, sfera);
+            return ZnajdzFizycznaEncje(manager, cel.EntityId ?? cel.DocumentId);
+        }
+
+        private string PobierzInterfejsMenedzera(string managerKey)
+        {
+            switch (managerKey)
+            {
+                case "KPiR":
+                    return "IZapisyWKPiR";
+                case "Vat":
+                    return "IZapisyWEwidencjiVAT";
+                case "Dekret":
+                    return "IDekrety";
+                case "EP":
+                    return "IZapisyWEP";
+                default:
+                    return null;
+            }
+        }
+
+        private AttachmentTargetRef SkopiujCelZEncja(AttachmentTargetRef cel, object encja)
+        {
+            return new AttachmentTargetRef
+            {
+                Entity = encja,
+                ManagerKey = cel.ManagerKey,
+                ResultType = cel.ResultType,
+                DocumentId = cel.DocumentId,
+                EntityId = PobierzInt(encja, "Id") ?? cel.EntityId ?? cel.DocumentId,
+                EntityType = encja?.GetType().FullName ?? cel.EntityType,
+                CanHaveLibrary = cel.CanHaveLibrary,
+                LibraryCheckError = cel.LibraryCheckError
+            };
         }
 
         private async Task ZweryfikujZalacznikiWSwiezejSesjiAsync(
@@ -883,7 +971,7 @@ namespace NexoBridge.Services
             return $"count={list.Count}; withPdf={list.Count(m => !string.IsNullOrWhiteSpace(m.PdfFileName))}; withKsef={list.Count(m => !string.IsNullOrWhiteSpace(m.KsefNumber))}; withKsefCode={list.Count(m => !string.IsNullOrWhiteSpace(m.KsefCode))}; missingInvoiceNumber={list.Count(m => string.IsNullOrWhiteSpace(m.InvoiceNumber))}; missingVendorNip={list.Count(m => string.IsNullOrWhiteSpace(m.VendorNip))}; duplicateInvoiceKeys={ListaDoLogu(duplicateInvoiceKeys)}";
         }
 
-        private string OpiszWyniki(IEnumerable<dynamic> wyniki)
+        private string OpiszWyniki(IEnumerable<object> wyniki)
         {
             if (wyniki == null) return "brak";
 
@@ -895,9 +983,46 @@ namespace NexoBridge.Services
             return ListaDoLogu(opisy);
         }
 
-        private object PobierzDokumentId(dynamic wynik)
+        private List<object> PobierzWynikoweZapisy(object wynikOperacji)
         {
-            try { return wynik?.DokumentId; } catch { return null; }
+            if (wynikOperacji == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                dynamic wynikDyn = wynikOperacji;
+                object dokumentyWynikowe = wynikDyn.WynikowePoprawneZapisy;
+                if (dokumentyWynikowe == null)
+                {
+                    return null;
+                }
+
+                if (dokumentyWynikowe is IEnumerable enumerable)
+                {
+                    return enumerable.Cast<object>().ToList();
+                }
+
+                return new List<object>();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private object PobierzDokumentId(object wynik)
+        {
+            try
+            {
+                dynamic wynikDyn = wynik;
+                return wynikDyn?.DokumentId;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private string WyciagnijBledySfery(dynamic obiektBO)
@@ -1491,6 +1616,8 @@ namespace NexoBridge.Services
             public int? AttachmentId { get; set; }
             public string AttachmentName { get; set; }
             public string AttachmentType { get; set; }
+            public string SavePath { get; set; }
+            public bool SavedByFreshSession { get; set; }
         }
 
         private sealed class AttachmentAuditCandidate

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using NexoBridge.Infrastructure;
 using NexoBridge.Models;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -138,7 +139,7 @@ namespace NexoBridge.Services
                     await decreeProgress.ReportAsync(5, "Dekretacja dokumentów...");
                     var (rezultat, zatwierdzone, oczekujace, brakSchematu, bledneSchematy) = await _accountingService.DekretujAsync(dataRozliczenia, packageContext, decreeProgress.ReportAsync);
                     zatwierdzoneCount = zatwierdzone.Count;
-                    AktualizujStatusyDekretacji(finalReport.Documents, rezultat, zatwierdzone, brakSchematu, bledneSchematy);
+                    AktualizujStatusyDekretacji(finalReport.Documents, (object)rezultat, zatwierdzone, brakSchematu, bledneSchematy);
                     await decreeProgress.CompleteAsync($"Dekretacja zakończona. Zadekretowano {zatwierdzoneCount} dok.");
 
                     // =========================================================
@@ -151,9 +152,9 @@ namespace NexoBridge.Services
                         {
                             Func<int, string, Task> attachmentsReporter = attachmentsProgress.ReportAsync;
                             await attachmentsProgress.ReportAsync(5, "Podpinanie załączników PDF...");
-                            await _attachmentService.PodepnijZalacznikiAsync(job, rezultat, zatwierdzone, finalReport.Documents, attachmentsReporter);
-                            await _ksefNumberAssignmentService.PrzypiszKodyPoDekretacjiAsync(job, rezultat, zatwierdzone, finalReport.Documents, attachmentsReporter);
-                            await _ksefNumberAssignmentService.ZweryfikujPoDekretacjiAsync(job, rezultat, zatwierdzone, finalReport.Documents, attachmentsReporter);
+                            await _attachmentService.PodepnijZalacznikiAsync(job, (object)rezultat, zatwierdzone, finalReport.Documents, attachmentsReporter);
+                            await _ksefNumberAssignmentService.PrzypiszKodyPoDekretacjiAsync(job, (object)rezultat, zatwierdzone, finalReport.Documents, attachmentsReporter);
+                            await _ksefNumberAssignmentService.ZweryfikujPoDekretacjiAsync(job, (object)rezultat, zatwierdzone, finalReport.Documents, attachmentsReporter);
                             await attachmentsProgress.CompleteAsync("Obsługa załączników oraz danych KSeF zakończona.");
                         }
                         else
@@ -255,7 +256,7 @@ namespace NexoBridge.Services
 
         private void AktualizujStatusyDekretacji(
             List<DocumentProcessingReport> manifest,
-            dynamic rezultat,
+            object rezultat,
             List<Tuple<DokumentDoKsiegowania, SchematImportu>> zatwierdzone,
             List<DokumentDoKsiegowania> brakSchematu,
             List<DokumentDoKsiegowania> bledneSchematy)
@@ -313,10 +314,11 @@ namespace NexoBridge.Services
                 var resultEntries = new List<DocumentResultEntry>();
                 foreach (var wynik in wynikowe)
                 {
+                    object wynikObj = wynik;
                     resultEntries.Add(new DocumentResultEntry
                     {
-                        ResultType = wynik?.GetType().Name,
-                        DocumentId = PobierzDokumentId(wynik)
+                        ResultType = wynikObj?.GetType().Name,
+                        DocumentId = PobierzDokumentId(wynikObj)
                     });
                 }
                 raport.ResultEntries = resultEntries;
@@ -329,31 +331,33 @@ namespace NexoBridge.Services
             }
         }
 
-        private List<dynamic> PobierzWynikiOperacji(dynamic rezultat)
+        private List<object> PobierzWynikiOperacji(object rezultat)
         {
-            if (rezultat == null) return new List<dynamic>();
-            try { return ((System.Collections.IEnumerable)rezultat).Cast<dynamic>().ToList(); }
-            catch { return new List<dynamic>(); }
+            if (rezultat == null) return new List<object>();
+            try { return ((IEnumerable)rezultat).Cast<object>().ToList(); }
+            catch { return new List<object>(); }
         }
 
-        private List<dynamic> PobierzWynikoweZapisy(dynamic wynikOperacji)
+        private List<object> PobierzWynikoweZapisy(object wynikOperacji)
         {
             try
             {
-                var wynikowe = (System.Collections.IEnumerable)wynikOperacji.WynikowePoprawneZapisy;
-                return wynikowe?.Cast<dynamic>().ToList() ?? new List<dynamic>();
+                dynamic wynikOperacjiDyn = wynikOperacji;
+                var wynikowe = (IEnumerable)wynikOperacjiDyn.WynikowePoprawneZapisy;
+                return wynikowe?.Cast<object>().ToList() ?? new List<object>();
             }
             catch
             {
-                return new List<dynamic>();
+                return new List<object>();
             }
         }
 
-        private int? PobierzDokumentId(dynamic wynik)
+        private int? PobierzDokumentId(object wynik)
         {
             try
             {
-                object id = wynik?.DokumentId;
+                dynamic wynikDyn = wynik;
+                object id = wynikDyn?.DokumentId;
                 if (id == null) return null;
                 return Convert.ToInt32(id);
             }

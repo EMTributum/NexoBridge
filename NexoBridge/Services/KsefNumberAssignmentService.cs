@@ -5,6 +5,7 @@ using InsERT.Moria.Sfera;
 using Microsoft.Extensions.Logging;
 using NexoBridge.Models;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -40,7 +41,8 @@ namespace NexoBridge.Services
             await raportujPostep(65, "Audyt numerów KSeF w Poczekalni...");
 
             var menedzerDokumentow = _sfera.PodajObiektTypu<IDokumentyDoKsiegowania>();
-            var oczekujace = menedzerDokumentow.Dane.Wszystkie()
+            var oczekujace = ((IEnumerable)menedzerDokumentow.Dane.Wszystkie())
+                .Cast<DokumentDoKsiegowania>()
                 .Where(d => (int)d.StatusKsiegowy == 2)
                 .ToList();
 
@@ -52,6 +54,24 @@ namespace NexoBridge.Services
                 string ksefNumber = OczyscNumerKsef(meta.KsefNumber);
                 var raport = ZnajdzRaport(manifest, meta);
                 var match = InvoiceDocumentMatcher.Match(oczekujace, meta);
+                if (match.Document == null)
+                {
+                    var fallbackPoKsef = InvoiceDocumentMatcher.MatchByExactKsefAndNip(oczekujace, meta);
+                    if (fallbackPoKsef.Document != null || fallbackPoKsef.Status == "ambiguous")
+                    {
+                        if (fallbackPoKsef.Document != null)
+                        {
+                            _logger.LogInformation("[KSEF MATCH FALLBACK] Faktura={Numer}; NIP={Nip}; KSeF={Ksef}; dokument={Dokument}; reason={Reason}",
+                                meta.InvoiceNumber,
+                                meta.VendorNip,
+                                ksefNumber,
+                                fallbackPoKsef.Document.NumerDokumentu,
+                                match.Reason);
+                        }
+
+                        match = fallbackPoKsef;
+                    }
+                }
 
                 if (match.Document == null)
                 {
@@ -113,7 +133,7 @@ namespace NexoBridge.Services
 
         public async Task ZweryfikujPoDekretacjiAsync(
             ImportJob job,
-            dynamic rezultat,
+            object rezultat,
             List<Tuple<DokumentDoKsiegowania, SchematImportu>> zatwierdzone,
             List<DocumentProcessingReport> manifest,
             Func<int, string, Task> raportujPostep)
@@ -136,7 +156,7 @@ namespace NexoBridge.Services
 
             await raportujPostep(92, "Weryfikacja numerów KSeF po dekretacji...");
 
-            var listaWynikow = ((System.Collections.IEnumerable)rezultat).Cast<dynamic>().ToList();
+            var listaWynikow = PobierzWynikoweOperacje(rezultat);
             var menedzerowie = new Dictionary<string, dynamic>
             {
                 { "KPiR", PobierzMenedzera("IZapisyWKPiR") },
@@ -170,7 +190,7 @@ namespace NexoBridge.Services
                     continue;
                 }
 
-                var wynikowe = PobierzWynikoweZapisy(listaWynikow[i]);
+                var wynikowe = PobierzWynikoweZapisy((object)listaWynikow[i]);
                 if (wynikowe.Count == 0)
                 {
                     string warning = $"Brak wynikowych zapisów księgowych; nie potwierdzono KSeF {oczekiwanyKsef}.";
@@ -224,7 +244,7 @@ namespace NexoBridge.Services
 
         public async Task PrzypiszKodyPoDekretacjiAsync(
             ImportJob job,
-            dynamic rezultat,
+            object rezultat,
             List<Tuple<DokumentDoKsiegowania, SchematImportu>> zatwierdzone,
             List<DocumentProcessingReport> manifest,
             Func<int, string, Task> raportujPostep)
@@ -262,7 +282,12 @@ namespace NexoBridge.Services
                 return;
             }
 
-            var listaWynikow = PobierzWynikoweOperacje(rezultat);
+            var listaWynikow = PobierzWynikoweOperacje((object)rezultat);
+            var wszystkieWynikoweZapisy = new List<dynamic>();
+            foreach (var wynikOperacji in listaWynikow)
+            {
+                wszystkieWynikoweZapisy.AddRange(PobierzWynikoweZapisy((object)wynikOperacji));
+            }
             int zapisane = 0;
             var problemy = new List<string>();
 
@@ -282,9 +307,10 @@ namespace NexoBridge.Services
 
                 if (!string.IsNullOrWhiteSpace(OczyscNumerKsef(meta?.KsefNumber)))
                 {
+                    UstawStatusKoduKsef(raport, "skippedRealKsefNumber", null);
                     _logger.LogInformation("[KSEF CODE POMINIĘTO] Dokument {Numer} ma realny numer KSeF, więc kod techniczny {Kod} nie jest przenoszony.",
-                        dokumentZrodlowy?.NumerDokumentu,
-                        kod);
+                        (object)(dokumentZrodlowy?.NumerDokumentu ?? "brak"),
+                        (object)kod);
                     continue;
                 }
 
@@ -300,27 +326,34 @@ namespace NexoBridge.Services
                     continue;
                 }
 
-                if (i >= listaWynikow.Count)
-                {
-                    string warning = $"Brak wyniku dekretacji pod indeksem {i}; nie przeniesiono technicznego kodu KSeF {kod}.";
-                    UstawStatusKoduKsef(raport, "notAssignedAfterDecree", warning);
-                    problemy.Add($"{dokumentZrodlowy?.NumerDokumentu}: brak wyniku dekretacji");
-                    continue;
-                }
+                List<dynamic> wynikoweZIndeksu = i < listaWynikow.Count
+                    ? PobierzWynikoweZapisy((object)listaWynikow[i])
+                    : new List<dynamic>();
 
-                object wynikOperacji = listaWynikow[i];
-                var wynikowe = PobierzWynikoweZapisy(wynikOperacji);
-                var zapisyVat = ZnajdzZapisyVat(mgrVat, wynikowe, dokumentZrodlowy).ToList();
+                IEnumerable<object> znalezioneZapisyVat = ZnajdzZapisyVat(
+                    mgrVat,
+                    wynikoweZIndeksu,
+                    wszystkieWynikoweZapisy,
+                    dokumentZrodlowy,
+                    meta,
+                    out string zrodlaZapisuVat);
+                var zapisyVat = znalezioneZapisyVat.ToList();
+
                 if (zapisyVat.Count == 0)
                 {
                     string warning = $"Nie znaleziono wynikowego zapisu VAT; nie przeniesiono technicznego kodu KSeF {kod}.";
                     UstawStatusKoduKsef(raport, "noVatResult", warning);
                     problemy.Add($"{dokumentZrodlowy?.NumerDokumentu}: brak zapisu VAT");
-                    _logger.LogWarning("[KSEF CODE BRAK VAT] Dokument={Numer}; NIP={Nip}; kod={Kod}; wyniki={Wyniki}",
-                        dokumentZrodlowy?.NumerDokumentu,
-                        dokumentZrodlowy?.PodmiotHistoria?.NIP,
-                        kod,
-                        string.Join("; ", wynikowe.Select(w => $"{w?.GetType().Name}: dokumentId={PobierzDokumentId(w)}")));
+                    string opisWynikowZIndeksu = OpiszWyniki(wynikoweZIndeksu);
+                    string opisWszystkichVat = OpiszWyniki(wszystkieWynikoweZapisy
+                        .Where(w => ZawieraTyp((w as object)?.GetType().Name, "VAT"))
+                        .ToList());
+                    _logger.LogWarning("[KSEF CODE BRAK VAT] Dokument={Numer}; NIP={Nip}; kod={Kod}; wynikiZIndeksu={WynikiZIndeksu}; wszystkieWynikiVAT={WszystkieWynikiVat}",
+                        (object)(dokumentZrodlowy?.NumerDokumentu ?? "brak"),
+                        (object)(dokumentZrodlowy?.PodmiotHistoria?.NIP ?? "brak"),
+                        (object)kod,
+                        (object)opisWynikowZIndeksu,
+                        (object)opisWszystkichVat);
                     continue;
                 }
 
@@ -343,10 +376,16 @@ namespace NexoBridge.Services
                     zapisane++;
                     UstawStatusKoduKsef(raport, "assignedAfterDecree", null);
                     _logger.LogInformation("[KSEF CODE OK] Dokument {Numer}; NIP={Nip}; kod={Kod}; zapisyVAT={Count}.",
-                        dokumentZrodlowy?.NumerDokumentu,
-                        dokumentZrodlowy?.PodmiotHistoria?.NIP,
-                        kod,
-                        zapisyVat.Count);
+                        (object)(dokumentZrodlowy?.NumerDokumentu ?? "brak"),
+                        (object)(dokumentZrodlowy?.PodmiotHistoria?.NIP ?? "brak"),
+                        (object)kod,
+                        (object)zapisyVat.Count);
+                    _logger.LogDebug("[KSEF CODE DIAG] Dokument={Numer}; NIP={Nip}; kod={Kod}; zrodlaZapisuVAT={Zrodla}; wynikiZIndeksu={WynikiZIndeksu}",
+                        (object)(dokumentZrodlowy?.NumerDokumentu ?? "brak"),
+                        (object)(dokumentZrodlowy?.PodmiotHistoria?.NIP ?? "brak"),
+                        (object)kod,
+                        (object)zrodlaZapisuVat,
+                        (object)OpiszWyniki(wynikoweZIndeksu));
                 }
                 else if (zapisaneDlaDokumentu > 0)
                 {
@@ -354,12 +393,12 @@ namespace NexoBridge.Services
                     UstawStatusKoduKsef(raport, "assignedPartiallyAfterDecree", warning);
                     problemy.Add($"{dokumentZrodlowy?.NumerDokumentu}: kod częściowo");
                     _logger.LogWarning("[KSEF CODE CZĘŚCIOWO] Dokument={Numer}; NIP={Nip}; kod={Kod}; zapisane={Saved}/{Total}; błędy={Errors}",
-                        dokumentZrodlowy?.NumerDokumentu,
-                        dokumentZrodlowy?.PodmiotHistoria?.NIP,
-                        kod,
-                        zapisaneDlaDokumentu,
-                        zapisyVat.Count,
-                        ListaDoLogu(bledyDlaDokumentu));
+                        (object)(dokumentZrodlowy?.NumerDokumentu ?? "brak"),
+                        (object)(dokumentZrodlowy?.PodmiotHistoria?.NIP ?? "brak"),
+                        (object)kod,
+                        (object)zapisaneDlaDokumentu,
+                        (object)zapisyVat.Count,
+                        (object)ListaDoLogu(bledyDlaDokumentu));
                 }
                 else
                 {
@@ -390,7 +429,6 @@ namespace NexoBridge.Services
         private IEnumerable<InvoiceMetadata> PobierzMetadaneZKodem(ImportJob job)
         {
             return (job.InvoicesMetadata ?? new List<InvoiceMetadata>())
-                .Where(m => string.IsNullOrWhiteSpace(OczyscNumerKsef(m.KsefNumber)))
                 .Where(m => !string.IsNullOrWhiteSpace(OczyscKodKsef(m.KsefCode)));
         }
 
@@ -400,17 +438,74 @@ namespace NexoBridge.Services
             return match.Metadata;
         }
 
-        private List<dynamic> PobierzWynikoweOperacje(dynamic rezultat)
+        private List<dynamic> PobierzWynikoweOperacje(object rezultat)
         {
             if (rezultat == null) return new List<dynamic>();
             try { return ((System.Collections.IEnumerable)rezultat).Cast<dynamic>().ToList(); }
             catch { return new List<dynamic>(); }
         }
 
-        private IEnumerable<object> ZnajdzZapisyVat(object mgrVat, IEnumerable<dynamic> wynikowe, DokumentDoKsiegowania dokumentZrodlowy)
+        private IEnumerable<object> ZnajdzZapisyVat(
+            object mgrVat,
+            IEnumerable<dynamic> wynikoweZIndeksu,
+            IEnumerable<dynamic> wszystkieWynikoweZapisy,
+            DokumentDoKsiegowania dokumentZrodlowy,
+            InvoiceMetadata meta,
+            out string zrodla)
         {
             var zapisy = new List<object>();
+            var opisZrodel = new List<string>();
 
+            DodajZapisyVatZWynikow(
+                zapisy,
+                opisZrodel,
+                mgrVat,
+                wynikoweZIndeksu,
+                dokumentZrodlowy,
+                meta,
+                "wynikIndeksowy");
+
+            try
+            {
+                DodajUnikalny(zapisy, dokumentZrodlowy?.WynikowyZapisWEwidencjiVAT, opisZrodel, "relacjaDDK.WynikowyZapisWEwidencjiVAT");
+            }
+            catch { }
+
+            try
+            {
+                DodajUnikalny(zapisy, dokumentZrodlowy?.ZrodlowyZapisWEwidencjiVAT, opisZrodel, "relacjaDDK.ZrodlowyZapisWEwidencjiVAT");
+            }
+            catch { }
+
+            DodajZapisyVatZWynikow(
+                zapisy,
+                opisZrodel,
+                mgrVat,
+                wszystkieWynikoweZapisy,
+                dokumentZrodlowy,
+                meta,
+                "dowolnyWynikDekretacji");
+
+            DodajZapisyVatPoPowiazaniuLubMetadanych(
+                zapisy,
+                opisZrodel,
+                mgrVat,
+                dokumentZrodlowy,
+                meta);
+
+            zrodla = ListaDoLogu(opisZrodel);
+            return zapisy;
+        }
+
+        private void DodajZapisyVatZWynikow(
+            List<object> zapisy,
+            List<string> opisZrodel,
+            object mgrVat,
+            IEnumerable<dynamic> wynikowe,
+            DokumentDoKsiegowania dokumentZrodlowy,
+            InvoiceMetadata meta,
+            string zrodlo)
+        {
             foreach (var wynik in wynikowe ?? Enumerable.Empty<dynamic>())
             {
                 string typ = wynik?.GetType().Name ?? "";
@@ -420,25 +515,131 @@ namespace NexoBridge.Services
                 }
 
                 object encja = ZnajdzFizycznaEncje(mgrVat, PobierzDokumentId(wynik));
-                DodajUnikalny(zapisy, encja);
+                if (CzyVatPasujeDoDokumentuLubMetadanych(encja, dokumentZrodlowy, meta))
+                {
+                    DodajUnikalny(zapisy, encja, opisZrodel, $"{zrodlo}:{typ}/{PobierzDokumentId(wynik)}");
+                }
+            }
+        }
+
+        private void DodajZapisyVatPoPowiazaniuLubMetadanych(
+            List<object> zapisy,
+            List<string> opisZrodel,
+            object mgrVat,
+            DokumentDoKsiegowania dokumentZrodlowy,
+            InvoiceMetadata meta)
+        {
+            if (mgrVat == null || (dokumentZrodlowy == null && meta == null))
+            {
+                return;
             }
 
+            var kandydaci = new List<object>();
             try
             {
-                DodajUnikalny(zapisy, dokumentZrodlowy?.WynikowyZapisWEwidencjiVAT);
+                foreach (var encja in ((System.Collections.IEnumerable)((dynamic)mgrVat).Dane.Wszystkie()).Cast<dynamic>())
+                {
+                    object encjaObj = (object)encja;
+                    if (CzyVatPasujeDoDokumentuLubMetadanych(encjaObj, dokumentZrodlowy, meta))
+                    {
+                        DodajUnikalny(kandydaci, encjaObj);
+                    }
+                }
+            }
+            catch { }
+
+            if (kandydaci.Count == 1)
+            {
+                DodajUnikalny(zapisy, kandydaci[0], opisZrodel, "fallbackVatPoPowiazaniuLubMetadanych");
+            }
+            else if (kandydaci.Count > 1)
+            {
+                opisZrodel.Add($"fallbackVatPominietyWieleKandydatow={kandydaci.Count}");
+            }
+        }
+
+        private bool CzyVatPasujeDoDokumentuLubMetadanych(object zapisVat, DokumentDoKsiegowania dokumentZrodlowy, InvoiceMetadata meta)
+        {
+            if (zapisVat == null)
+            {
+                return false;
+            }
+
+            if (dokumentZrodlowy != null && CzyPowiazanyZDdk(zapisVat, dokumentZrodlowy.Id))
+            {
+                return true;
+            }
+
+            string oczekiwanyNip = InvoiceDocumentMatcher.NormalizeNip(meta?.VendorNip ?? dokumentZrodlowy?.PodmiotHistoria?.NIP);
+            string oczekiwanyNumer = InvoiceDocumentMatcher.Normalize(meta?.InvoiceNumber ?? dokumentZrodlowy?.NumerDokumentu);
+            if (string.IsNullOrWhiteSpace(oczekiwanyNip) || string.IsNullOrWhiteSpace(oczekiwanyNumer))
+            {
+                return false;
+            }
+
+            string nipVat = InvoiceDocumentMatcher.NormalizeNip(
+                PobierzWartoscSciezki(zapisVat, "Podmiot.NIP")
+                ?? PobierzWartoscSciezki(zapisVat, "PreviewNIP")
+                ?? PobierzWartoscSciezki(zapisVat, "PodmiotHistoria.NIP"));
+            if (string.IsNullOrWhiteSpace(nipVat) || !nipVat.EndsWith(oczekiwanyNip, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            foreach (string numerVat in PobierzNumeryDokumentuVat(zapisVat))
+            {
+                string normalizedVat = InvoiceDocumentMatcher.Normalize(numerVat);
+                if (normalizedVat == oczekiwanyNumer || InvoiceDocumentMatcher.IsSafeNumberMatch(oczekiwanyNumer, normalizedVat))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private IEnumerable<string> PobierzNumeryDokumentuVat(object zapisVat)
+        {
+            yield return PobierzWartoscSciezki(zapisVat, "NumerDokumentu");
+            yield return PobierzWartoscSciezki(zapisVat, "DokumentKsiegowy.NumerDokumentu");
+            yield return PobierzWartoscSciezki(zapisVat, "DokumentKsiegowy.NumerPelny");
+            yield return PobierzWartoscSciezki(zapisVat, "DokumentKsiegowy.NumerWewnetrzny");
+            yield return PobierzWartoscSciezki(zapisVat, "ZapisKsiegowy.NumerDokumentu");
+        }
+
+        private bool CzyPowiazanyZDdk(object encja, Guid dokumentDoKsiegowaniaId)
+        {
+            try
+            {
+                object zrodlowy = PobierzWlasciwosc(encja, "ZrodlowyDokumentDoKsiegowania");
+                object id = PobierzWlasciwosc(zrodlowy, "Id");
+                if (id is Guid guid && guid == dokumentDoKsiegowaniaId)
+                {
+                    return true;
+                }
             }
             catch { }
 
             try
             {
-                DodajUnikalny(zapisy, dokumentZrodlowy?.ZrodlowyZapisWEwidencjiVAT);
+                object docelowy = PobierzWlasciwosc(encja, "DocelowyDokumentDoKsiegowania");
+                object id = PobierzWlasciwosc(docelowy, "Id");
+                if (id is Guid guid && guid == dokumentDoKsiegowaniaId)
+                {
+                    return true;
+                }
             }
             catch { }
 
-            return zapisy;
+            return false;
         }
 
         private void DodajUnikalny(List<object> lista, object encja)
+        {
+            DodajUnikalny(lista, encja, null, null);
+        }
+
+        private void DodajUnikalny(List<object> lista, object encja, List<string> opisZrodel, string zrodlo)
         {
             if (lista == null || encja == null) return;
 
@@ -454,6 +655,10 @@ namespace NexoBridge.Services
             }
 
             lista.Add(encja);
+            if (!string.IsNullOrWhiteSpace(zrodlo))
+            {
+                opisZrodel?.Add($"{zrodlo}->VAT#{id ?? "bezId"}");
+            }
         }
 
         private bool UstawKodNaZapisieVat(object mgrVat, object zapisVat, byte wartoscKodu, string kod, out string szczegoly)
@@ -491,6 +696,13 @@ namespace NexoBridge.Services
                 if (!zapisano)
                 {
                     szczegoly = WyciagnijBledySfery(zapisBO);
+                    return false;
+                }
+
+                byte? wartoscPoZapisie = PobierzByteNullable(dane, "WystepowanieFakturKsef");
+                if (!wartoscPoZapisie.HasValue || wartoscPoZapisie.Value != wartoscKodu)
+                {
+                    szczegoly = $"Sfera zwróciła Zapisz=true, ale po zapisie odczytano WystepowanieFakturKsef={wartoscPoZapisie?.ToString() ?? "null"} zamiast {wartoscKodu}.";
                     return false;
                 }
 
@@ -621,17 +833,35 @@ namespace NexoBridge.Services
             }
         }
 
-        private List<dynamic> PobierzWynikoweZapisy(dynamic wynikOperacji)
+        private List<dynamic> PobierzWynikoweZapisy(object wynikOperacji)
         {
             try
             {
-                var wynikowe = (System.Collections.IEnumerable)wynikOperacji.WynikowePoprawneZapisy;
+                dynamic wynikOperacjiDyn = wynikOperacji;
+                var wynikowe = (System.Collections.IEnumerable)wynikOperacjiDyn.WynikowePoprawneZapisy;
                 return wynikowe?.Cast<dynamic>().ToList() ?? new List<dynamic>();
             }
             catch
             {
                 return new List<dynamic>();
             }
+        }
+
+        private string OpiszWyniki(IEnumerable<dynamic> wyniki)
+        {
+            if (wyniki == null)
+            {
+                return "brak";
+            }
+
+            var opisy = new List<string>();
+            foreach (var wynik in wyniki.Take(50))
+            {
+                object wynikObj = (object)wynik;
+                opisy.Add($"{wynikObj?.GetType().Name ?? "brak"}: dokumentId={PobierzDokumentId(wynik)}");
+            }
+
+            return ListaDoLogu(opisy);
         }
 
         private object ZnajdzEncje(Dictionary<string, dynamic> menedzerowie, dynamic wynik)

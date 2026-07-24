@@ -49,21 +49,27 @@ namespace NexoBridge.Services
                     return Task.FromResult(raport);
                 }
 
-                var okresyVat = ((IEnumerable)mgrOkresyVat.Dane.Wszystkie()).Cast<dynamic>().ToList();
-                var glownyOkres = okresyVat
-                    .Where(o => { try { return (int)o.Rodzaj == 1; } catch { return false; } })
-                    .OrderByDescending(o => { try { return (int)o.Id; } catch { return 0; } })
-                    .FirstOrDefault();
+                DateTime dataOd = new DateTime(dataRozliczenia.Year, dataRozliczenia.Month, 1);
+                DateTime dataDo = new DateTime(dataRozliczenia.Year, dataRozliczenia.Month, DateTime.DaysInMonth(dataRozliczenia.Year, dataRozliczenia.Month));
+
+                var okresyVat = ((IEnumerable)mgrOkresyVat.Dane.Wszystkie()).Cast<object>().ToList();
+                LogujOkresyVat(okresyVat, dataOd, dataDo);
+
+                object glownyOkres = ZnajdzOkresVatKrajowyDlaOkresu(okresyVat, dataDo);
 
                 if (glownyOkres == null)
                 {
                     raport.IsVatPayer = false;
-                    _logger.LogInformation("[VAT POMINIĘTO] Firma nie posiada żadnej konfiguracji ewidencji VAT krajowego.");
+                    _logger.LogInformation("[VAT POMINIĘTO] Firma nie posiada konfiguracji ewidencji VAT krajowego aktywnej dla okresu {Okres:yyyy-MM}.",
+                        dataRozliczenia);
                     return Task.FromResult(raport);
                 }
 
                 byte metodaRozliczen = 0;
-                try { metodaRozliczen = (byte)glownyOkres.Metoda; } catch { }
+                if (TryReadIntProperty(glownyOkres, "Metoda", out int metodaRozliczenInt))
+                {
+                    metodaRozliczen = (byte)metodaRozliczenInt;
+                }
 
                 if (metodaRozliczen == 4)
                 {
@@ -87,9 +93,6 @@ namespace NexoBridge.Services
                 }
 
                 raport.IsVatPayer = true;
-
-                DateTime dataOd = new DateTime(dataRozliczenia.Year, dataRozliczenia.Month, 1);
-                DateTime dataDo = new DateTime(dataRozliczenia.Year, dataRozliczenia.Month, DateTime.DaysInMonth(dataRozliczenia.Year, dataRozliczenia.Month));
 
                 dynamic istniejacyJpk = ZnajdzJpkV7M(dataOd, dataDo);
                 if (istniejacyJpk != null)
@@ -138,6 +141,39 @@ namespace NexoBridge.Services
                 _logger.LogWarning(ex, "Nie udało się pobrać MojaFirma przez IPodmioty.ZnajdzMojaFirme().");
                 return null;
             }
+        }
+
+        private object ZnajdzOkresVatKrajowyDlaOkresu(IEnumerable<object> okresyVat, DateTime dataDo)
+        {
+            return (okresyVat ?? Enumerable.Empty<object>())
+                .Where(o => TryReadIntProperty(o, "Rodzaj", out int rodzaj) && rodzaj == 1)
+                .Where(o => !TryReadDateProperty(o, "Poczatek", out DateTime poczatek) || poczatek <= dataDo)
+                .OrderByDescending(o => TryReadDateProperty(o, "Poczatek", out DateTime poczatek) ? poczatek : DateTime.MinValue)
+                .ThenByDescending(o => TryReadIntProperty(o, "Id", out int id) ? id : 0)
+                .FirstOrDefault();
+        }
+
+        private void LogujOkresyVat(IReadOnlyCollection<object> okresyVat, DateTime dataOd, DateTime dataDo)
+        {
+            if (okresyVat == null || okresyVat.Count == 0)
+            {
+                _logger.LogInformation("[VAT OKRESY] Okres={Od:yyyy-MM}; Sfera nie zwróciła konfiguracji okresów VAT.", dataOd);
+                return;
+            }
+
+            var opisy = okresyVat
+                .OrderBy(o => TryReadDateProperty(o, "Poczatek", out DateTime poczatek) ? poczatek : DateTime.MaxValue)
+                .ThenBy(o => TryReadIntProperty(o, "Id", out int id) ? id : 0)
+                .Take(30)
+                .Select(o => OpiszWybraneWlasciwosci(o, "Id", "Poczatek", "Rodzaj", "Metoda", "MetodaKasowa", "PrzyczynaZwolnieniaVATId"))
+                .ToList();
+
+            _logger.LogInformation("[VAT OKRESY] Okres={Od:yyyy-MM}; zakres={Od:yyyy-MM-dd}-{Do:yyyy-MM-dd}; liczba={Count}; konfiguracje={Konfiguracje}",
+                dataOd,
+                dataOd,
+                dataDo,
+                okresyVat.Count,
+                string.Join(" || ", opisy));
         }
 
         private void WypelnijKwotyZJpkLubFallback(VatReport raport, dynamic jpk, DateTime dataOd, DateTime dataDo)
@@ -805,6 +841,39 @@ namespace NexoBridge.Services
         {
             object value = PobierzWartoscWlasciwosci(source, propertyName);
             return value is DateTime date && date != default;
+        }
+
+        private bool TryReadDateProperty(object source, string propertyName, out DateTime value)
+        {
+            value = default;
+            object raw = PobierzWartoscWlasciwosci(source, propertyName);
+            if (raw == null) return false;
+
+            if (raw is DateTime date)
+            {
+                value = date;
+                return true;
+            }
+
+            return DateTime.TryParse(raw.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out value)
+                || DateTime.TryParse(raw.ToString(), CultureInfo.GetCultureInfo("pl-PL"), DateTimeStyles.None, out value);
+        }
+
+        private bool TryReadIntProperty(object source, string propertyName, out int value)
+        {
+            value = 0;
+            object raw = PobierzWartoscWlasciwosci(source, propertyName);
+            if (raw == null) return false;
+
+            try
+            {
+                value = Convert.ToInt32(raw, CultureInfo.InvariantCulture);
+                return true;
+            }
+            catch
+            {
+                return int.TryParse(raw.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+            }
         }
 
         private bool TryReadBoolProperty(object source, string propertyName, out bool value)
