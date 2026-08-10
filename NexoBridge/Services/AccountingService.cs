@@ -51,23 +51,15 @@ namespace NexoBridge.Services
                 return (null, new List<Tuple<DokumentDoKsiegowania, SchematImportu>>(), oczekujace, new List<DokumentDoKsiegowania>(), new List<DokumentDoKsiegowania>());
             }
 
-            var obecnyOkres = ((IEnumerable)menedzerOkresow.Dane.Wszystkie())
-                .Cast<object>()
-                .LastOrDefault();
-            string nazwaOkresu = "BRAK_OKRESU";
-            if (obecnyOkres != null)
-            {
-                try
-                {
-                    dynamic obecnyOkresDyn = obecnyOkres;
-                    nazwaOkresu = obecnyOkresDyn.Nazwa?.ToString() ?? nazwaOkresu;
-                }
-                catch { }
-            }
+            var obecnyOkres = PobierzOkresObrachunkowy(menedzerOkresow, dataRozliczenia);
+            string nazwaOkresu = OpiszOkres(obecnyOkres);
 
             await raportujPostep(80, $"Sędzia weryfikuje Warunki Wyboru dla okresu '{nazwaOkresu}'...");
-            dynamic menedzerDynamiczny = menedzerImportu;
-            dynamic werdykt = menedzerDynamiczny.WyszukajSchematyDlaDokumentow(oczekujace, obecnyOkres);
+            var dokumentyDoWyszukaniaSchematow = oczekujace
+                .Cast<DokumentDoKsiegowania>()
+                .ToList();
+            var werdykt = ((IOperacjeImportuKsiegowego)menedzerImportu)
+                .WyszukajSchematyDlaDokumentow(dokumentyDoWyszukaniaSchematow, obecnyOkres);
 
             var typ = werdykt.GetType();
             var brakSchematuRaw = typ.GetProperty("DokumentyONieokreslonychSchematach")?.GetValue(werdykt) as System.Collections.IEnumerable;
@@ -186,6 +178,50 @@ namespace NexoBridge.Services
             var dataSystemowa = _sfera.PodajObiektTypu<IDataSystemowa>();
 
             return new NewDocumentMarkerContext(parametrImportu, dataSystemowa);
+        }
+
+        private OkresObrachunkowy PobierzOkresObrachunkowy(InsERT.Moria.Ksiegowosc.IOkresyObrachunkowe menedzerOkresow, DateTime dataRozliczenia)
+        {
+            var okresy = ((IEnumerable)menedzerOkresow.Dane.Wszystkie())
+                .Cast<OkresObrachunkowy>()
+                .ToList();
+
+            if (okresy.Count == 0)
+            {
+                throw new InvalidOperationException("Nie znaleziono żadnego okresu obrachunkowego w bazie klienta.");
+            }
+
+            DateTime data = dataRozliczenia.Date;
+            var okresDlaDaty = okresy
+                .Where(o => o.Okres != null &&
+                            o.Okres.DataPoczatkowa.Date <= data &&
+                            o.Okres.DataKoncowa.Date >= data)
+                .OrderByDescending(o => o.Okres.DataPoczatkowa)
+                .FirstOrDefault();
+
+            if (okresDlaDaty != null)
+            {
+                return okresDlaDaty;
+            }
+
+            var ostatniOkres = okresy
+                .OrderByDescending(o => o.Okres?.DataPoczatkowa ?? DateTime.MinValue)
+                .First();
+
+            _logger.LogWarning("[OKRES OBRACHUNKOWY] Nie znaleziono okresu zawierającego datę {Data}. Używam ostatniego dostępnego okresu: {Okres}.",
+                data.ToString("yyyy-MM-dd"),
+                OpiszOkres(ostatniOkres));
+
+            return ostatniOkres;
+        }
+
+        private string OpiszOkres(OkresObrachunkowy okres)
+        {
+            if (okres == null) return "BRAK_OKRESU";
+            string zakres = okres.Okres == null
+                ? "brak zakresu"
+                : $"{okres.Okres.DataPoczatkowa:yyyy-MM-dd} - {okres.Okres.DataKoncowa:yyyy-MM-dd}";
+            return $"{okres.Nazwa ?? "bez nazwy"} ({zakres})";
         }
 
         private void LogujWyborPoczekalni(WaitingRoomDocumentSelection wybor)

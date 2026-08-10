@@ -128,6 +128,8 @@ namespace NexoBridge
                 builder.Services.AddSingleton<JobQueue>();
                 builder.Services.AddSingleton<OfficeVatFlagsJobQueue>();
                 builder.Services.AddSingleton<OfficeVatFlagsResultStore>();
+                builder.Services.AddSingleton<NexoBridgeLogReader>();
+                builder.Services.AddHttpClient<NexoBridgeErrorReporter>();
                 builder.Services.AddHostedService<NexoBackgroundWorker>();
                 builder.Services.AddHostedService<OfficeVatFlagsBackgroundWorker>();
 
@@ -142,6 +144,7 @@ namespace NexoBridge
                 app.MapHealthEndpoints();
                 app.MapImportEndpoints();
                 app.MapOfficeVatFlagsEndpoints();
+                app.MapLogEndpoints();
 
                 Log.Information("NexoBridge nasłuchuje na porcie 5000...");
                 app.Run("http://0.0.0.0:5000");

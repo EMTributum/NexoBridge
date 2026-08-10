@@ -52,10 +52,14 @@ namespace NexoBridge.Services
 
             foreach (var attachment in job.Attachments ?? new List<AttachmentPayload>())
             {
+                string attachmentNumber = InvoiceDocumentMatcher.Normalize(attachment.DocumentNumber);
+                string attachmentNip = InvoiceDocumentMatcher.NormalizeNip(attachment.VendorNip);
                 bool exists = documents.Any(d =>
                     string.Equals(d.PdfFileName, attachment.FileName, StringComparison.OrdinalIgnoreCase) ||
-                    (InvoiceDocumentMatcher.Normalize(d.InvoiceNumber) == InvoiceDocumentMatcher.Normalize(attachment.DocumentNumber) &&
-                     InvoiceDocumentMatcher.NormalizeNip(d.VendorNip) == InvoiceDocumentMatcher.NormalizeNip(attachment.VendorNip)));
+                    (InvoiceDocumentMatcher.Normalize(d.InvoiceNumber) == attachmentNumber &&
+                     (string.IsNullOrWhiteSpace(attachmentNip) ||
+                      string.IsNullOrWhiteSpace(InvoiceDocumentMatcher.NormalizeNip(d.VendorNip)) ||
+                      InvoiceDocumentMatcher.NormalizeNip(d.VendorNip) == attachmentNip)));
 
                 if (exists) continue;
 
@@ -217,7 +221,7 @@ namespace NexoBridge.Services
             {
                 if (WaitingRoomDocumentFilter.CzyCzastkowaAmortyzacja(doc)) continue;
                 if (matchedWaitingRoomNumbers.Contains(doc.Nr)) continue;
-                if (manifest.Any(x => x.WaitingRoomNr == doc.Nr)) continue;
+                if (ZnajdzRaportPoNrPoczekalni(manifest, doc.Nr) != null) continue;
 
                 manifest.Add(new DocumentProcessingReport
                 {
@@ -299,7 +303,7 @@ namespace NexoBridge.Services
         {
             if (manifest == null || dokument == null) return null;
 
-            var byNr = manifest.FirstOrDefault(d => d.WaitingRoomNr == dokument.Nr);
+            var byNr = ZnajdzRaportPoNrPoczekalni(manifest, dokument.Nr);
             if (byNr != null) return byNr;
 
             var metadataMatches = manifest
@@ -353,6 +357,16 @@ namespace NexoBridge.Services
             }
 
             return null;
+        }
+
+        private static DocumentProcessingReport ZnajdzRaportPoNrPoczekalni(List<DocumentProcessingReport> manifest, int nr)
+        {
+            return manifest
+                .Where(d => d.WaitingRoomNr == nr)
+                .OrderBy(d => d.Source == "frontendPackage" ? 0 : 1)
+                .ThenBy(d => string.IsNullOrWhiteSpace(d.PdfFileName) ? 1 : 0)
+                .ThenBy(d => string.IsNullOrWhiteSpace(d.KsefCode) ? 1 : 0)
+                .FirstOrDefault();
         }
 
         public static void WypelnijDanePoczekalni(DocumentProcessingReport item, DokumentDoKsiegowania dokument)

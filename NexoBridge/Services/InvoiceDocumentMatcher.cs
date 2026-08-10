@@ -21,14 +21,27 @@ namespace NexoBridge.Services
                 return InvoiceMatchResult.NotFound("Brak metadanych faktury.");
             }
 
-            string nipFront = NormalizeNip(meta.VendorNip);
             string numberFront = Normalize(meta.InvoiceNumber);
-            if (string.IsNullOrWhiteSpace(nipFront) || string.IsNullOrWhiteSpace(numberFront))
+            if (string.IsNullOrWhiteSpace(numberFront))
             {
-                return InvoiceMatchResult.NotFound("Brak numeru faktury albo NIP w metadanych.");
+                return InvoiceMatchResult.NotFound("Brak numeru faktury w metadanych.");
             }
 
             var allDocuments = (documents ?? Enumerable.Empty<DokumentDoKsiegowania>()).ToList();
+            string nipFront = NormalizeNip(meta.VendorNip);
+            if (string.IsNullOrWhiteSpace(nipFront))
+            {
+                var exactWithoutNip = Resolve(
+                    allDocuments,
+                    d => GetNormalizedDocumentNumbers(d).Any(n => n == numberFront),
+                    "matchedExactWithoutNip",
+                    numberFront);
+
+                if (exactWithoutNip.IsTerminal) return exactWithoutNip;
+
+                return InvoiceMatchResult.NotFound($"Brak jednoznacznego dokumentu dla numeru {meta.InvoiceNumber} bez NIP. Bez NIP dopuszczamy tylko dokładne dopasowanie numeru.", allDocuments);
+            }
+
             var nipCandidates = allDocuments
                 .Where(d => NormalizeNip(d.PodmiotHistoria?.NIP).EndsWith(nipFront, StringComparison.OrdinalIgnoreCase))
                 .ToList();
@@ -192,12 +205,13 @@ namespace NexoBridge.Services
             if (string.Equals(expectedNormalized, actualNormalized, StringComparison.OrdinalIgnoreCase)) return true;
             if (actualNormalized.EndsWith(expectedNormalized, StringComparison.OrdinalIgnoreCase)) return true;
 
+            int minControlledPrefixLength = Math.Min(12, expectedNormalized.Length);
             bool expectedWasTrimmedAtEnd = expectedNormalized.StartsWith(actualNormalized, StringComparison.OrdinalIgnoreCase) &&
-                                           expectedNormalized.Length - actualNormalized.Length <= 4;
+                                           actualNormalized.Length >= minControlledPrefixLength;
             if (expectedWasTrimmedAtEnd) return true;
 
             bool actualWasTrimmedAtEnd = actualNormalized.StartsWith(expectedNormalized, StringComparison.OrdinalIgnoreCase) &&
-                                         actualNormalized.Length - expectedNormalized.Length <= 4;
+                                         expectedNormalized.Length >= Math.Min(12, actualNormalized.Length);
             return actualWasTrimmedAtEnd;
         }
 
@@ -254,6 +268,15 @@ namespace NexoBridge.Services
                 !string.Equals(normalizedWithoutPrefix, normalizedRaw, StringComparison.OrdinalIgnoreCase))
             {
                 yield return normalizedWithoutPrefix;
+            }
+
+            string withoutLeadingTechnicalNumber = Regex.Replace(withoutSystemPrefix, @"^\d+\s+", string.Empty, RegexOptions.IgnoreCase);
+            string normalizedWithoutTechnicalNumber = Normalize(withoutLeadingTechnicalNumber);
+            if (!string.IsNullOrWhiteSpace(normalizedWithoutTechnicalNumber) &&
+                !string.Equals(normalizedWithoutTechnicalNumber, normalizedRaw, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(normalizedWithoutTechnicalNumber, normalizedWithoutPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                yield return normalizedWithoutTechnicalNumber;
             }
         }
 

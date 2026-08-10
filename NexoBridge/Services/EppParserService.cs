@@ -31,6 +31,7 @@ namespace NexoBridge.Services
             var serializator = _sfera.PodajObiektTypu<ISerializatorEPP>();
             var wszystkieObiekty = new List<object>();
             var result = new EppImportResult();
+            var oryginalneNumeryNaglowkow = new Dictionary<LogistykaNaglowek, string>();
 
             foreach (var plik in job.Files)
             {
@@ -41,17 +42,20 @@ namespace NexoBridge.Services
                     var obiektyZPliku = serializator.DeserializujObiektyZPliku(tempFile);
                     var obiektyLista = ((IEnumerable<object>)obiektyZPliku).ToList();
                     int licznikLokalny = obiektyLista.Count;
+                    int skorygowaneNumery = UzupelnijPelneNumeryFakturWObiektachEpp(job, obiektyLista, oryginalneNumeryNaglowkow);
                     int dopisaneKsef = UzupelnijNumeryKsefWObiektachEpp(job, obiektyLista);
                     var naglowki = PobierzNaglowkiLogistyki(obiektyLista).ToList();
 
                     wszystkieObiekty.AddRange(obiektyLista);
-                    result.Headers.AddRange(naglowki.Select(MapujNaglowek));
+                    result.Headers.AddRange(naglowki.Select(n => MapujNaglowek(n, oryginalneNumeryNaglowkow)));
                     result.KsefAssignedCount += dopisaneKsef;
+                    result.InvoiceNumberCorrectedCount += skorygowaneNumery;
 
-                    _logger.LogInformation("Rozpakowano plik EPP: {FileName} (Znaleziono {Count} obiektow, naglowki={Headers}, dopisano KSeF: {KsefCount})",
+                    _logger.LogInformation("Rozpakowano plik EPP: {FileName} (Znaleziono {Count} obiektow, naglowki={Headers}, skorygowano numery faktur: {CorrectedNumbers}, dopisano KSeF: {KsefCount})",
                         plik.FileName,
                         licznikLokalny,
                         naglowki.Count,
+                        skorygowaneNumery,
                         dopisaneKsef);
                 }
                 finally
@@ -79,6 +83,106 @@ namespace NexoBridge.Services
             operacjaDokumentow.Zapisz();
 
             return result;
+        }
+
+        private int UzupelnijPelneNumeryFakturWObiektachEpp(
+            ImportJob job,
+            List<object> obiekty,
+            Dictionary<LogistykaNaglowek, string> oryginalneNumeryNaglowkow)
+        {
+            var metadane = (job.InvoicesMetadata ?? new List<InvoiceMetadata>())
+                .Where(m => !string.IsNullOrWhiteSpace(m.InvoiceNumber))
+                .ToList();
+
+            if (metadane.Count == 0)
+            {
+                return 0;
+            }
+
+            var naglowki = PobierzNaglowkiLogistyki(obiekty).ToList();
+            if (naglowki.Count == 0)
+            {
+                _logger.LogWarning("[EPP NUMER POMINIETY] Brak naglowkow logistyki w EPP, nie mozna skorygowac pelnych numerow faktur z invoicesMetadata.");
+                return 0;
+            }
+
+            int poprawione = 0;
+            var uzyteNaglowki = new HashSet<LogistykaNaglowek>();
+
+            foreach (var meta in metadane)
+            {
+                string pelnyNumer = meta.InvoiceNumber?.Trim();
+                string pelnyNumerNorm = InvoiceDocumentMatcher.Normalize(pelnyNumer);
+                if (string.IsNullOrWhiteSpace(pelnyNumerNorm))
+                {
+                    continue;
+                }
+
+                var dopasowania = naglowki
+                    .Where(n => !uzyteNaglowki.Contains(n))
+                    .Select(n => new { Naglowek = n, Score = ObliczDopasowanieNaglowka(n, meta) })
+                    .Where(x => x.Score > 0)
+                    .OrderByDescending(x => x.Score)
+                    .ToList();
+
+                if (dopasowania.Count == 0)
+                {
+                    _logger.LogWarning("[EPP NUMER POMINIETY] Nie znaleziono naglowka EPP dla pelnego numeru z FE: {Numer} (NIP: {Nip}). Numer w EPP pozostaje bez zmian.", meta.InvoiceNumber, meta.VendorNip);
+                    continue;
+                }
+
+                int bestScore = dopasowania[0].Score;
+                var najlepsi = dopasowania.Where(x => x.Score == bestScore).ToList();
+                if (najlepsi.Count > 1)
+                {
+                    _logger.LogWarning("[EPP NUMER NIEJEDNOZNACZNY] Nie moge bezpiecznie skorygowac numeru EPP dla faktury {Numer} (NIP: {Nip}) - znaleziono {Count} najlepszych naglowkow dla score={Score}. Kandydaci={Kandydaci}.",
+                        meta.InvoiceNumber,
+                        meta.VendorNip,
+                        najlepsi.Count,
+                        bestScore,
+                        ListaDoLogu(najlepsi.Select(x => OpiszNaglowek(x.Naglowek))));
+                    continue;
+                }
+
+                var naglowek = najlepsi[0].Naglowek;
+                uzyteNaglowki.Add(naglowek);
+
+                string numerEpp = naglowek.NumerDokumentuDostawcy?.Trim();
+                string numerEppNorm = InvoiceDocumentMatcher.Normalize(numerEpp);
+
+                if (string.Equals(numerEppNorm, pelnyNumerNorm, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogDebug("[EPP NUMER OK] Numer w EPP jest zgodny z FE: {Numer} (NIP: {Nip}); score={Score}.", pelnyNumer, meta.VendorNip, bestScore);
+                    continue;
+                }
+
+                if (!CzyWartoSkorygowacNumerEpp(numerEpp, pelnyNumer))
+                {
+                    _logger.LogWarning("[EPP NUMER POMINIETY] Dopasowano naglowek EPP, ale numer z FE nie wyglada na bezpieczne rozszerzenie numeru EPP. NumerFE={NumerFE}; NumerEPP={NumerEPP}; NIP={Nip}; score={Score}.",
+                        pelnyNumer,
+                        numerEpp,
+                        meta.VendorNip,
+                        bestScore);
+                    continue;
+                }
+
+                if (!oryginalneNumeryNaglowkow.ContainsKey(naglowek))
+                {
+                    oryginalneNumeryNaglowkow[naglowek] = numerEpp;
+                }
+
+                naglowek.NumerDokumentuDostawcy = pelnyNumer;
+                poprawione++;
+
+                _logger.LogInformation("[EPP NUMER SKORYGOWANY] NumerDostawcy EPP zastapiony pelnym numerem z FE. Przed='{NumerEpp}', Po='{NumerFe}', PelnyNumerTechniczny='{PelnyNumer}', NIP={Nip}, score={Score}.",
+                    numerEpp,
+                    pelnyNumer,
+                    naglowek.PelnyNumer,
+                    naglowek.NIP,
+                    bestScore);
+            }
+
+            return poprawione;
         }
 
         private int UzupelnijNumeryKsefWObiektachEpp(ImportJob job, List<object> obiekty)
@@ -227,13 +331,16 @@ namespace NexoBridge.Services
             return 0;
         }
 
-        private EppImportedHeader MapujNaglowek(LogistykaNaglowek naglowek)
+        private EppImportedHeader MapujNaglowek(LogistykaNaglowek naglowek, IReadOnlyDictionary<LogistykaNaglowek, string> oryginalneNumeryNaglowkow)
         {
             object danePowiazania = PobierzWlasciwosc(naglowek, "DanePowiazaniaZKSeF");
+            string oryginalnyNumer = null;
+            oryginalneNumeryNaglowkow?.TryGetValue(naglowek, out oryginalnyNumer);
 
             return new EppImportedHeader
             {
                 InvoiceNumber = naglowek.NumerDokumentuDostawcy,
+                OriginalInvoiceNumber = oryginalnyNumer,
                 FullNumber = naglowek.PelnyNumer,
                 VendorNip = naglowek.NIP,
                 TechnicalNumber = PobierzWlasciwosc(naglowek, "Numer")?.ToString(),
@@ -242,8 +349,38 @@ namespace NexoBridge.Services
                     ?? PobierzDate(naglowek, "DataWplywu"),
                 IssueDate = PobierzDate(naglowek, "DataWystawienia"),
                 KsefAssigned = danePowiazania != null,
-                KsefNumber = PobierzWlasciwosc(danePowiazania, "NumerKSeF")?.ToString()
+                KsefNumber = PobierzWlasciwosc(danePowiazania, "NumerKSeF")?.ToString(),
+                InvoiceNumberCorrected = !string.IsNullOrWhiteSpace(oryginalnyNumer)
             };
+        }
+
+        private bool CzyWartoSkorygowacNumerEpp(string numerEpp, string numerFe)
+        {
+            string eppNorm = InvoiceDocumentMatcher.Normalize(numerEpp);
+            string feNorm = InvoiceDocumentMatcher.Normalize(numerFe);
+
+            if (string.IsNullOrWhiteSpace(feNorm))
+            {
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(eppNorm))
+            {
+                return true;
+            }
+
+            if (string.Equals(eppNorm, feNorm, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            bool feRozszerzaEpp = feNorm.StartsWith(eppNorm, StringComparison.OrdinalIgnoreCase) && feNorm.Length > eppNorm.Length;
+            if (feRozszerzaEpp)
+            {
+                return true;
+            }
+
+            return InvoiceDocumentMatcher.IsSafeNumberMatch(feNorm, eppNorm) && feNorm.Length > eppNorm.Length;
         }
 
         private DateTime? PobierzDate(object source, string propertyName)

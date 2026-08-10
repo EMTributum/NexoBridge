@@ -12,7 +12,9 @@ namespace NexoBridge.Infrastructure
         public const int SkipAmortizationUnits = 2;
         public const int DecreeUnits = 22;
         public const int SkipDecreeUnits = 2;
-        public const int AttachmentsAndKsefUnits = 12;
+        public const int KsefPostDecreeUnits = 4;
+        public const int AttachmentsUnits = 8;
+        public const int AttachmentsAndKsefUnits = KsefPostDecreeUnits + AttachmentsUnits;
         public const int PitUnits = 12;
         public const int SkipPitUnits = 2;
         public const int VatUnits = 14;

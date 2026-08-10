@@ -551,61 +551,120 @@ namespace NexoBridge.Services
         {
             zapisany = null;
             blad = null;
+            string krok = "start";
+            dynamic zalacznikBO = null;
+            AttachmentTargetRef zapisanyCel = null;
+            string bibliotekaError = null;
+            bool zapisZwrocilTrue = false;
+            int? attachmentId = null;
+            string attachmentName = null;
+            string attachmentType = null;
 
             try
             {
+                krok = "ZnajdzEncje";
                 object encja = ZnajdzEncjeDlaCelu(sfera, cel);
                 if (encja == null)
                 {
-                    blad = $"Nie znaleziono świeżej encji dla celu: {OpiszCelPowiazania(cel)}";
+                    blad = $"krok={krok}; Nie znaleziono świeżej encji dla celu: {OpiszCelPowiazania(cel)}";
                     return false;
                 }
 
-                var zapisanyCel = SkopiujCelZEncja(cel, encja);
-                zapisanyCel.CanHaveLibrary = CzyMaBiblioteke(bibliotekaZalacznikow, encja, out string bibliotekaError);
+                krok = "SprawdzBiblioteke";
+                zapisanyCel = SkopiujCelZEncja(cel, encja);
+                zapisanyCel.CanHaveLibrary = CzyMaBiblioteke(bibliotekaZalacznikow, encja, out bibliotekaError);
                 zapisanyCel.LibraryCheckError = bibliotekaError;
 
-                using (var zalacznikBO = ((dynamic)bibliotekaZalacznikow).Utworz())
+                // BO Sfery żyje do zamknięcia uchwytu. Ręczne Dispose potrafi zamknąć współdzielony ObjectContext.
+                krok = "UtworzBO";
+                zalacznikBO = ((dynamic)bibliotekaZalacznikow).Utworz();
+
+                _logger.LogDebug("[ZAŁĄCZNIK ZAPIS TARGET KROK] tryb={Tryb}; krok={Krok}; target={Target}; tempPath={TempPath}; bytes={Bytes}; czyMaBiblioteke={CzyMaBiblioteke}; bibliotekaBlad={BibliotekaBlad}",
+                    savePath,
+                    krok,
+                    OpiszCelPowiazania(zapisanyCel),
+                    tempPath,
+                    PobierzRozmiarPliku(tempPath),
+                    FormatNullableBool(zapisanyCel.CanHaveLibrary),
+                    string.IsNullOrWhiteSpace(bibliotekaError) ? "brak" : bibliotekaError);
+
+                krok = "Wczytaj";
+                zalacznikBO.Wczytaj(tempPath);
+
+                krok = "Opis";
+                zalacznikBO.Dane.Opis = "Oryginał ze Scanye";
+
+                krok = "DodajPowiazanie";
+                zalacznikBO.DodajPowiazanie((dynamic)encja);
+
+                krok = "Zapisz";
+                zapisZwrocilTrue = zalacznikBO.Zapisz();
+                if (!zapisZwrocilTrue)
                 {
-                    zalacznikBO.Wczytaj(tempPath);
-                    zalacznikBO.Dane.Opis = "Oryginał ze Scanye";
-                    zalacznikBO.DodajPowiazanie((dynamic)encja);
-
-                    if (!zalacznikBO.Zapisz())
-                    {
-                        blad = WyciagnijBledySfery(zalacznikBO);
-                        return false;
-                    }
-
-                    int? attachmentId = PobierzInt(zalacznikBO.Dane, "Id");
-                    string attachmentName = PobierzString(zalacznikBO.Dane, "Nazwa");
-                    string attachmentType = PobierzString(zalacznikBO.Dane, "Typ");
-
-                    zapisany = new AttachmentSaveResult
-                    {
-                        Target = zapisanyCel,
-                        AttachmentId = attachmentId,
-                        AttachmentName = attachmentName,
-                        AttachmentType = attachmentType,
-                        SavePath = savePath,
-                        SavedByFreshSession = savedByFreshSession
-                    };
-
-                    _logger.LogDebug("[ZAŁĄCZNIK ZAPIS TARGET OK] tryb={Tryb}; target={Target}; zalacznikId={ZalacznikId}; nazwa={Nazwa}; typ={Typ}; czyMaBiblioteke={CzyMaBiblioteke}; bibliotekaBlad={BibliotekaBlad}",
+                    blad = $"krok={krok}; Zapisz=false; invalidData={WyciagnijBledySfery(zalacznikBO)}";
+                    _logger.LogDebug("[ZAŁĄCZNIK ZAPIS TARGET FALSE] tryb={Tryb}; target={Target}; szczegoly={Szczegoly}",
                         savePath,
                         OpiszCelPowiazania(zapisanyCel),
-                        FormatNullableInt(attachmentId),
-                        attachmentName ?? "brak",
-                        attachmentType ?? "brak",
-                        FormatNullableBool(zapisanyCel.CanHaveLibrary),
-                        string.IsNullOrWhiteSpace(bibliotekaError) ? "brak" : bibliotekaError);
-
-                    return true;
+                        blad);
+                    return false;
                 }
+
+                krok = "OdczytDanychPoZapisie";
+                object daneZalacznika = PobierzDaneBO(zalacznikBO);
+                attachmentId = PobierzInt(daneZalacznika, "Id");
+                attachmentName = PobierzString(daneZalacznika, "Nazwa");
+                attachmentType = PobierzString(daneZalacznika, "Typ");
+
+                zapisany = new AttachmentSaveResult
+                {
+                    Target = zapisanyCel,
+                    AttachmentId = attachmentId,
+                    AttachmentName = attachmentName,
+                    AttachmentType = attachmentType,
+                    SavePath = savePath,
+                    SavedByFreshSession = savedByFreshSession
+                };
+
+                _logger.LogDebug("[ZAŁĄCZNIK ZAPIS TARGET OK] tryb={Tryb}; target={Target}; zalacznikId={ZalacznikId}; nazwa={Nazwa}; typ={Typ}; czyMaBiblioteke={CzyMaBiblioteke}; bibliotekaBlad={BibliotekaBlad}",
+                    savePath,
+                    OpiszCelPowiazania(zapisanyCel),
+                    FormatNullableInt(attachmentId),
+                    attachmentName ?? "brak",
+                    attachmentType ?? "brak",
+                    FormatNullableBool(zapisanyCel.CanHaveLibrary),
+                    string.IsNullOrWhiteSpace(bibliotekaError) ? "brak" : bibliotekaError);
+
+                return true;
             }
             catch (Exception ex)
             {
-                blad = ex.GetBaseException().Message;
+                string komunikat = ex.GetBaseException().Message;
+                string invalidData = WyciagnijBledySfery(zalacznikBO);
+                blad = $"krok={krok}; zapisZwrocilTrue={zapisZwrocilTrue}; wyjątek={komunikat}; invalidData={invalidData}";
+
+                if (zapisZwrocilTrue)
+                {
+                    zapisany = new AttachmentSaveResult
+                    {
+                        Target = zapisanyCel ?? cel,
+                        AttachmentId = attachmentId,
+                        AttachmentName = attachmentName,
+                        AttachmentType = attachmentType,
+                        SavePath = savePath + ":postSaveException",
+                        SavedByFreshSession = savedByFreshSession
+                    };
+
+                    _logger.LogWarning(ex, "[ZAŁĄCZNIK ZAPIS TARGET POST-SAVE] tryb={Tryb}; target={Target}; {Szczegoly}. Traktuję zapis jako przyjęty przez Sferę i kieruję do świeżego audytu.",
+                        savePath,
+                        OpiszCelPowiazania(zapisany.Target),
+                        blad);
+                    return true;
+                }
+
+                _logger.LogDebug(ex, "[ZAŁĄCZNIK ZAPIS TARGET BŁĄD] tryb={Tryb}; target={Target}; {Szczegoly}",
+                    savePath,
+                    OpiszCelPowiazania(zapisanyCel ?? cel),
+                    blad);
                 return false;
             }
         }
@@ -1285,6 +1344,41 @@ namespace NexoBridge.Services
         private string FormatNullableInt(int? value)
         {
             return value.HasValue ? value.Value.ToString() : "brak";
+        }
+
+        private string PobierzRozmiarPliku(string path)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                {
+                    return "brak";
+                }
+
+                return new FileInfo(path).Length.ToString();
+            }
+            catch
+            {
+                return "brak";
+            }
+        }
+
+        private object PobierzDaneBO(object businessObject)
+        {
+            object dane = PobierzWlasciwosc(businessObject, "Dane");
+            if (dane != null)
+            {
+                return dane;
+            }
+
+            try
+            {
+                return ((dynamic)businessObject).Dane;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private object PobierzWlasciwosc(object source, string propertyName)

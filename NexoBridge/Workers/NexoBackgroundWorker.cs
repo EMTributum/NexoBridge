@@ -18,14 +18,17 @@ namespace NexoBridge.Workers
         private readonly IHubContext<ProgressHub> _hubContext;
         private readonly ILoggerFactory _loggerFactory;
         private readonly ILogger<NexoBackgroundWorker> _workerLogger;
+        private readonly NexoBridgeErrorReporter _errorReporter;
         public NexoBackgroundWorker(
             JobQueue jobQueue,
             IHubContext<ProgressHub> hubContext,
-            ILoggerFactory loggerFactory)
+            ILoggerFactory loggerFactory,
+            NexoBridgeErrorReporter errorReporter)
         {
             _jobQueue = jobQueue;
             _hubContext = hubContext;
             _loggerFactory = loggerFactory;
+            _errorReporter = errorReporter;
             _workerLogger = _loggerFactory.CreateLogger<NexoBackgroundWorker>();
         }
 
@@ -111,14 +114,48 @@ namespace NexoBridge.Workers
                         string jsonReport = JsonSerializer.Serialize(raportKoncowy, jsonOptions);
 
                         await _hubContext.Clients.Group(job.JobId).SendAsync("ReceiveTaxReport", jsonReport);
+                        if (string.Equals(raportKoncowy.Status, "FAILED", StringComparison.OrdinalIgnoreCase))
+                        {
+                            await _errorReporter.ReportJobFailureAsync(
+                                job,
+                                "NexoImportService",
+                                "Dekretacja / eksport do Nexo",
+                                OkreslOperacje(job),
+                                raportKoncowy.Message,
+                                null,
+                                stoppingToken);
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
                     _workerLogger.LogError(ex, "[WORKER BŁĄD] Wystąpił błąd podczas przetwarzania zlecenia {JobId}", job.JobId);
                     await WylijPostep(job.JobId, 100, $"BŁĄD: {ex.Message}");
+                    await _errorReporter.ReportJobFailureAsync(
+                        job,
+                        "ImportWorker",
+                        "Dekretacja / eksport do Nexo",
+                        OkreslOperacje(job),
+                        "Błąd krytyczny procesu",
+                        ex,
+                        stoppingToken);
                 }
             }
+        }
+
+        private string OkreslOperacje(ImportJob job)
+        {
+            if (job == null)
+            {
+                return "unknown";
+            }
+
+            if (job.ImportInvoices)
+            {
+                return "import";
+            }
+
+            return "calculation";
         }
 
         private async Task WylijPostep(string jobId, int procent, string wiadomosc)

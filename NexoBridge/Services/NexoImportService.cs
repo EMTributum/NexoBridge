@@ -66,6 +66,8 @@ namespace NexoBridge.Services
             bool amortyzacjaWygenerowalaDokumenty = false;
             EppImportResult importResult = null;
             ImportPackageContext packageContext = null;
+            object rezultatDekretacji = null;
+            List<Tuple<DokumentDoKsiegowania, SchematImportu>> zatwierdzoneDekretacji = new List<Tuple<DokumentDoKsiegowania, SchematImportu>>();
 
             _logger.LogInformation("Rozpoczynam zintegrowane przetwarzanie zadania: {JobId}. Baza docelowa: {Database} za {Miesiac}/{Rok}. Flagi: ImportInvoices={ImportInvoices}, Files={Files}, CalculateAmortization={CalculateAmortization}, CalculatePit={CalculatePit}, CalculateVat={CalculateVat}",
                 job.JobId,
@@ -92,7 +94,7 @@ namespace NexoBridge.Services
                     await importProgress.ReportAsync(5, "Pobieranie i analiza plików EPP...");
                     importResult = await _parserService.ParseAndSyncAsync(job, importProgress.ReportAsync);
                     packageContext = ImportPackageContext.FromJob(job, importResult);
-                    _logger.LogInformation("[EPP IMPORT CONTEXT] JobId={JobId}; obiekty={Objects}; naglowki={Headers}; ksefDopisane={KsefAssigned}", job.JobId, importResult.ObjectsCount, importResult.Headers.Count, importResult.KsefAssignedCount);
+                    _logger.LogInformation("[EPP IMPORT CONTEXT] JobId={JobId}; obiekty={Objects}; naglowki={Headers}; numerySkorygowane={CorrectedNumbers}; ksefDopisane={KsefAssigned}", job.JobId, importResult.ObjectsCount, importResult.Headers.Count, importResult.InvoiceNumberCorrectedCount, importResult.KsefAssignedCount);
 
                     var wyborPoImporcie = _manifestService.PobierzWyborDokumentowWPoczekalni(dataRozliczenia, packageContext);
                     _manifestService.AktualizujPoPoczekalni(finalReport.Documents, wyborPoImporcie);
@@ -138,28 +140,43 @@ namespace NexoBridge.Services
 
                     await decreeProgress.ReportAsync(5, "Dekretacja dokumentów...");
                     var (rezultat, zatwierdzone, oczekujace, brakSchematu, bledneSchematy) = await _accountingService.DekretujAsync(dataRozliczenia, packageContext, decreeProgress.ReportAsync);
-                    zatwierdzoneCount = zatwierdzone.Count;
-                    AktualizujStatusyDekretacji(finalReport.Documents, (object)rezultat, zatwierdzone, brakSchematu, bledneSchematy);
+                    rezultatDekretacji = (object)rezultat;
+                    zatwierdzoneDekretacji = zatwierdzone ?? new List<Tuple<DokumentDoKsiegowania, SchematImportu>>();
+                    zatwierdzoneCount = zatwierdzoneDekretacji.Count;
+                    AktualizujStatusyDekretacji(finalReport.Documents, rezultatDekretacji, zatwierdzoneDekretacji, brakSchematu, bledneSchematy);
                     await decreeProgress.CompleteAsync($"Dekretacja zakończona. Zadekretowano {zatwierdzoneCount} dok.");
 
                     // =========================================================
-                    // ETAP 4: ZAŁĄCZNIKI i KSeF (nie blokują procesu)
+                    // ETAP 4: Dane KSeF po dekretacji (przed VAT/JPK)
                     // =========================================================
                     if (maImportFaktur)
                     {
-                        var attachmentsProgress = progress.BeginSegment(JobProgressPlan.AttachmentsAndKsefUnits);
+                        var ksefProgress = progress.BeginSegment(JobProgressPlan.KsefPostDecreeUnits);
                         if (zatwierdzoneCount > 0)
                         {
-                            Func<int, string, Task> attachmentsReporter = attachmentsProgress.ReportAsync;
-                            await attachmentsProgress.ReportAsync(5, "Podpinanie załączników PDF...");
-                            await _attachmentService.PodepnijZalacznikiAsync(job, (object)rezultat, zatwierdzone, finalReport.Documents, attachmentsReporter);
-                            await _ksefNumberAssignmentService.PrzypiszKodyPoDekretacjiAsync(job, (object)rezultat, zatwierdzone, finalReport.Documents, attachmentsReporter);
-                            await _ksefNumberAssignmentService.ZweryfikujPoDekretacjiAsync(job, (object)rezultat, zatwierdzone, finalReport.Documents, attachmentsReporter);
-                            await attachmentsProgress.CompleteAsync("Obsługa załączników oraz danych KSeF zakończona.");
+                            try
+                            {
+                                Func<int, string, Task> ksefReporter = ksefProgress.ReportAsync;
+                                await ksefProgress.ReportAsync(10, "Uzupełnianie i weryfikacja danych KSeF...");
+                                await _ksefNumberAssignmentService.PrzypiszKodyPoDekretacjiAsync(job, rezultatDekretacji, zatwierdzoneDekretacji, finalReport.Documents, ksefReporter);
+                                await _ksefNumberAssignmentService.ZweryfikujPoDekretacjiAsync(job, rezultatDekretacji, zatwierdzoneDekretacji, finalReport.Documents, ksefReporter);
+                                await ksefProgress.CompleteAsync("Obsługa danych KSeF zakończona.");
+                            }
+                            catch (Exception ex)
+                            {
+                                string warning = $"Nie udało się zakończyć obsługi danych KSeF po dekretacji: {ex.GetBaseException().Message}";
+                                OznaczBladEtapuKsef(finalReport.Documents, warning);
+                                _logger.LogError(ex, "[KSEF PO DEKRETACJI BŁĄD] JobId={JobId}; baza={Database}; zadekretowane={Count}; {Warning}",
+                                    job.JobId,
+                                    job.DatabaseName,
+                                    zatwierdzoneCount,
+                                    warning);
+                                await ksefProgress.CompleteAsync("Obsługa danych KSeF zakończona z błędem.");
+                            }
                         }
                         else
                         {
-                            await attachmentsProgress.CompleteAsync("Brak zadekretowanych dokumentów. Pomijam załączniki i weryfikację KSeF.");
+                            await ksefProgress.CompleteAsync("Brak zadekretowanych dokumentów. Pomijam dane KSeF po dekretacji.");
                         }
                     }
 
@@ -217,7 +234,39 @@ namespace NexoBridge.Services
                 }
 
                 // =========================================================
-                // ETAP 6: ZAKOŃCZENIE I RAPORTOWANIE
+                // ETAP 6: ZAŁĄCZNIKI PDF (po podatkach, żeby nie wpływały na PIT/VAT)
+                // =========================================================
+                if (maImportFaktur)
+                {
+                    var attachmentsProgress = progress.BeginSegment(JobProgressPlan.AttachmentsUnits);
+                    if (zatwierdzoneCount > 0)
+                    {
+                        try
+                        {
+                            await attachmentsProgress.ReportAsync(5, "Podpinanie załączników PDF...");
+                            await _attachmentService.PodepnijZalacznikiAsync(job, rezultatDekretacji, zatwierdzoneDekretacji, finalReport.Documents, attachmentsProgress.ReportAsync);
+                            await attachmentsProgress.CompleteAsync("Obsługa załączników PDF zakończona.");
+                        }
+                        catch (Exception ex)
+                        {
+                            string warning = $"Nie udało się zakończyć obsługi załączników PDF: {ex.GetBaseException().Message}";
+                            OznaczBladEtapuZalacznikow(finalReport.Documents, warning);
+                            _logger.LogError(ex, "[ZAŁĄCZNIKI ETAP BŁĄD] JobId={JobId}; baza={Database}; zadekretowane={Count}; {Warning}",
+                                job.JobId,
+                                job.DatabaseName,
+                                zatwierdzoneCount,
+                                warning);
+                            await attachmentsProgress.CompleteAsync("Obsługa załączników PDF zakończona z błędem.");
+                        }
+                    }
+                    else
+                    {
+                        await attachmentsProgress.CompleteAsync("Brak zadekretowanych dokumentów. Pomijam załączniki PDF.");
+                    }
+                }
+
+                // =========================================================
+                // ETAP 7: ZAKOŃCZENIE I RAPORTOWANIE
                 // =========================================================
                 if (finalReport.Status == "SUCCESS" && CzySaOstrzezeniaDokumentow(finalReport))
                 {
@@ -252,6 +301,45 @@ namespace NexoBridge.Services
             }
 
             return finalReport;
+        }
+
+        private void OznaczBladEtapuKsef(List<DocumentProcessingReport> manifest, string warning)
+        {
+            foreach (var raport in manifest ?? new List<DocumentProcessingReport>())
+            {
+                bool oczekiwanoKsef = !string.IsNullOrWhiteSpace(raport.KsefNumber);
+                bool oczekiwanoKod = !string.IsNullOrWhiteSpace(raport.KsefCode);
+                if (!oczekiwanoKsef && !oczekiwanoKod)
+                {
+                    continue;
+                }
+
+                if (oczekiwanoKsef)
+                {
+                    raport.KsefStatus = "verificationFailed";
+                }
+
+                if (oczekiwanoKod)
+                {
+                    raport.KsefCodeStatus = "verificationFailed";
+                }
+
+                ImportManifestService.DodajWarning(raport, warning);
+            }
+        }
+
+        private void OznaczBladEtapuZalacznikow(List<DocumentProcessingReport> manifest, string warning)
+        {
+            foreach (var raport in manifest ?? new List<DocumentProcessingReport>())
+            {
+                if (string.IsNullOrWhiteSpace(raport.PdfFileName))
+                {
+                    continue;
+                }
+
+                raport.AttachmentStatus = "verificationFailed";
+                ImportManifestService.DodajWarning(raport, warning);
+            }
         }
 
         private void AktualizujStatusyDekretacji(

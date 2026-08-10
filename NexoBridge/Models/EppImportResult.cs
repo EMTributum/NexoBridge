@@ -9,12 +9,14 @@ namespace NexoBridge.Models
     {
         public int ObjectsCount { get; set; }
         public int KsefAssignedCount { get; set; }
+        public int InvoiceNumberCorrectedCount { get; set; }
         public List<EppImportedHeader> Headers { get; set; } = new List<EppImportedHeader>();
     }
 
     public class EppImportedHeader
     {
         public string InvoiceNumber { get; set; }
+        public string OriginalInvoiceNumber { get; set; }
         public string FullNumber { get; set; }
         public string VendorNip { get; set; }
         public string TechnicalNumber { get; set; }
@@ -23,6 +25,7 @@ namespace NexoBridge.Models
         public bool KsefAssigned { get; set; }
         public string KsefNumber { get; set; }
         public string KsefCode { get; set; }
+        public bool InvoiceNumberCorrected { get; set; }
 
         public InvoiceMetadata ToInvoiceMetadata()
         {
