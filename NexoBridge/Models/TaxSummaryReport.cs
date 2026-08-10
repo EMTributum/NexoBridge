@@ -18,6 +18,7 @@ namespace NexoBridge.Models
         public AmortizationReport Amortization { get; set; }
         public List<PitResult> PitTaxes { get; set; } = new List<PitResult>();
         public VatReport VatTax { get; set; }
+        public VatUeReport VatUeTax { get; set; }
         public List<DocumentProcessingReport> Documents { get; set; } = new List<DocumentProcessingReport>();
     }
 
@@ -88,6 +89,20 @@ namespace NexoBridge.Models
         public decimal AmountToCarryOver { get; set; }
 
         // Błąd podczas generowania JPK
+        public string ErrorMsg { get; set; }
+    }
+
+    // Raport z informacji podsumowującej VAT-UE
+    public class VatUeReport
+    {
+        public bool IsVatUePayer { get; set; }
+        public string SettlementMethod { get; set; }
+        public string DeclarationType { get; set; }
+        public string DeclarationVersion { get; set; }
+        public bool IsGenerated { get; set; }
+        public bool AlreadyExists { get; set; }
+        public string DeclarationId { get; set; }
+        public string Warning { get; set; }
         public string ErrorMsg { get; set; }
     }
 }

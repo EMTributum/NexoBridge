@@ -63,6 +63,7 @@ namespace NexoBridge.Workers
                         var accLogger = _loggerFactory.CreateLogger<AccountingService>();
                         var pitLogger = _loggerFactory.CreateLogger<PitCalculationService>();
                         var vatLogger = _loggerFactory.CreateLogger<VatCalculationService>();
+                        var vatUeLogger = _loggerFactory.CreateLogger<VatUeCalculationService>();
                         var attLogger = _loggerFactory.CreateLogger<AttachmentService>();
                         var ksefLogger = _loggerFactory.CreateLogger<KsefNumberAssignmentService>();
                         var importLogger = _loggerFactory.CreateLogger<NexoImportService>();
@@ -74,6 +75,7 @@ namespace NexoBridge.Workers
                         var accService = new AccountingService(silnik.Sfera, accLogger);
                         var pitService = new PitCalculationService(silnik.Sfera, pitLogger);
                         var vatService = new VatCalculationService(silnik.Sfera, vatLogger);
+                        var vatUeService = new VatUeCalculationService(silnik.Sfera, vatUeLogger);
                         var attService = new AttachmentService(
                             silnik.Sfera,
                             attLogger,
@@ -101,6 +103,7 @@ namespace NexoBridge.Workers
                             accService,
                             pitService,
                             vatService,
+                            vatUeService,
                             attService,
                             ksefService,
                             importLogger

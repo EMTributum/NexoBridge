@@ -19,6 +19,7 @@ namespace NexoBridge.Services
         private readonly AccountingService _accountingService;
         private readonly PitCalculationService _pitService;
         private readonly VatCalculationService _vatService;
+        private readonly VatUeCalculationService _vatUeService;
         private readonly AttachmentService _attachmentService;
         private readonly KsefNumberAssignmentService _ksefNumberAssignmentService;
         private readonly ILogger<NexoImportService> _logger;
@@ -30,6 +31,7 @@ namespace NexoBridge.Services
             AccountingService accountingService,
             PitCalculationService pitCalculationService,
             VatCalculationService vatCalculationService,
+            VatUeCalculationService vatUeCalculationService,
             AttachmentService attachmentService,
             KsefNumberAssignmentService ksefNumberAssignmentService,
             ILogger<NexoImportService> logger)
@@ -40,6 +42,7 @@ namespace NexoBridge.Services
             _accountingService = accountingService;
             _pitService = pitCalculationService;
             _vatService = vatCalculationService;
+            _vatUeService = vatUeCalculationService;
             _attachmentService = attachmentService;
             _ksefNumberAssignmentService = ksefNumberAssignmentService;
             _logger = logger;
@@ -69,7 +72,7 @@ namespace NexoBridge.Services
             object rezultatDekretacji = null;
             List<Tuple<DokumentDoKsiegowania, SchematImportu>> zatwierdzoneDekretacji = new List<Tuple<DokumentDoKsiegowania, SchematImportu>>();
 
-            _logger.LogInformation("Rozpoczynam zintegrowane przetwarzanie zadania: {JobId}. Baza docelowa: {Database} za {Miesiac}/{Rok}. Flagi: ImportInvoices={ImportInvoices}, Files={Files}, CalculateAmortization={CalculateAmortization}, CalculatePit={CalculatePit}, CalculateVat={CalculateVat}",
+            _logger.LogInformation("Rozpoczynam zintegrowane przetwarzanie zadania: {JobId}. Baza docelowa: {Database} za {Miesiac}/{Rok}. Flagi: ImportInvoices={ImportInvoices}, Files={Files}, CalculateAmortization={CalculateAmortization}, CalculatePit={CalculatePit}, CalculateVat={CalculateVat}, CalculateVatUE={CalculateVatUE}",
                 job.JobId,
                 job.DatabaseName,
                 job.BillingMonth,
@@ -78,7 +81,8 @@ namespace NexoBridge.Services
                 job.Files?.Count ?? 0,
                 job.CalculateAmortization,
                 job.CalculatePit,
-                job.CalculateVat);
+                job.CalculateVat,
+                job.CalculateVatUE);
 
             try
             {
@@ -229,8 +233,36 @@ namespace NexoBridge.Services
                 }
                 else
                 {
-                    _logger.LogInformation("Pomijam wyliczanie VAT (flaga z Frontendu).");
-                    await vatProgress.CompleteAsync("Pomijam wyliczanie VAT.");
+                    _logger.LogInformation("Pomijam wyliczanie VAT/JPK (flaga z Frontendu).");
+                    await vatProgress.CompleteAsync("Pomijam wyliczanie VAT/JPK.");
+                }
+
+                var vatUeProgress = progress.BeginSegment(job.CalculateVatUE ? JobProgressPlan.VatUeUnits : JobProgressPlan.SkipVatUeUnits);
+                if (job.CalculateVatUE)
+                {
+                    await vatUeProgress.ReportAsync(10, "Generowanie VAT-UE...");
+                    finalReport.VatUeTax = await _vatUeService.WygenerujVatUeAsync(dataRozliczenia);
+                    if (finalReport.VatUeTax != null &&
+                        !finalReport.VatUeTax.IsVatUePayer &&
+                        string.IsNullOrWhiteSpace(finalReport.VatUeTax.ErrorMsg) &&
+                        string.IsNullOrWhiteSpace(finalReport.VatUeTax.Warning))
+                    {
+                        finalReport.VatUeTax.ErrorMsg = "Frontend wskazał calculateVatUE=true na podstawie flagi VAT-UE z Biura, ale w bazie klienta nie znaleziono aktywnej konfiguracji rozliczeń VAT-UE dla tego okresu.";
+                        _logger.LogWarning("[VAT-UE ODRZUCONO] {Msg}", finalReport.VatUeTax.ErrorMsg);
+                    }
+
+                    await vatUeProgress.CompleteAsync("Generowanie VAT-UE zakończone.");
+
+                    if (!string.IsNullOrEmpty(finalReport.VatUeTax?.ErrorMsg))
+                    {
+                        finalReport.Status = "FAILED";
+                        finalReport.Message += " Wystąpiły błędy podczas generowania VAT-UE.";
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("Pomijam wyliczanie VAT-UE (flaga z Frontendu).");
+                    await vatUeProgress.CompleteAsync("Pomijam wyliczanie VAT-UE.");
                 }
 
                 // =========================================================

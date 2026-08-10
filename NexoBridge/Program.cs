@@ -129,9 +129,17 @@ namespace NexoBridge
                 builder.Services.AddSingleton<OfficeVatFlagsJobQueue>();
                 builder.Services.AddSingleton<OfficeVatFlagsResultStore>();
                 builder.Services.AddSingleton<NexoBridgeLogReader>();
+                builder.Services.AddSingleton<RcpEmployeeMappingStore>();
+                builder.Services.AddSingleton<RcpImportJobQueue>();
+                builder.Services.AddSingleton<RcpImportResultStore>();
+                builder.Services.AddSingleton<RcpImportStateStore>();
+                builder.Services.AddSingleton<RcpRuntimeSettings>();
                 builder.Services.AddHttpClient<NexoBridgeErrorReporter>();
+                builder.Services.AddHttpClient<RcpSourceClient>();
                 builder.Services.AddHostedService<NexoBackgroundWorker>();
                 builder.Services.AddHostedService<OfficeVatFlagsBackgroundWorker>();
+                builder.Services.AddHostedService<RcpImportBackgroundWorker>();
+                builder.Services.AddHostedService<RcpPollingBackgroundWorker>();
 
                 var app = builder.Build();
 
@@ -144,6 +152,8 @@ namespace NexoBridge
                 app.MapHealthEndpoints();
                 app.MapImportEndpoints();
                 app.MapOfficeVatFlagsEndpoints();
+                app.MapRcpEmployeeMappingEndpoints();
+                app.MapRcpImportEndpoints();
                 app.MapLogEndpoints();
 
                 Log.Information("NexoBridge nasłuchuje na porcie 5000...");

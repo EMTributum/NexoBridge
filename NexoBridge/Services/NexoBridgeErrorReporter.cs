@@ -127,6 +127,7 @@ namespace NexoBridge.Services
             context["billingYear"] = job.BillingYear;
             context["importInvoices"] = job.ImportInvoices;
             context["calculateVat"] = job.CalculateVat;
+            context["calculateVatUE"] = job.CalculateVatUE;
             context["calculatePit"] = job.CalculatePit;
             context["calculateAmortization"] = job.CalculateAmortization;
             context["eppFilesCount"] = job.Files?.Count ?? 0;

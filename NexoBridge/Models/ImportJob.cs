@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace NexoBridge.Models
 {
@@ -18,6 +19,8 @@ namespace NexoBridge.Models
         // ==========================================
         public bool ImportInvoices { get; set; } = false;
         public bool CalculateVat { get; set; } = false;
+        [JsonPropertyName("calculateVatUE")]
+        public bool CalculateVatUE { get; set; } = false;
         public bool CalculatePit { get; set; } = false;
         public bool CalculateAmortization { get; set; } = false;
 
