@@ -66,6 +66,7 @@ namespace NexoBridge.Workers
                         var vatUeLogger = _loggerFactory.CreateLogger<VatUeCalculationService>();
                         var attLogger = _loggerFactory.CreateLogger<AttachmentService>();
                         var ksefLogger = _loggerFactory.CreateLogger<KsefNumberAssignmentService>();
+                        var duplicateLogger = _loggerFactory.CreateLogger<InvoiceDuplicateDetectionService>();
                         var importLogger = _loggerFactory.CreateLogger<NexoImportService>();
 
                         // 3. Budujemy nasze serwisy i przekazujemy im świeżo uruchomiony uchwyt Sfery
@@ -94,6 +95,7 @@ namespace NexoBridge.Workers
                                 }
                             });
                         var ksefService = new KsefNumberAssignmentService(silnik.Sfera, ksefLogger);
+                        var duplicateService = new InvoiceDuplicateDetectionService(silnik.Sfera, duplicateLogger);
 
                         // 4. Budujemy "Dyrygenta", z pełnym, nowym składem orkiestry
                         var serwis = new NexoImportService(
@@ -106,6 +108,7 @@ namespace NexoBridge.Workers
                             vatUeService,
                             attService,
                             ksefService,
+                            duplicateService,
                             importLogger
                         );
 

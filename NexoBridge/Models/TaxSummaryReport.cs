@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
@@ -19,6 +20,7 @@ namespace NexoBridge.Models
         public List<PitResult> PitTaxes { get; set; } = new List<PitResult>();
         public VatReport VatTax { get; set; }
         public VatUeReport VatUeTax { get; set; }
+        public List<PotentialInvoiceDuplicate> DuplicateInvoices { get; set; } = new List<PotentialInvoiceDuplicate>();
         public List<DocumentProcessingReport> Documents { get; set; } = new List<DocumentProcessingReport>();
     }
 
@@ -53,6 +55,14 @@ namespace NexoBridge.Models
         public int? DocumentId { get; set; }
         public string EntityType { get; set; }
         public string KsefNumber { get; set; }
+    }
+
+    // Raport z miękkiego audytu potencjalnych duplikatów faktur.
+    public class PotentialInvoiceDuplicate
+    {
+        public string InvoiceNumber { get; set; }
+        public string DuplicateInvoiceNumber { get; set; }
+        public decimal SimilarityPercent { get; set; }
     }
 
     // Raport z modułu Środków Trwałych

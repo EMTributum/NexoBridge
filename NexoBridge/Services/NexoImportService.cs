@@ -22,6 +22,7 @@ namespace NexoBridge.Services
         private readonly VatUeCalculationService _vatUeService;
         private readonly AttachmentService _attachmentService;
         private readonly KsefNumberAssignmentService _ksefNumberAssignmentService;
+        private readonly InvoiceDuplicateDetectionService _duplicateDetectionService;
         private readonly ILogger<NexoImportService> _logger;
 
         public NexoImportService(
@@ -34,6 +35,7 @@ namespace NexoBridge.Services
             VatUeCalculationService vatUeCalculationService,
             AttachmentService attachmentService,
             KsefNumberAssignmentService ksefNumberAssignmentService,
+            InvoiceDuplicateDetectionService duplicateDetectionService,
             ILogger<NexoImportService> logger)
         {
             _parserService = parserService;
@@ -45,6 +47,7 @@ namespace NexoBridge.Services
             _vatUeService = vatUeCalculationService;
             _attachmentService = attachmentService;
             _ksefNumberAssignmentService = ksefNumberAssignmentService;
+            _duplicateDetectionService = duplicateDetectionService;
             _logger = logger;
         }
 
@@ -298,7 +301,15 @@ namespace NexoBridge.Services
                 }
 
                 // =========================================================
-                // ETAP 7: ZAKOŃCZENIE I RAPORTOWANIE
+                // ETAP 7: AUDYT POTENCJALNYCH DUPLIKATÓW
+                // =========================================================
+                var duplicateProgress = progress.BeginSegment(JobProgressPlan.DuplicateAuditUnits);
+                await duplicateProgress.ReportAsync(10, "Sprawdzanie potencjalnych duplikatów faktur...");
+                finalReport.DuplicateInvoices = await _duplicateDetectionService.SprawdzDuplikatyAsync(dataRozliczenia);
+                await duplicateProgress.CompleteAsync("Audyt potencjalnych duplikatów zakończony.");
+
+                // =========================================================
+                // ETAP 8: ZAKOŃCZENIE I RAPORTOWANIE
                 // =========================================================
                 if (finalReport.Status == "SUCCESS" && CzySaOstrzezeniaDokumentow(finalReport))
                 {

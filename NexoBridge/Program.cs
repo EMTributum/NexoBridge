@@ -134,12 +134,21 @@ namespace NexoBridge
                 builder.Services.AddSingleton<RcpImportResultStore>();
                 builder.Services.AddSingleton<RcpImportStateStore>();
                 builder.Services.AddSingleton<RcpRuntimeSettings>();
+                builder.Services.AddSingleton<BillingJobQueue>();
+                builder.Services.AddSingleton<BillingResultStore>();
+                builder.Services.AddSingleton<InvoiceCreationJobQueue>();
+                builder.Services.AddSingleton<InvoiceCreationResultStore>();
+                builder.Services.AddSingleton<BillingClientsJobQueue>();
+                builder.Services.AddSingleton<BillingClientsResultStore>();
                 builder.Services.AddHttpClient<NexoBridgeErrorReporter>();
                 builder.Services.AddHttpClient<RcpSourceClient>();
                 builder.Services.AddHostedService<NexoBackgroundWorker>();
                 builder.Services.AddHostedService<OfficeVatFlagsBackgroundWorker>();
                 builder.Services.AddHostedService<RcpImportBackgroundWorker>();
                 builder.Services.AddHostedService<RcpPollingBackgroundWorker>();
+                builder.Services.AddHostedService<BillingSnapshotBackgroundWorker>();
+                builder.Services.AddHostedService<InvoiceCreationBackgroundWorker>();
+                builder.Services.AddHostedService<BillingClientsBackgroundWorker>();
 
                 var app = builder.Build();
 
@@ -155,6 +164,7 @@ namespace NexoBridge
                 app.MapRcpEmployeeMappingEndpoints();
                 app.MapRcpImportEndpoints();
                 app.MapLogEndpoints();
+                app.MapBillingEndpoints();
 
                 Log.Information("NexoBridge nasłuchuje na porcie 5000...");
                 app.Run("http://0.0.0.0:5000");
