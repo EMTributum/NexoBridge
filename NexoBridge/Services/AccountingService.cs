@@ -41,8 +41,14 @@ namespace NexoBridge.Services
                 .Cast<DokumentDoKsiegowania>()
                 .Where(d => (int)d.StatusKsiegowy == 2)
                 .ToList();
-            var wybor = WaitingRoomDocumentFilter.SelectForNewMarker(wszystkieOczekujace, PobierzKontekstZnacznikaNowosci());
+            var kontekstNowosci = PobierzKontekstZnacznikaNowosci();
+            var wybor = WaitingRoomDocumentFilter.SelectForNewMarker(wszystkieOczekujace, kontekstNowosci);
             LogujWyborPoczekalni(wybor);
+            if (wybor.SkippedNotNew.Count > 0)
+            {
+                _logger.LogInformation("[ZNACZNIK NOWOŚCI DIAG] {Szczegoly}",
+                    WaitingRoomDocumentFilter.DescribeNewMarkerDiagnostics(kontekstNowosci, wybor.SkippedNotNew));
+            }
             var oczekujace = wybor.Included;
 
             if (oczekujace.Count == 0)

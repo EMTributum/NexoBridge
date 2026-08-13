@@ -4,6 +4,7 @@ using InsERT.Moria.ModelDanych;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 
 namespace NexoBridge.Services
 {
@@ -226,6 +227,62 @@ namespace NexoBridge.Services
             {
                 return null;
             }
+        }
+
+        // Diagnostyka na żądanie dla incydentu "znacznik nowości zablokowany" - nie zmienia logiki wyboru,
+        // tylko zrzuca proste (nie-referencyjne) właściwości kontekstu i pominiętych dokumentów, żeby przy
+        // następnym incydencie mieć realne dane (daty/parametry) a nie tylko licznik SkippedNotNew.
+        public static string DescribeNewMarkerDiagnostics(NewDocumentMarkerContext context, IEnumerable<DokumentDoKsiegowania> skippedNotNew, int maxDocuments = 30)
+        {
+            if (context == null) return "brak kontekstu";
+
+            var parts = new List<string>
+            {
+                $"parametrImportu=[{DescribeObjectShallow(context.ParametrImportu)}]",
+                $"dataSystemowa=[{DescribeObjectShallow(context.DataSystemowa)}]"
+            };
+
+            var skipped = (skippedNotNew ?? Enumerable.Empty<DokumentDoKsiegowania>()).Take(maxDocuments).ToList();
+            if (skipped.Count > 0)
+            {
+                var dokumentySzczegoly = skipped.Select(d => $"{InvoiceDocumentMatcher.Describe(d)}: [{DescribeObjectShallow(d)}]");
+                parts.Add($"pominieteBezN=[{string.Join(" || ", dokumentySzczegoly)}]");
+            }
+
+            return string.Join("; ", parts);
+        }
+
+        private static string DescribeObjectShallow(object value)
+        {
+            if (value == null) return "brak";
+
+            var dump = value.GetType()
+                .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                .Where(p => p.GetIndexParameters().Length == 0 && JestProstymTypem(p.PropertyType))
+                .Select(p =>
+                {
+                    try
+                    {
+                        object propertyValue = p.GetValue(value);
+                        return $"{p.Name}={(propertyValue == null ? "null" : propertyValue.ToString())}";
+                    }
+                    catch (Exception ex)
+                    {
+                        return $"{p.Name}=<odczyt nieudany: {ex.GetType().Name}>";
+                    }
+                })
+                .ToList();
+
+            return dump.Count == 0 ? value.GetType().FullName : string.Join(", ", dump);
+        }
+
+        private static bool JestProstymTypem(Type type)
+        {
+            var podstawowy = Nullable.GetUnderlyingType(type) ?? type;
+            return podstawowy.IsPrimitive || podstawowy.IsEnum ||
+                   podstawowy == typeof(string) || podstawowy == typeof(DateTime) ||
+                   podstawowy == typeof(decimal) || podstawowy == typeof(Guid) ||
+                   podstawowy == typeof(TimeSpan);
         }
     }
 }

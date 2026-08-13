@@ -41,8 +41,13 @@ namespace NexoBridge.Workers
             while (!stoppingToken.IsCancellationRequested)
             {
                 OfficeVatFlagsJob job = await _jobQueue.DequeueAsync(stoppingToken);
+                string tryb = job.JdgListOnly
+                    ? "odczyt listy JDG klientow"
+                    : job.SyncDatabaseNamesOnly
+                        ? "synchronizacje nazw baz danych klientow"
+                        : "odczyt flag VAT/VAT-UE";
                 _workerLogger.LogInformation("Rozpoczynam {Mode} z Biura: {JobId} (Baza: {Database}, NIP: {Nip})",
-                    job.SyncDatabaseNamesOnly ? "synchronizacje nazw baz danych klientow" : "odczyt flag VAT/VAT-UE",
+                    tryb,
                     job.JobId,
                     job.OfficeDatabaseName,
                     job.Nip);
@@ -57,15 +62,24 @@ namespace NexoBridge.Workers
 
                         var serviceLogger = _loggerFactory.CreateLogger<OfficeVatFlagsService>();
                         var service = new OfficeVatFlagsService(silnik.Sfera, serviceLogger);
-                        var report = job.SyncDatabaseNamesOnly
-                            ? await service.PobierzNazwyBazDanychAsync(job, async (procent, wiadomosc) =>
-                            {
-                                await WyslijPostep(job.JobId, procent, wiadomosc);
-                            })
-                            : await service.PobierzFlagiAsync(job, async (procent, wiadomosc) =>
+                        Func<int, string, Task> raportujPostep = async (procent, wiadomosc) =>
                         {
                             await WyslijPostep(job.JobId, procent, wiadomosc);
-                        });
+                        };
+
+                        OfficeVatFlagsReport report;
+                        if (job.JdgListOnly)
+                        {
+                            report = await service.PobierzListeJdgAsync(job, raportujPostep);
+                        }
+                        else if (job.SyncDatabaseNamesOnly)
+                        {
+                            report = await service.PobierzNazwyBazDanychAsync(job, raportujPostep);
+                        }
+                        else
+                        {
+                            report = await service.PobierzFlagiAsync(job, raportujPostep);
+                        }
 
                         _resultStore.Store(report);
                         await WyslijRaport(job.JobId, report);

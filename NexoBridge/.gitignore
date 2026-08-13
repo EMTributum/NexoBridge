@@ -13,3 +13,5 @@ NexoDLLs/
 .vs/
 *.user
 *.suo
+
+graphify-out/

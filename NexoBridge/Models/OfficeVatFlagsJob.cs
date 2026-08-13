@@ -11,6 +11,7 @@ namespace NexoBridge.Models
         public string OfficeDatabaseName { get; set; }
         public string Nip { get; set; }
         public bool SyncDatabaseNamesOnly { get; set; }
+        public bool JdgListOnly { get; set; }
     }
 
     public class OfficeVatFlagsReport
@@ -46,6 +47,10 @@ namespace NexoBridge.Models
         public bool? RachmistrzActive { get; set; }
         public bool? RewizorActive { get; set; }
         public bool? GratyfikantActive { get; set; }
+        public string PodmiotTyp { get; set; }
+        public string Krs { get; set; }
+        public string Regon { get; set; }
+        public bool? IsJdg { get; set; }
     }
 
     public class OfficeVatFlagsItem
@@ -71,5 +76,9 @@ namespace NexoBridge.Models
         public bool? RewizorActive { get; set; }
         public bool? GratyfikantActive { get; set; }
         public int? AccountingFormCode { get; set; }
+        public string PodmiotTyp { get; set; }
+        public string Krs { get; set; }
+        public string Regon { get; set; }
+        public bool? IsJdg { get; set; }
     }
 }

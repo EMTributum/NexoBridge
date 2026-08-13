@@ -100,7 +100,51 @@ namespace NexoBridge.API
                 });
             });
 
+            app.MapPost("/api/jobs/office-jdg-list", async (
+                OfficeVatFlagsJob job,
+                OfficeVatFlagsJobQueue queue,
+                OfficeVatFlagsResultStore resultStore) =>
+            {
+                var validationError = ValidateBaseRequest(job);
+                if (validationError != null)
+                {
+                    return validationError;
+                }
+
+                job.Nip = null;
+                job.SyncDatabaseNamesOnly = false;
+                job.JdgListOnly = true;
+                EnsureJobId(job);
+
+                resultStore.MarkPending(job.JobId);
+                await queue.QueueJobAsync(job);
+
+                Log.Information("Zlecenie odczytu listy JDG klientow Biura {JobId} dodane do kolejki (Baza: {Database})",
+                    job.JobId, job.OfficeDatabaseName);
+
+                return Results.Accepted(value: new
+                {
+                    JobId = job.JobId,
+                    Message = "Zlecenie odczytu listy JDG klientow Biura dodane do kolejki."
+                });
+            });
+
             app.MapGet("/api/jobs/office-vat-flags/{jobId}", (string jobId, OfficeVatFlagsResultStore resultStore) =>
+            {
+                if (resultStore.TryGet(jobId, out var report))
+                {
+                    return Results.Ok(report);
+                }
+
+                if (resultStore.IsPending(jobId))
+                {
+                    return Results.Accepted(value: new { JobId = jobId, Message = "Zlecenie jest nadal przetwarzane." });
+                }
+
+                return Results.NotFound(new { JobId = jobId, Message = "Nie znaleziono zlecenia." });
+            });
+
+            app.MapGet("/api/jobs/office-jdg-list/{jobId}", (string jobId, OfficeVatFlagsResultStore resultStore) =>
             {
                 if (resultStore.TryGet(jobId, out var report))
                 {

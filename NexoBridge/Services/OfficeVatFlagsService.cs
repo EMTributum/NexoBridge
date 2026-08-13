@@ -6,12 +6,45 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace NexoBridge.Services
 {
     public class OfficeVatFlagsService
     {
+        // Wyrazniki formy prawnej, ktore z ustawy muszą wystapic w nazwie rejestrowej spolki -
+        // w przeciwienstwie do REGON/KRS, ktore biura ksiegowe czesto nie wypelniaja w Nexo,
+        // ten fragment nazwy jest zawsze obecny i dlatego jest wiarygodniejszym sygnalem.
+        // Uwaga: spolka cywilna (S.C.) rowniez trafia na te liste - to partnerstwo, nie JDG,
+        // ale rowniez nie ma wlasnego KRS, wiec bez tego wyjatku bylaby blednie oznaczona jako JDG.
+        private static readonly string[] NieJdgWyznacznikiNazwy = new[]
+        {
+            "SPOLKA Z OGRANICZONA ODPOWIEDZIALNOSCIA",
+            "SP. Z O.O.",
+            "SP.Z O.O.",
+            "SP Z O.O.",
+            "SPZOO",
+            "PROSTA SPOLKA AKCYJNA",
+            "SPOLKA AKCYJNA",
+            "SPOLKA KOMANDYTOWO-AKCYJNA",
+            "SPOLKA KOMANDYTOWA",
+            "SPOLKA JAWNA",
+            "SPOLKA PARTNERSKA",
+            "SPOLKA CYWILNA",
+            "FUNDACJA",
+            "STOWARZYSZENIE",
+            "S.K.A.",
+            "SP.K.",
+            "SP. K.",
+            "SP.J.",
+            "SP. J.",
+            "SP.P.",
+            "SP. P.",
+            "S.C.",
+            " S.A.",
+            " S.A",
+        };
         private readonly Uchwyt _sfera;
         private readonly ILogger<OfficeVatFlagsService> _logger;
         private object _connectionDataResolver;
@@ -205,11 +238,109 @@ namespace NexoBridge.Services
             }
         }
 
+        public async Task<OfficeVatFlagsReport> PobierzListeJdgAsync(OfficeVatFlagsJob job, Func<int, string, Task> raportujPostep)
+        {
+            var report = new OfficeVatFlagsReport
+            {
+                JobId = job.JobId,
+                Status = "SUCCESS",
+                Message = "Odczytano liste JDG klientow Biura.",
+                OfficeDatabaseName = job.OfficeDatabaseName,
+                Source = "Biuro",
+                Precision = "jdgList"
+            };
+            _officeDatabaseName = job.OfficeDatabaseName;
+
+            await raportujPostep(30, "Odczyt klientow Biura...");
+            var items = PobierzKlientowBiura(report);
+            var deduped = WybierzNajlepszeRekordyPoNip(items);
+
+            DodajDiagnostykeJdg(report, deduped);
+
+            report.Items.AddRange(deduped
+                .Where(x => x.IsJdg == true)
+                .OrderBy(x => x.Name ?? x.ShortName ?? x.Nip)
+                .ThenBy(x => x.Nip));
+
+            if (report.Warnings.Any() && report.Status == "SUCCESS")
+            {
+                report.Status = "PARTIAL_SUCCESS";
+                report.Message = "Odczytano liste JDG klientow Biura z ostrzezeniami.";
+            }
+
+            await raportujPostep(100, "Odczyt listy JDG zakonczony.");
+            return report;
+        }
+
+        private void DodajDiagnostykeJdg(OfficeVatFlagsReport report, List<OfficeVatFlagsItem> items)
+        {
+            int total = items.Count;
+            int withKrs = items.Count(x => !string.IsNullOrWhiteSpace(x.Krs));
+            int withRegon = items.Count(x => !string.IsNullOrWhiteSpace(x.Regon));
+            int excludedByName = items.Count(x => x.IsJdg == false);
+            int jdgCount = items.Count(x => x.IsJdg == true);
+
+            string diagnostic = $"Diagnostyka JDG: klienciBiura={total}, wygladaNaSpolke(nazwa/KRS)={excludedByName}, zKRS={withKrs}, zREGON={withRegon}, wynikJDG={jdgCount}.";
+            _logger.LogWarning("[OFFICE JDG DIAG] {Diagnostic}", diagnostic);
+
+            if (jdgCount == 0)
+            {
+                report.Warnings.Add(diagnostic);
+            }
+        }
+
+        private static string NormalizujDoPorownania(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            var sb = new StringBuilder(value.Length);
+            foreach (char ch in value)
+            {
+                sb.Append(char.ToUpperInvariant(ch) switch
+                {
+                    'Ą' => 'A',
+                    'Ć' => 'C',
+                    'Ę' => 'E',
+                    'Ł' => 'L',
+                    'Ń' => 'N',
+                    'Ó' => 'O',
+                    'Ś' => 'S',
+                    'Ź' => 'Z',
+                    'Ż' => 'Z',
+                    char upper => upper
+                });
+            }
+
+            return sb.ToString();
+        }
+
+        private static bool WygladaJakSpolkaPrawaHandlowegoLubCywilna(string nazwa, string krs)
+        {
+            if (!string.IsNullOrWhiteSpace(krs))
+            {
+                return true;
+            }
+
+            string normalized = NormalizujDoPorownania(nazwa);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return false;
+            }
+
+            return NieJdgWyznacznikiNazwy.Any(marker => normalized.Contains(marker));
+        }
+
         private OfficeVatFlagsItem MapujKlientaBiura(object podmiot, object klient)
         {
             object firma = SafeObj(podmiot, "Firma");
             string nip = SafeString(podmiot, "NIP");
             string nipUe = SafeString(podmiot, "NIPUE");
+            string podmiotTyp = SafeString(podmiot, "Typ");
+            string krs = SafeString(firma, "KRS");
+            string regon = SafeString(firma, "REGON");
             var groupNames = PobierzNazwyGrup(podmiot);
             string vatUeFlagName = SafeString(SafeObj(podmiot, "FlagaWlasna"), "Nazwa");
             string guardian = PobierzOpiekuna(podmiot);
@@ -218,14 +349,16 @@ namespace NexoBridge.Services
             bool? rewizorActive = SafeBool(bazaKlienta, "AktywnyRewizor");
             bool? gratyfikantActive = SafeBool(bazaKlienta, "AktywnyGratyfikant");
             var danePolaczenia = PobierzDanePolaczeniaBazy(bazaKlienta);
+            string name = SafeString(firma, "Nazwa");
+            string shortName = SafeString(podmiot, "NazwaSkrocona");
 
             return new OfficeVatFlagsItem
             {
                 ClientId = SafeInt(klient, "Id"),
                 Nip = nip,
                 NormalizedNip = NormalizujIdPodatkowy(nip),
-                Name = SafeString(firma, "Nazwa"),
-                ShortName = SafeString(podmiot, "NazwaSkrocona"),
+                Name = name,
+                ShortName = shortName,
                 Active = SafeBool(klient, "Aktywny"),
                 IsVatPayer = groupNames.Any(x => string.Equals(x?.Trim(), "VAT", StringComparison.OrdinalIgnoreCase)),
                 IsVatUePayer = string.Equals(vatUeFlagName?.Trim(), "VAT-UE", StringComparison.OrdinalIgnoreCase),
@@ -241,7 +374,17 @@ namespace NexoBridge.Services
                 RachmistrzActive = rachmistrzActive,
                 RewizorActive = rewizorActive,
                 GratyfikantActive = gratyfikantActive,
-                AccountingFormCode = SafeInt(klient, "FormaKsiegowosci")
+                AccountingFormCode = SafeInt(klient, "FormaKsiegowosci"),
+                PodmiotTyp = podmiotTyp,
+                Krs = krs,
+                Regon = regon,
+                // Typ/REGON w tej bazie okazaly sie nieuzyteczne jako sygnal (Typ stale takie samo dla
+                // wszystkich klientow, REGON w wiekszosci niewypelniony) - patrz DodajDiagnostykeJdg.
+                // Jedyny zawsze obecny i prawnie wymagany sygnal to fragment formy prawnej w nazwie
+                // rejestrowej spolki, wiec kazdy klient biura, ktory NIE wyglada na spolke
+                // (po nazwie lub obecnosci KRS), jest traktowany jako JDG.
+                IsJdg = !WygladaJakSpolkaPrawaHandlowegoLubCywilna(name ?? shortName, krs)
+                    && !string.IsNullOrWhiteSpace(name ?? shortName)
             };
         }
 
@@ -265,7 +408,11 @@ namespace NexoBridge.Services
                     AccountingProgram = x.AccountingProgram,
                     RachmistrzActive = x.RachmistrzActive,
                     RewizorActive = x.RewizorActive,
-                    GratyfikantActive = x.GratyfikantActive
+                    GratyfikantActive = x.GratyfikantActive,
+                    PodmiotTyp = x.PodmiotTyp,
+                    Krs = x.Krs,
+                    Regon = x.Regon,
+                    IsJdg = x.IsJdg
                 }));
         }
 

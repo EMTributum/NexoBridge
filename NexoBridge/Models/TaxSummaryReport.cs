@@ -21,6 +21,7 @@ namespace NexoBridge.Models
         public VatReport VatTax { get; set; }
         public VatUeReport VatUeTax { get; set; }
         public List<PotentialInvoiceDuplicate> DuplicateInvoices { get; set; } = new List<PotentialInvoiceDuplicate>();
+        public List<VatStatusVerificationResult> VatStatusVerifications { get; set; } = new List<VatStatusVerificationResult>();
         public List<DocumentProcessingReport> Documents { get; set; } = new List<DocumentProcessingReport>();
     }
 
@@ -63,6 +64,19 @@ namespace NexoBridge.Models
         public string InvoiceNumber { get; set; }
         public string DuplicateInvoiceNumber { get; set; }
         public decimal SimilarityPercent { get; set; }
+    }
+
+    // Raport z miękkiego audytu statusu VAT kontrahentów z bieżącego okresu.
+    public class VatStatusVerificationResult
+    {
+        public string InvoiceNumber { get; set; }
+        public string VendorNip { get; set; }
+        public string VerificationDate { get; set; }
+        public string VerificationDateSource { get; set; }
+        public bool VerificationOk { get; set; }
+        public bool? ActiveVatPayer { get; set; }
+        public string StatusVat { get; set; }
+        public string Message { get; set; }
     }
 
     // Raport z modułu Środków Trwałych

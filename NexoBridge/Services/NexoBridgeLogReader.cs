@@ -13,6 +13,7 @@ namespace NexoBridge.Services
     {
         private const int DefaultWindowSeconds = 90;
         private const int MaxWindowSeconds = 3600;
+        private const int MaxLogFragmentChars = 200_000;
         private static readonly Regex LogEntryStart = new Regex(
             @"^(?<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{2}:\d{2}) \[[A-Z]{3}\]",
             RegexOptions.Compiled);
@@ -67,7 +68,38 @@ namespace NexoBridge.Services
                 return $"Brak wpisów logu dla{activityInfo} okno={start:O}..{end:O}, katalog={_logDirectory}.";
             }
 
-            return string.Join(Environment.NewLine, matching);
+            return TrimToMaxLength(matching);
+        }
+
+        // Bez tego capa okno logu (do 3600s) potrafiło rozrosnąć się do megabajtów przy zaspamowanych
+        // wpisach (np. seria [ZAŁĄCZNIK DOKUMENT] po kilka KB każdy) i nginx odrzucał cały raport błędu
+        // z 413 "too large chunked body" - zgłoszenie nigdy nie docierało do Klasyfikatora. Zachowujemy
+        // najnowsze wpisy (najbliższe momentowi błędu), bo są najbardziej istotne dla diagnozy.
+        private static string TrimToMaxLength(List<string> matchingOldestFirst)
+        {
+            string full = string.Join(Environment.NewLine, matchingOldestFirst);
+            if (full.Length <= MaxLogFragmentChars)
+            {
+                return full;
+            }
+
+            var kept = new List<string>();
+            int length = 0;
+            for (int i = matchingOldestFirst.Count - 1; i >= 0; i--)
+            {
+                string entry = matchingOldestFirst[i];
+                int addedLength = entry.Length + Environment.NewLine.Length;
+                if (length + addedLength > MaxLogFragmentChars)
+                {
+                    break;
+                }
+
+                kept.Insert(0, entry);
+                length += addedLength;
+            }
+
+            string header = $"[PRZYCIĘTO: pokazano {kept.Count} z {matchingOldestFirst.Count} wpisów logu (najnowsze), całość miała {full.Length} znaków, limit={MaxLogFragmentChars}]";
+            return header + Environment.NewLine + string.Join(Environment.NewLine, kept);
         }
 
         private IEnumerable<string> GetCandidateFiles()

@@ -103,7 +103,8 @@ namespace NexoBridge.Services
         public WaitingRoomDocumentSelection PobierzWyborDokumentowWPoczekalni(DateTime dataRozliczenia, ImportPackageContext packageContext)
         {
             var wszystkieOczekujace = PobierzWszystkieOczekujace();
-            var wybor = WaitingRoomDocumentFilter.SelectForNewMarker(wszystkieOczekujace, PobierzKontekstZnacznikaNowosci());
+            var kontekstNowosci = PobierzKontekstZnacznikaNowosci();
+            var wybor = WaitingRoomDocumentFilter.SelectForNewMarker(wszystkieOczekujace, kontekstNowosci);
 
             _logger.LogInformation("[MANIFEST POCZEKALNIA FILTR N] wszystkie={All}; doObslugi={Included}; noweN={IncludedByNewMarker}; wyjatkiKadrowe={IncludedPayrollException}; bezN={SkippedNotNew}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
                 wybor.Total,
@@ -113,6 +114,12 @@ namespace NexoBridge.Services
                 wybor.SkippedNotNew.Count,
                 wybor.PartialAmortization.Count,
                 wybor.EmployeeBillsWithSubject.Count);
+
+            if (wybor.SkippedNotNew.Count > 0)
+            {
+                _logger.LogInformation("[MANIFEST ZNACZNIK NOWOŚCI DIAG] {Szczegoly}",
+                    WaitingRoomDocumentFilter.DescribeNewMarkerDiagnostics(kontekstNowosci, wybor.SkippedNotNew));
+            }
 
             return wybor;
         }

@@ -25,6 +25,7 @@ namespace NexoBridge
         private const long DefaultMaxRequestBodySizeMb = 30;
         private const string MaxRequestBodySizeEnvName = "NEXO_BRIDGE_MAX_REQUEST_BODY_MB";
         private const string LogLevelEnvName = "NEXO_LOG_LEVEL";
+        private const string BuildMarker = "VAT_STATUS_AUDIT_2026_08_13_1225";
 
         public static void Main(string[] args)
         {
@@ -69,7 +70,7 @@ namespace NexoBridge
 
             try
             {
-                Log.Information("Uruchamianie mikroserwisu NexoBridge...");
+                Log.Information("Uruchamianie mikroserwisu NexoBridge... Marker kompilacji: {BuildMarker}", BuildMarker);
                 Log.Information(
                     "Poziom głównego logowania NexoBridge: {LogLevel}. Log główny: {MainLogPath}. Pełna diagnostyka załączników: {AttachmentDebugLogPath}.",
                     minimumLogLevel,

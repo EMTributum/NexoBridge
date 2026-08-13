@@ -547,7 +547,8 @@ namespace NexoBridge.Services
             string savePath,
             bool savedByFreshSession,
             out AttachmentSaveResult zapisany,
-            out string blad)
+            out string blad,
+            bool dozwolonyRetryPoDisposed = true)
         {
             zapisany = null;
             blad = null;
@@ -661,12 +662,50 @@ namespace NexoBridge.Services
                     return true;
                 }
 
+                if (dozwolonyRetryPoDisposed && CzyObjectDisposed(ex))
+                {
+                    _logger.LogWarning(ex, "[ZAŁĄCZNIK RETRY] tryb={Tryb}; target={Target}; krok={Krok}; Biblioteka załączników zgłosiła zamknięty ObjectContext. Pobieram świeży manager z tej samej sesji Sfery i ponawiam zapis raz. baseException={BaseException}",
+                        savePath,
+                        OpiszCelPowiazania(zapisanyCel ?? cel),
+                        krok,
+                        ex.GetBaseException().Message);
+
+                    try
+                    {
+                        object swiezaBiblioteka = sfera.PodajObiektTypu<InsERT.Moria.BibliotekaZalacznikow.IBibliotekaZalacznikow>();
+                        return ZapiszZalacznikDlaCelu(
+                            swiezaBiblioteka,
+                            sfera,
+                            tempPath,
+                            cel,
+                            savePath,
+                            savedByFreshSession,
+                            out zapisany,
+                            out blad,
+                            dozwolonyRetryPoDisposed: false);
+                    }
+                    catch (Exception retryEx)
+                    {
+                        blad = $"{blad} | retryPoDisposed wyjątek={retryEx.GetBaseException().Message}";
+                        _logger.LogError(retryEx, "[ZAŁĄCZNIK RETRY BŁĄD] tryb={Tryb}; target={Target}; Ponowny zapis ze świeżym managerem też się nie powiódł. {Szczegoly}",
+                            savePath,
+                            OpiszCelPowiazania(zapisanyCel ?? cel),
+                            blad);
+                        return false;
+                    }
+                }
+
                 _logger.LogDebug(ex, "[ZAŁĄCZNIK ZAPIS TARGET BŁĄD] tryb={Tryb}; target={Target}; {Szczegoly}",
                     savePath,
                     OpiszCelPowiazania(zapisanyCel ?? cel),
                     blad);
                 return false;
             }
+        }
+
+        private static bool CzyObjectDisposed(Exception ex)
+        {
+            return ex is ObjectDisposedException || ex.GetBaseException() is ObjectDisposedException;
         }
 
         private object ZnajdzEncjeDlaCelu(Uchwyt sfera, AttachmentTargetRef cel)
@@ -1084,25 +1123,164 @@ namespace NexoBridge.Services
             }
         }
 
-        private string WyciagnijBledySfery(dynamic obiektBO)
+        private string WyciagnijBledySfery(object obiektBO)
         {
+            if (obiektBO == null)
+            {
+                return "brak BO";
+            }
+
             try
             {
-                var invalidData = (System.Collections.IEnumerable)obiektBO.InvalidData;
-                if (invalidData != null)
+                object invalidDataObject = GetObject(obiektBO, "InvalidData");
+                if (invalidDataObject is not IEnumerable invalidData)
                 {
-                    var bledy = invalidData.Cast<dynamic>().Select(e =>
-                    {
-                        try { return (string)e.Komunikat ?? (string)e.Tresc ?? (string)e.Opis; }
-                        catch { return e.ToString(); }
-                    }).Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
+                    return "brak InvalidData";
+                }
 
-                    if (bledy.Any()) return string.Join(" | ", bledy);
+                var items = invalidData.Cast<object>().ToList();
+                if (items.Count == 0)
+                {
+                    return "InvalidData puste (0 elementów) - Zapisz() zwrócił false bez żadnego opisu błędu";
+                }
+
+                var errors = items
+                    .Select(error => OpiszBladWalidacji(error, 0))
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .ToList();
+
+                return errors.Count == 0 ? "brak szczegółów InvalidData" : string.Join(" | ", errors);
+            }
+            catch (Exception ex)
+            {
+                return "nie udało się odczytać InvalidData: " + ex.GetBaseException().Message;
+            }
+        }
+
+        // Najpierw szuka znanych nazw property z komunikatem (PL/EN/Sfera), potem typowego kształtu EF
+        // DbValidationError (PropertyName+ErrorMessage), potem zbiorów zagnieżdżonych błędów, a jako
+        // ostatnią deskę ratunku zrzuca WSZYSTKIE proste property obiektu błędu - żeby nic nie zginęło
+        // tak jak wcześniej, gdy generyczny ToString() maskował prawdziwą przyczynę odrzucenia zapisu.
+        private static string OpiszBladWalidacji(object error, int depth)
+        {
+            if (error == null || depth > 2)
+            {
+                return null;
+            }
+
+            if (TryReadStringProperty(error, "ErrorMessage", out string efMessage))
+            {
+                string efProperty = TryReadStringProperty(error, "PropertyName", out string pn) ? pn : null;
+                return efProperty != null
+                    ? $"{error.GetType().Name}[{efProperty}]: {efMessage}"
+                    : $"{error.GetType().Name}.ErrorMessage='{efMessage}'";
+            }
+
+            string[] messageProps =
+            {
+                "Komunikat", "Tresc", "Treść", "Opis", "Message",
+                "WlasnyKomunikatBledu", "TrescBledu", "Blad", "Błąd", "Uwagi"
+            };
+
+            foreach (string propertyName in messageProps)
+            {
+                if (TryReadStringProperty(error, propertyName, out string value))
+                {
+                    return $"{error.GetType().Name}.{propertyName}='{value}'";
                 }
             }
-            catch { }
 
-            return "brak szczegółów InvalidData";
+            foreach (string collectionProp in new[] { "ValidationErrors", "Errors", "Bledy", "Błędy" })
+            {
+                object nested = GetObject(error, collectionProp);
+                if (nested is IEnumerable nestedEnumerable and not string)
+                {
+                    var nestedDescribed = nestedEnumerable.Cast<object>()
+                        .Select(item => OpiszBladWalidacji(item, depth + 1))
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .ToList();
+
+                    if (nestedDescribed.Count > 0)
+                    {
+                        return $"{error.GetType().Name}.{collectionProp}=[{string.Join("; ", nestedDescribed)}]";
+                    }
+                }
+            }
+
+            var dump = error.GetType()
+                .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                .Select(property =>
+                {
+                    try
+                    {
+                        object value = property.GetValue(error);
+                        if (value == null || value is IEnumerable and not string)
+                        {
+                            return null;
+                        }
+
+                        string text = value.ToString();
+                        return string.IsNullOrWhiteSpace(text) ? null : $"{property.Name}={text}";
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                })
+                .Where(x => x != null)
+                .ToList();
+
+            return dump.Count > 0
+                ? $"{error.GetType().FullName}[{string.Join(", ", dump)}]"
+                : $"{error.GetType().FullName}: {error}";
+        }
+
+        private static bool TryReadStringProperty(object source, string propertyName, out string value)
+        {
+            value = null;
+            if (source == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                PropertyInfo property = source.GetType().GetProperty(propertyName);
+                if (property == null || !property.CanRead)
+                {
+                    return false;
+                }
+
+                string text = property.GetValue(source)?.ToString();
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    return false;
+                }
+
+                value = text.Trim();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static object GetObject(object source, string propertyName)
+        {
+            if (source == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return source.GetType().GetProperty(propertyName)?.GetValue(source);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private string ListaDoLogu(IEnumerable<string> items)

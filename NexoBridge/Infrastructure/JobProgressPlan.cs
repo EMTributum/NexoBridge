@@ -22,6 +22,7 @@ namespace NexoBridge.Infrastructure
         public const int VatUeUnits = 10;
         public const int SkipVatUeUnits = 2;
         public const int DuplicateAuditUnits = 5;
+        public const int VatStatusAuditUnits = 5;
         public const int FinishUnits = 2;
 
         public static int CalculateTotalUnits(ImportJob job)
@@ -39,6 +40,7 @@ namespace NexoBridge.Infrastructure
                 + (job.CalculateVat ? VatUnits : SkipVatUnits)
                 + (job.CalculateVatUE ? VatUeUnits : SkipVatUeUnits)
                 + DuplicateAuditUnits
+                + VatStatusAuditUnits
                 + FinishUnits;
         }
 

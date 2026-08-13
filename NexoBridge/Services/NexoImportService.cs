@@ -23,6 +23,7 @@ namespace NexoBridge.Services
         private readonly AttachmentService _attachmentService;
         private readonly KsefNumberAssignmentService _ksefNumberAssignmentService;
         private readonly InvoiceDuplicateDetectionService _duplicateDetectionService;
+        private readonly VatStatusVerificationService _vatStatusVerificationService;
         private readonly ILogger<NexoImportService> _logger;
 
         public NexoImportService(
@@ -36,6 +37,7 @@ namespace NexoBridge.Services
             AttachmentService attachmentService,
             KsefNumberAssignmentService ksefNumberAssignmentService,
             InvoiceDuplicateDetectionService duplicateDetectionService,
+            VatStatusVerificationService vatStatusVerificationService,
             ILogger<NexoImportService> logger)
         {
             _parserService = parserService;
@@ -48,6 +50,7 @@ namespace NexoBridge.Services
             _attachmentService = attachmentService;
             _ksefNumberAssignmentService = ksefNumberAssignmentService;
             _duplicateDetectionService = duplicateDetectionService;
+            _vatStatusVerificationService = vatStatusVerificationService;
             _logger = logger;
         }
 
@@ -146,7 +149,28 @@ namespace NexoBridge.Services
                     _manifestService.AktualizujPoPoczekalni(finalReport.Documents, wyborPrzedDekretacja);
 
                     await decreeProgress.ReportAsync(5, "Dekretacja dokumentów...");
-                    var (rezultat, zatwierdzone, oczekujace, brakSchematu, bledneSchematy) = await _accountingService.DekretujAsync(dataRozliczenia, packageContext, decreeProgress.ReportAsync);
+                    (dynamic Rezultat, List<Tuple<DokumentDoKsiegowania, SchematImportu>> Zatwierdzone, List<DokumentDoKsiegowania> Oczekujace, List<DokumentDoKsiegowania> BrakSchematu, List<DokumentDoKsiegowania> BledneSchematy) wynikDekretacji;
+                    try
+                    {
+                        wynikDekretacji = await _accountingService.DekretujAsync(dataRozliczenia, packageContext, decreeProgress.ReportAsync);
+                    }
+                    catch (ArgumentNullException ex) when (string.Equals(ex.ParamName, "okresObrachunkowy", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogError(ex, "[DEKRETACJA BŁĄD OKRESU] JobId={JobId}; baza={Database}; okresRozliczenia={Okres}; " +
+                            "Sfera nie znalazła okresu obrachunkowego dla daty jednego z dokumentów w Poczekalni. " +
+                            "Sprawdź, czy w bazie klienta są skonfigurowane okresy obrachunkowe obejmujące datę zdarzenia tego dokumentu " +
+                            "(np. dokument z datą z innego roku/miesiąca niż otwarte okresy).",
+                            job.JobId,
+                            job.DatabaseName,
+                            dataRozliczenia);
+                        throw;
+                    }
+
+                    var rezultat = wynikDekretacji.Rezultat;
+                    var zatwierdzone = wynikDekretacji.Zatwierdzone;
+                    var oczekujace = wynikDekretacji.Oczekujace;
+                    var brakSchematu = wynikDekretacji.BrakSchematu;
+                    var bledneSchematy = wynikDekretacji.BledneSchematy;
                     rezultatDekretacji = (object)rezultat;
                     zatwierdzoneDekretacji = zatwierdzone ?? new List<Tuple<DokumentDoKsiegowania, SchematImportu>>();
                     zatwierdzoneCount = zatwierdzoneDekretacji.Count;
@@ -309,7 +333,15 @@ namespace NexoBridge.Services
                 await duplicateProgress.CompleteAsync("Audyt potencjalnych duplikatów zakończony.");
 
                 // =========================================================
-                // ETAP 8: ZAKOŃCZENIE I RAPORTOWANIE
+                // ETAP 8: AUDYT STATUSU VAT KONTRAHENTÓW
+                // =========================================================
+                var vatStatusProgress = progress.BeginSegment(JobProgressPlan.VatStatusAuditUnits);
+                await vatStatusProgress.ReportAsync(10, "Sprawdzanie statusu VAT kontrahentów...");
+                finalReport.VatStatusVerifications = await _vatStatusVerificationService.SprawdzStatusyVatAsync(dataRozliczenia);
+                await vatStatusProgress.CompleteAsync("Audyt statusu VAT kontrahentów zakończony.");
+
+                // =========================================================
+                // ETAP 9: ZAKOŃCZENIE I RAPORTOWANIE
                 // =========================================================
                 if (finalReport.Status == "SUCCESS" && CzySaOstrzezeniaDokumentow(finalReport))
                 {
@@ -322,12 +354,19 @@ namespace NexoBridge.Services
                     finalReport.Status = "PARTIAL_SUCCESS";
                 }
 
+                if (finalReport.Status == "SUCCESS" && CzySaProblemyStatusuVat(finalReport))
+                {
+                    finalReport.Status = "PARTIAL_SUCCESS";
+                    finalReport.Message += " Część kontrahentów wymaga uwagi w audycie statusu VAT.";
+                }
+
                 string summaryJson = JsonSerializer.Serialize(finalReport, new JsonSerializerOptions { WriteIndented = true });
-                _logger.LogInformation("Zadanie {JobId} zakończone. Status: {Status}. Dokumenty={DocumentsCount}; ostrzeżeniaDokumentów={WarningCount}",
+                _logger.LogInformation("Zadanie {JobId} zakończone. Status: {Status}. Dokumenty={DocumentsCount}; ostrzeżeniaDokumentów={WarningCount}; uwagiStatusuVAT={VatStatusWarnings}",
                     job.JobId,
                     finalReport.Status,
                     finalReport.Documents?.Count ?? 0,
-                    finalReport.Documents?.Count(d => d.Warnings != null && d.Warnings.Count > 0) ?? 0);
+                    finalReport.Documents?.Count(d => d.Warnings != null && d.Warnings.Count > 0) ?? 0,
+                    finalReport.VatStatusVerifications?.Count(v => !v.VerificationOk || v.ActiveVatPayer == false) ?? 0);
 
                 string raportKoncowy = wymagaDekretacji
                     ? $"[ZAKOŃCZONO] Status: {finalReport.Status}. Zadekretowano {zatwierdzoneCount} dok."
@@ -525,8 +564,13 @@ namespace NexoBridge.Services
                 d.DecreeStatus == "resultMissing" ||
                 d.DecreeStatus == "noResultEntries");
         }
+
+        private bool CzySaProblemyStatusuVat(TaxSummaryReport report)
+        {
+            return report.VatStatusVerifications != null && report.VatStatusVerifications.Any(v =>
+                !v.VerificationOk ||
+                v.ActiveVatPayer == false);
+        }
     }
 }
-
-
 
