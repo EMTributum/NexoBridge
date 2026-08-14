@@ -8,17 +8,20 @@ using NexoBridge.Models;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace NexoBridge.Services
 {
     public class ImportManifestService
     {
         private readonly Uchwyt _sfera;
+        private readonly PoczekalniaBaselineStore _baselineStore;
         private readonly ILogger<ImportManifestService> _logger;
 
-        public ImportManifestService(Uchwyt sfera, ILogger<ImportManifestService> logger)
+        public ImportManifestService(Uchwyt sfera, PoczekalniaBaselineStore baselineStore, ILogger<ImportManifestService> logger)
         {
             _sfera = sfera;
+            _baselineStore = baselineStore;
             _logger = logger;
         }
 
@@ -85,41 +88,23 @@ namespace NexoBridge.Services
             return documents;
         }
 
-        public List<DokumentDoKsiegowania> PobierzDokumentyWPoczekalni()
-        {
-            return PobierzWszystkieOczekujace();
-        }
-
-        public List<DokumentDoKsiegowania> PobierzDokumentyWPoczekalni(DateTime dataRozliczenia)
-        {
-            return PobierzWyborDokumentowWPoczekalni(dataRozliczenia, null).Included;
-        }
-
-        public List<DokumentDoKsiegowania> PobierzDokumentyWPoczekalni(DateTime dataRozliczenia, ImportPackageContext packageContext)
-        {
-            return PobierzWyborDokumentowWPoczekalni(dataRozliczenia, packageContext).Included;
-        }
-
-        public WaitingRoomDocumentSelection PobierzWyborDokumentowWPoczekalni(DateTime dataRozliczenia, ImportPackageContext packageContext)
+        public async Task<WaitingRoomDocumentSelection> PobierzWyborDokumentowWPoczekalni(DateTime dataRozliczenia, ImportPackageContext packageContext, ImportJob job)
         {
             var wszystkieOczekujace = PobierzWszystkieOczekujace();
-            var kontekstNowosci = PobierzKontekstZnacznikaNowosci();
-            var wybor = WaitingRoomDocumentFilter.SelectForNewMarker(wszystkieOczekujace, kontekstNowosci);
+            var znaneNumery = await _baselineStore.PobierzZnaneNumeryAsync(job?.DatabaseName);
+            bool bootstrap = znaneNumery == null;
+            var wybor = WaitingRoomDocumentFilter.SelectForBaseline(wszystkieOczekujace, doc => bootstrap || znaneNumery.Contains(doc.Nr));
 
-            _logger.LogInformation("[MANIFEST POCZEKALNIA FILTR N] wszystkie={All}; doObslugi={Included}; noweN={IncludedByNewMarker}; wyjatkiKadrowe={IncludedPayrollException}; bezN={SkippedNotNew}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
+            _logger.LogInformation("[MANIFEST POCZEKALNIA FILTR BASELINE] bootstrap={Bootstrap}; wszystkie={All}; doObslugi={Included}; nowe={IncludedNew}; wyjatkiKadrowe={IncludedPayrollException}; znaneZBaseline={SkippedNotNew}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}; dokumentyWewnetrzne={InternalDocuments}",
+                bootstrap,
                 wybor.Total,
                 wybor.Included.Count,
-                wybor.IncludedByNewMarker.Count,
+                wybor.IncludedNew.Count,
                 wybor.IncludedPayrollException.Count,
                 wybor.SkippedNotNew.Count,
                 wybor.PartialAmortization.Count,
-                wybor.EmployeeBillsWithSubject.Count);
-
-            if (wybor.SkippedNotNew.Count > 0)
-            {
-                _logger.LogInformation("[MANIFEST ZNACZNIK NOWOŚCI DIAG] {Szczegoly}",
-                    WaitingRoomDocumentFilter.DescribeNewMarkerDiagnostics(kontekstNowosci, wybor.SkippedNotNew));
-            }
+                wybor.EmployeeBillsWithSubject.Count,
+                wybor.InternalDocuments.Count);
 
             return wybor;
         }
@@ -130,15 +115,6 @@ namespace NexoBridge.Services
             return menedzerDokumentow.Dane.Wszystkie()
                 .Where(d => (int)d.StatusKsiegowy == 2)
                 .ToList();
-        }
-
-        private NewDocumentMarkerContext PobierzKontekstZnacznikaNowosci()
-        {
-            var parametryImportu = _sfera.PodajObiektTypu<IParametryImportuKsiegowego>();
-            var parametrImportu = parametryImportu?.DaneDomyslne?.Domyslny;
-            var dataSystemowa = _sfera.PodajObiektTypu<IDataSystemowa>();
-
-            return new NewDocumentMarkerContext(parametrImportu, dataSystemowa);
         }
 
         public void AktualizujPoPoczekalni(List<DocumentProcessingReport> manifest, WaitingRoomDocumentSelection wybor)
@@ -154,7 +130,7 @@ namespace NexoBridge.Services
                 manifest,
                 wybor.SkippedNotNew,
                 "skippedNotNew",
-                "Dokument zostal znaleziony w Poczekalni, ale nie ma statusu N. Nie przekazano go do dekretacji.");
+                "Dokument byl juz znany z poprzedniego przebiegu (baseline). Nie przekazano go ponownie do dekretacji.");
             AktualizujPominietePrzezFiltr(
                 manifest,
                 wybor.EmployeeBillsWithSubject,
@@ -165,6 +141,11 @@ namespace NexoBridge.Services
                 wybor.PartialAmortization,
                 "skippedPartialAmortization",
                 "Pominieto amortyzacje czastkowa. Do dekretacji trafia tylko dokument zbiorczy.");
+            AktualizujPominietePrzezFiltr(
+                manifest,
+                wybor.InternalDocuments,
+                "skippedInternalDocument",
+                "Dokument generowany wewnetrznie przez Rachmistrza (ZUS/bank/kasa/VAT/roznice kursowe itp.) - pozostawiony w Poczekalni do recznej dekretacji.");
         }
 
         public void AktualizujPoPoczekalni(List<DocumentProcessingReport> manifest, List<DokumentDoKsiegowania> oczekujace)
@@ -239,7 +220,7 @@ namespace NexoBridge.Services
                     KsefCode = null,
                     MatchStatus = payrollExceptionNumbers.Contains(doc.Nr)
                         ? "includedPayrollException"
-                        : "includedByNewMarker",
+                        : "includedNew",
                     WaitingRoomStatus = "found",
                     WaitingRoomId = doc.Id.ToString(),
                     WaitingRoomNr = doc.Nr,

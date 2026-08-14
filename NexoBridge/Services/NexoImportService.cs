@@ -106,7 +106,7 @@ namespace NexoBridge.Services
                     packageContext = ImportPackageContext.FromJob(job, importResult);
                     _logger.LogInformation("[EPP IMPORT CONTEXT] JobId={JobId}; obiekty={Objects}; naglowki={Headers}; numerySkorygowane={CorrectedNumbers}; ksefDopisane={KsefAssigned}", job.JobId, importResult.ObjectsCount, importResult.Headers.Count, importResult.InvoiceNumberCorrectedCount, importResult.KsefAssignedCount);
 
-                    var wyborPoImporcie = _manifestService.PobierzWyborDokumentowWPoczekalni(dataRozliczenia, packageContext);
+                    var wyborPoImporcie = await _manifestService.PobierzWyborDokumentowWPoczekalni(dataRozliczenia, packageContext, job);
                     _manifestService.AktualizujPoPoczekalni(finalReport.Documents, wyborPoImporcie);
                     await _ksefNumberAssignmentService.PrzypiszPrzedDekretacjaAsync(job, finalReport.Documents, importProgress.ReportAsync);
                     await importProgress.CompleteAsync("Import faktur i audyt KSeF w Poczekalni zakończone.");
@@ -145,14 +145,14 @@ namespace NexoBridge.Services
                 var decreeProgress = progress.BeginSegment((maImportFaktur || job.CalculateAmortization) ? JobProgressPlan.DecreeUnits : JobProgressPlan.SkipDecreeUnits);
                 if (wymagaDekretacji)
                 {
-                    var wyborPrzedDekretacja = _manifestService.PobierzWyborDokumentowWPoczekalni(dataRozliczenia, packageContext);
+                    var wyborPrzedDekretacja = await _manifestService.PobierzWyborDokumentowWPoczekalni(dataRozliczenia, packageContext, job);
                     _manifestService.AktualizujPoPoczekalni(finalReport.Documents, wyborPrzedDekretacja);
 
                     await decreeProgress.ReportAsync(5, "Dekretacja dokumentów...");
                     (dynamic Rezultat, List<Tuple<DokumentDoKsiegowania, SchematImportu>> Zatwierdzone, List<DokumentDoKsiegowania> Oczekujace, List<DokumentDoKsiegowania> BrakSchematu, List<DokumentDoKsiegowania> BledneSchematy) wynikDekretacji;
                     try
                     {
-                        wynikDekretacji = await _accountingService.DekretujAsync(dataRozliczenia, packageContext, decreeProgress.ReportAsync);
+                        wynikDekretacji = await _accountingService.DekretujAsync(dataRozliczenia, packageContext, job, decreeProgress.ReportAsync);
                     }
                     catch (ArgumentNullException ex) when (string.Equals(ex.ParamName, "okresObrachunkowy", StringComparison.OrdinalIgnoreCase))
                     {

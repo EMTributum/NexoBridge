@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.DependencyInjection;
 using System;
@@ -119,6 +120,20 @@ namespace NexoBridge
                     });
                 });
 
+                // 4b. Klucz API do huba SignalR i endpointów REST - dziś jedynymi klientami są
+                // nasze własne usługi (backend KlasyfikatorFaktur + nexo_bridge_listener), nie
+                // przeglądarka, więc prosty współdzielony sekret w nagłówku wystarczy. Dopóki
+                // zmienna nie jest ustawiona, autoryzacja NIE jest wymuszana (żeby wdrożenie tej
+                // zmiany nie zablokowało istniejących wywołań, dopóki obie strony nie mają klucza).
+                string bridgeApiKey = Environment.GetEnvironmentVariable("NEXO_BRIDGE_API_KEY");
+                if (string.IsNullOrWhiteSpace(bridgeApiKey))
+                {
+                    Log.Warning(
+                        "NEXO_BRIDGE_API_KEY nie jest ustawiony - hub SignalR i endpointy REST NexoBridge " +
+                        "NIE wymagają dziś autoryzacji. Ustaw tę zmienną (tę samą wartość co w " +
+                        "KlasyfikatorFaktur/.env), żeby to zamknąć.");
+                }
+
                 Log.Information(
                     "Aktywny limit request body w NexoBridge: {MaxRequestBodySizeMb} MB ({MaxRequestBodySizeBytes} B).",
                     maxRequestBodySizeMb,
@@ -134,6 +149,7 @@ namespace NexoBridge
                 builder.Services.AddSingleton<RcpImportJobQueue>();
                 builder.Services.AddSingleton<RcpImportResultStore>();
                 builder.Services.AddSingleton<RcpImportStateStore>();
+                builder.Services.AddSingleton<PoczekalniaBaselineStore>();
                 builder.Services.AddSingleton<RcpRuntimeSettings>();
                 builder.Services.AddSingleton<BillingJobQueue>();
                 builder.Services.AddSingleton<BillingResultStore>();
@@ -155,6 +171,27 @@ namespace NexoBridge
 
                 // Używamy nowej, rygorystycznej polityki
                 app.UseCors("StrictPolicy");
+
+                // Autoryzacja kluczem API - patrz komentarz przy odczycie NEXO_BRIDGE_API_KEY wyżej.
+                // /ping zostaje otwarty, żeby monitoring/healthcheck nie potrzebował klucza.
+                app.Use(async (context, next) =>
+                {
+                    if (string.IsNullOrWhiteSpace(bridgeApiKey) || context.Request.Path.StartsWithSegments("/ping"))
+                    {
+                        await next();
+                        return;
+                    }
+
+                    string providedKey = context.Request.Headers["X-Nexo-Bridge-Api-Key"].FirstOrDefault();
+                    if (!string.Equals(providedKey, bridgeApiKey, StringComparison.Ordinal))
+                    {
+                        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                        await context.Response.WriteAsync("Brak lub nieprawidłowy klucz API (X-Nexo-Bridge-Api-Key).");
+                        return;
+                    }
+
+                    await next();
+                });
 
                 // Rejestrujemy trasę dla naszego Huba
                 app.MapHub<ProgressHub>("/progressHub");

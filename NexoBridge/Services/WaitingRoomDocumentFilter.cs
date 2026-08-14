@@ -4,58 +4,25 @@ using InsERT.Moria.ModelDanych;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 
 namespace NexoBridge.Services
 {
     public sealed class WaitingRoomDocumentSelection
     {
         public List<DokumentDoKsiegowania> Included { get; } = new List<DokumentDoKsiegowania>();
-        public List<DokumentDoKsiegowania> IncludedByNewMarker { get; } = new List<DokumentDoKsiegowania>();
+        public List<DokumentDoKsiegowania> IncludedNew { get; } = new List<DokumentDoKsiegowania>();
         public List<DokumentDoKsiegowania> IncludedPayrollException { get; } = new List<DokumentDoKsiegowania>();
         public List<DokumentDoKsiegowania> SkippedNotNew { get; } = new List<DokumentDoKsiegowania>();
         public List<DokumentDoKsiegowania> PartialAmortization { get; } = new List<DokumentDoKsiegowania>();
         public List<DokumentDoKsiegowania> EmployeeBillsWithSubject { get; } = new List<DokumentDoKsiegowania>();
+        public List<DokumentDoKsiegowania> InternalDocuments { get; } = new List<DokumentDoKsiegowania>();
 
         public int Total =>
             Included.Count +
             SkippedNotNew.Count +
             PartialAmortization.Count +
-            EmployeeBillsWithSubject.Count;
-    }
-
-    public sealed class NewDocumentMarkerContext
-    {
-        private readonly Func<DokumentDoKsiegowania, bool> _czyNowy;
-
-        public NewDocumentMarkerContext(ParametrImportuKsiegowego parametrImportu, IDataSystemowa dataSystemowa)
-        {
-            ParametrImportu = parametrImportu ?? throw new InvalidOperationException("Nie udało się pobrać parametrów importu księgowego wymaganych do odczytu statusu N.");
-            DataSystemowa = dataSystemowa ?? throw new InvalidOperationException("Nie udało się pobrać IDataSystemowa wymaganego do odczytu statusu N.");
-            _czyNowy = dokument => DokumentDoKsiegowaniaExtensions.CzyNowy(dokument, ParametrImportu, DataSystemowa);
-        }
-
-        internal NewDocumentMarkerContext(Func<DokumentDoKsiegowania, bool> czyNowy)
-        {
-            _czyNowy = czyNowy ?? throw new ArgumentNullException(nameof(czyNowy));
-        }
-
-        public ParametrImportuKsiegowego ParametrImportu { get; }
-        public IDataSystemowa DataSystemowa { get; }
-
-        public bool CzyNowy(DokumentDoKsiegowania dokument)
-        {
-            if (dokument == null) return false;
-
-            try
-            {
-                return _czyNowy(dokument);
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidOperationException($"Nie udało się odczytać statusu N dla dokumentu: {InvoiceDocumentMatcher.Describe(dokument)}.", ex);
-            }
-        }
+            EmployeeBillsWithSubject.Count +
+            InternalDocuments.Count;
     }
 
     public static class WaitingRoomDocumentFilter
@@ -67,11 +34,74 @@ namespace NexoBridge.Services
             "ZaliczkaRachunkuDoUmowyPracowniczej"
         };
 
-        public static WaitingRoomDocumentSelection SelectForNewMarker(IEnumerable<DokumentDoKsiegowania> documents, NewDocumentMarkerContext markerContext)
+        // Rodzaje dokumentów generowanych wewnętrznie przez moduły Rachmistrza (ZUS/rozliczenia właścicielskie,
+        // operacje bankowe/kasowe, zapisy VAT, różnice kursowe, rozliczenia międzyokresowe, kompensaty, cesje,
+        // delegacje, noty, korekty niezapłaconych dokumentów itd.) - nigdy nie trafiają do auto-dekretacji,
+        // niezależnie od tego czy są "nowe" względem baseline'u. Amortyzacja (SrodkiTrwale_*) i pozycje płacowe
+        // (ListaPlac*/RachunekDoUmowyPracowniczej*) mają własne, wcześniejsze reguły i NIE wchodzą na tę listę.
+        private static readonly HashSet<RodzajDokumentuDoKsiegowania> WewnetrzneRodzajeDokumentow = new HashSet<RodzajDokumentuDoKsiegowania>
         {
-            if (markerContext == null)
+            RodzajDokumentuDoKsiegowania.RozliczenieWlascicielskie,
+            RodzajDokumentuDoKsiegowania.OperacjaKasowaWplyw,
+            RodzajDokumentuDoKsiegowania.OperacjaKasowaWyplyw,
+            RodzajDokumentuDoKsiegowania.RaportKasowy,
+            RodzajDokumentuDoKsiegowania.OperacjaBankowa_Wplata,
+            RodzajDokumentuDoKsiegowania.OperacjaBankowa_Wyplata,
+            RodzajDokumentuDoKsiegowania.WyciagBankowy,
+            RodzajDokumentuDoKsiegowania.DyspozycjaBankowa,
+            RodzajDokumentuDoKsiegowania.Kompensata,
+            RodzajDokumentuDoKsiegowania.DokumentCesji,
+            RodzajDokumentuDoKsiegowania.ZapisWEwidencjiVAT_Sprzedaz,
+            RodzajDokumentuDoKsiegowania.ZapisWEwidencjiVAT_Zakup,
+            RodzajDokumentuDoKsiegowania.ZbiorZapisowWEwidencjiVAT,
+            RodzajDokumentuDoKsiegowania.ZapisWEwidencjiVAT_KorektaSprzedazyNieudokumentowanej,
+            RodzajDokumentuDoKsiegowania.ZapisWEwidencjiVAT_KorektaVATZProporcjiBazowej,
+            RodzajDokumentuDoKsiegowania.ZapisWEwidencjiVAT_MarzaZakup,
+            RodzajDokumentuDoKsiegowania.ZapisWEwidencjiVAT_MarzaSprzedaz,
+            RodzajDokumentuDoKsiegowania.ZapisWEwidencjiVAT_KorektaVATZPreproporcji,
+            RodzajDokumentuDoKsiegowania.ZapisWEwidencjiVATOSS_Sprzedaz,
+            RodzajDokumentuDoKsiegowania.ZbiorZapisowWEwidencjiVATOSS,
+            RodzajDokumentuDoKsiegowania.NaliczenieRoznicKursowychDodatniaRoznica,
+            RodzajDokumentuDoKsiegowania.NaliczenieRoznicKursowychUjemnaRoznica,
+            RodzajDokumentuDoKsiegowania.NaliczenieRozliczeniaMiedzyokresowego,
+            RodzajDokumentuDoKsiegowania.ZbiorczeNaliczenieRozliczeniaMiedzyokresowego,
+            RodzajDokumentuDoKsiegowania.DelegacjaKrajowa,
+            RodzajDokumentuDoKsiegowania.DelegacjaZagraniczna,
+            RodzajDokumentuDoKsiegowania.NotaKsiegowa,
+            RodzajDokumentuDoKsiegowania.NotaOdsetkowa,
+            RodzajDokumentuDoKsiegowania.Remanent,
+            RodzajDokumentuDoKsiegowania.DowodWewnetrzny,
+            RodzajDokumentuDoKsiegowania.RaportOkresowy,
+            RodzajDokumentuDoKsiegowania.RaportDobowy,
+            RodzajDokumentuDoKsiegowania.NaliczenieKosztuEksploatacjiPojazdu,
+            RodzajDokumentuDoKsiegowania.KorektaKUPNiezaplaconegoDokumentu,
+            RodzajDokumentuDoKsiegowania.PonowneNaliczenieKUPNiezaplaconegoDokumentu,
+            RodzajDokumentuDoKsiegowania.KorektaVATZakupuNiezaplaconegoDokumentu,
+            RodzajDokumentuDoKsiegowania.PonowneNaliczenieVATZakupuNiezaplaconegoDokumentu,
+            RodzajDokumentuDoKsiegowania.KorektaVATSprzedazyNiezaplaconegoDokumentu,
+            RodzajDokumentuDoKsiegowania.PonowneNaliczenieVATSprzedazyNiezaplaconegoDokumentu,
+            RodzajDokumentuDoKsiegowania.KorektaPodstawyOpodatkowaniaNiezaplaconegoDokumentu,
+            RodzajDokumentuDoKsiegowania.PonowneNaliczeniePodstawyOpodatkowaniaNiezaplaconegoDokumentu,
+            RodzajDokumentuDoKsiegowania.RozliczenieSprzedazy,
+            RodzajDokumentuDoKsiegowania.RozliczenieZakupu,
+            RodzajDokumentuDoKsiegowania.PomniejszenieSprzedazyDetalicznej,
+            RodzajDokumentuDoKsiegowania.ZbiorczeNaliczenieZwrotow
+        };
+
+        /// <summary>
+        /// Klasyfikuje dokumenty z puli StatusKsiegowy==2 do dekretacji. Zastępuje zawodny znacznik "Nowy" ze
+        /// Sfery: "nowość" jest teraz określana przez brak numeru dokumentu (Nr - to jest realny klucz główny
+        /// DokumentDoKsiegowania, nie Id-GUID) w zapisanym baseline'ie NexoBridge (<see cref="PoczekalniaBaselineStore"/>),
+        /// nie przez okno czasowe SDK, które okazało się niestabilne (jeden dokument z datą przyszłą potrafił
+        /// przesunąć punkt odniesienia i zablokować dekretację wszystkich innych oczekujących dokumentów).
+        /// </summary>
+        public static WaitingRoomDocumentSelection SelectForBaseline(
+            IEnumerable<DokumentDoKsiegowania> documents,
+            Func<DokumentDoKsiegowania, bool> czyZnanyZBaseline)
+        {
+            if (czyZnanyZBaseline == null)
             {
-                throw new InvalidOperationException("Nie udało się zainicjalizować resolvera statusu N. Dekretacja została przerwana, żeby nie wybrać dokumentów po błędnym kryterium.");
+                throw new InvalidOperationException("Nie udało się zainicjalizować resolvera baseline'u poczekalni. Dekretacja została przerwana, żeby nie wybrać dokumentów po błędnym kryterium.");
             }
 
             var selection = new WaitingRoomDocumentSelection();
@@ -98,10 +128,16 @@ namespace NexoBridge.Services
                     continue;
                 }
 
-                if (markerContext.CzyNowy(document))
+                if (CzyDokumentWewnetrznyRachmistrza(document))
+                {
+                    selection.InternalDocuments.Add(document);
+                    continue;
+                }
+
+                if (!czyZnanyZBaseline(document))
                 {
                     selection.Included.Add(document);
-                    selection.IncludedByNewMarker.Add(document);
+                    selection.IncludedNew.Add(document);
                     continue;
                 }
 
@@ -109,6 +145,12 @@ namespace NexoBridge.Services
             }
 
             return selection;
+        }
+
+        public static bool CzyDokumentWewnetrznyRachmistrza(DokumentDoKsiegowania dokument)
+        {
+            var rodzaj = PobierzRodzajDokumentuDoKsiegowania(dokument);
+            return rodzaj.HasValue && WewnetrzneRodzajeDokumentow.Contains(rodzaj.Value);
         }
 
         public static bool CzyCzastkowaAmortyzacja(DokumentDoKsiegowania dokument)
@@ -229,60 +271,25 @@ namespace NexoBridge.Services
             }
         }
 
-        // Diagnostyka na żądanie dla incydentu "znacznik nowości zablokowany" - nie zmienia logiki wyboru,
-        // tylko zrzuca proste (nie-referencyjne) właściwości kontekstu i pominiętych dokumentów, żeby przy
-        // następnym incydencie mieć realne dane (daty/parametry) a nie tylko licznik SkippedNotNew.
-        public static string DescribeNewMarkerDiagnostics(NewDocumentMarkerContext context, IEnumerable<DokumentDoKsiegowania> skippedNotNew, int maxDocuments = 30)
+        public static string DescribeSelection(WaitingRoomDocumentSelection wybor, IEnumerable<DokumentDoKsiegowania> skippedNotNew, int maxDocuments = 30)
         {
-            if (context == null) return "brak kontekstu";
-
-            var parts = new List<string>
-            {
-                $"parametrImportu=[{DescribeObjectShallow(context.ParametrImportu)}]",
-                $"dataSystemowa=[{DescribeObjectShallow(context.DataSystemowa)}]"
-            };
-
             var skipped = (skippedNotNew ?? Enumerable.Empty<DokumentDoKsiegowania>()).Take(maxDocuments).ToList();
-            if (skipped.Count > 0)
+            if (skipped.Count == 0) return "brak pominiętych dokumentów";
+
+            var szczegoly = skipped.Select(d => $"{InvoiceDocumentMatcher.Describe(d)}: Nr={DescribeNr(d)}");
+            return $"pominieteJakoNieznaneWBaseline=[{string.Join(" || ", szczegoly)}]";
+        }
+
+        private static string DescribeNr(DokumentDoKsiegowania dokument)
+        {
+            try
             {
-                var dokumentySzczegoly = skipped.Select(d => $"{InvoiceDocumentMatcher.Describe(d)}: [{DescribeObjectShallow(d)}]");
-                parts.Add($"pominieteBezN=[{string.Join(" || ", dokumentySzczegoly)}]");
+                return dokument?.Nr.ToString();
             }
-
-            return string.Join("; ", parts);
-        }
-
-        private static string DescribeObjectShallow(object value)
-        {
-            if (value == null) return "brak";
-
-            var dump = value.GetType()
-                .GetProperties(BindingFlags.Instance | BindingFlags.Public)
-                .Where(p => p.GetIndexParameters().Length == 0 && JestProstymTypem(p.PropertyType))
-                .Select(p =>
-                {
-                    try
-                    {
-                        object propertyValue = p.GetValue(value);
-                        return $"{p.Name}={(propertyValue == null ? "null" : propertyValue.ToString())}";
-                    }
-                    catch (Exception ex)
-                    {
-                        return $"{p.Name}=<odczyt nieudany: {ex.GetType().Name}>";
-                    }
-                })
-                .ToList();
-
-            return dump.Count == 0 ? value.GetType().FullName : string.Join(", ", dump);
-        }
-
-        private static bool JestProstymTypem(Type type)
-        {
-            var podstawowy = Nullable.GetUnderlyingType(type) ?? type;
-            return podstawowy.IsPrimitive || podstawowy.IsEnum ||
-                   podstawowy == typeof(string) || podstawowy == typeof(DateTime) ||
-                   podstawowy == typeof(decimal) || podstawowy == typeof(Guid) ||
-                   podstawowy == typeof(TimeSpan);
+            catch
+            {
+                return "brak";
+            }
         }
     }
 }

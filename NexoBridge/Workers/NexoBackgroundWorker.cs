@@ -19,16 +19,19 @@ namespace NexoBridge.Workers
         private readonly ILoggerFactory _loggerFactory;
         private readonly ILogger<NexoBackgroundWorker> _workerLogger;
         private readonly NexoBridgeErrorReporter _errorReporter;
+        private readonly PoczekalniaBaselineStore _baselineStore;
         public NexoBackgroundWorker(
             JobQueue jobQueue,
             IHubContext<ProgressHub> hubContext,
             ILoggerFactory loggerFactory,
-            NexoBridgeErrorReporter errorReporter)
+            NexoBridgeErrorReporter errorReporter,
+            PoczekalniaBaselineStore baselineStore)
         {
             _jobQueue = jobQueue;
             _hubContext = hubContext;
             _loggerFactory = loggerFactory;
             _errorReporter = errorReporter;
+            _baselineStore = baselineStore;
             _workerLogger = _loggerFactory.CreateLogger<NexoBackgroundWorker>();
         }
 
@@ -72,9 +75,9 @@ namespace NexoBridge.Workers
 
                         // 3. Budujemy nasze serwisy i przekazujemy im świeżo uruchomiony uchwyt Sfery
                         var parserService = new EppParserService(silnik.Sfera, parserLogger);
-                        var manifestService = new ImportManifestService(silnik.Sfera, manifestLogger);
+                        var manifestService = new ImportManifestService(silnik.Sfera, _baselineStore, manifestLogger);
                         var amService = new AmortizationService(silnik.Sfera, amLogger);
-                        var accService = new AccountingService(silnik.Sfera, accLogger);
+                        var accService = new AccountingService(silnik.Sfera, _baselineStore, _errorReporter, accLogger);
                         var pitService = new PitCalculationService(silnik.Sfera, pitLogger);
                         var vatService = new VatCalculationService(silnik.Sfera, vatLogger);
                         var vatUeService = new VatUeCalculationService(silnik.Sfera, vatUeLogger);

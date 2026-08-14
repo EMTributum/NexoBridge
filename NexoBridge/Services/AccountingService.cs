@@ -17,11 +17,19 @@ namespace NexoBridge.Services
     public class AccountingService
     {
         private readonly Uchwyt _sfera;
+        private readonly PoczekalniaBaselineStore _baselineStore;
+        private readonly NexoBridgeErrorReporter _errorReporter;
         private readonly ILogger<AccountingService> _logger;
 
-        public AccountingService(Uchwyt sfera, ILogger<AccountingService> logger)
+        public AccountingService(
+            Uchwyt sfera,
+            PoczekalniaBaselineStore baselineStore,
+            NexoBridgeErrorReporter errorReporter,
+            ILogger<AccountingService> logger)
         {
             _sfera = sfera;
+            _baselineStore = baselineStore;
+            _errorReporter = errorReporter;
             _logger = logger;
         }
 
@@ -30,29 +38,23 @@ namespace NexoBridge.Services
             List<Tuple<DokumentDoKsiegowania, SchematImportu>> Zatwierdzone,
             List<DokumentDoKsiegowania> Oczekujace,
             List<DokumentDoKsiegowania> BrakSchematu,
-            List<DokumentDoKsiegowania> BledneSchematy)> DekretujAsync(DateTime dataRozliczenia, ImportPackageContext packageContext, Func<int, string, Task> raportujPostep)
+            List<DokumentDoKsiegowania> BledneSchematy)> DekretujAsync(DateTime dataRozliczenia, ImportPackageContext packageContext, ImportJob job, Func<int, string, Task> raportujPostep)
         {
             await raportujPostep(70, "Analiza dokumentów oczekujących...");
             var menedzerDokumentow = _sfera.PodajObiektTypu<IDokumentyDoKsiegowania>();
             var menedzerImportu = _sfera.PodajObiektTypu<IOperacjeImportuKsiegowego>();
             var menedzerOkresow = _sfera.PodajObiektTypu<InsERT.Moria.Ksiegowosc.IOkresyObrachunkowe>();
 
-            var wszystkieOczekujace = ((IEnumerable)menedzerDokumentow.Dane.Wszystkie())
-                .Cast<DokumentDoKsiegowania>()
-                .Where(d => (int)d.StatusKsiegowy == 2)
-                .ToList();
-            var kontekstNowosci = PobierzKontekstZnacznikaNowosci();
-            var wybor = WaitingRoomDocumentFilter.SelectForNewMarker(wszystkieOczekujace, kontekstNowosci);
-            LogujWyborPoczekalni(wybor);
-            if (wybor.SkippedNotNew.Count > 0)
-            {
-                _logger.LogInformation("[ZNACZNIK NOWOŚCI DIAG] {Szczegoly}",
-                    WaitingRoomDocumentFilter.DescribeNewMarkerDiagnostics(kontekstNowosci, wybor.SkippedNotNew));
-            }
+            var wszystkieOczekujace = PobierzOczekujace(menedzerDokumentow);
+            var znaneNumery = await _baselineStore.PobierzZnaneNumeryAsync(job?.DatabaseName);
+            bool bootstrap = znaneNumery == null;
+            var wybor = WaitingRoomDocumentFilter.SelectForBaseline(wszystkieOczekujace, doc => bootstrap || znaneNumery.Contains(doc.Nr));
+            LogujWyborPoczekalni(wybor, bootstrap);
             var oczekujace = wybor.Included;
 
             if (oczekujace.Count == 0)
             {
+                await ZapiszBaselinePoDekretacjiAsync(job, menedzerDokumentow, wybor);
                 _logger.LogInformation("Zakończono: Brak nowych dokumentów do zadekretowania po synchronizacji.");
                 return (null, new List<Tuple<DokumentDoKsiegowania, SchematImportu>>(), oczekujace, new List<DokumentDoKsiegowania>(), new List<DokumentDoKsiegowania>());
             }
@@ -81,6 +83,7 @@ namespace NexoBridge.Services
             if (zatwierdzone.Count == 0)
             {
                 _logger.LogWarning("Żaden dokument z Poczekalni nie pasuje do schematów dekretacji. Nie przerywam procesu - raport zostanie zwrócony na front.");
+                await ZapiszBaselinePoDekretacjiAsync(job, menedzerDokumentow, wybor);
                 return (null, zatwierdzone, oczekujace, brakSchematu, bledneSchematy);
             }
 
@@ -99,7 +102,50 @@ namespace NexoBridge.Services
             int liczbaWynikow = PoliczWynikiOperacji(rezultat);
             _logger.LogInformation("[DEKRETACJA OPERACJA] Zlecono={Zlecono}; wynikiOperacji={Wyniki}", (object)zatwierdzone.Count, (object)liczbaWynikow);
 
+            await ZapiszBaselinePoDekretacjiAsync(job, menedzerDokumentow, wybor);
+
             return (rezultat, zatwierdzone, oczekujace, brakSchematu, bledneSchematy);
+        }
+
+        private List<DokumentDoKsiegowania> PobierzOczekujace(IDokumentyDoKsiegowania menedzerDokumentow)
+        {
+            return ((IEnumerable)menedzerDokumentow.Dane.Wszystkie())
+                .Cast<DokumentDoKsiegowania>()
+                .Where(d => (int)d.StatusKsiegowy == 2)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Nadpisuje baseline poczekalni żywym stanem puli po dekretacji i weryfikuje, że dokumenty
+        /// wysłane do dekretacji (wybor.Included) faktycznie z niej zniknęły. Jeśli coś zostało (np.
+        /// nieudany import/brak schematu), to jest realny problem operacyjny - zgłaszamy go aktywnie do
+        /// Klasyfikatora, bo inaczej baseline "po cichu" uznałby ten dokument za znany i nikt by go
+        /// więcej automatycznie nie spróbował zadekretować.
+        /// </summary>
+        private async Task ZapiszBaselinePoDekretacjiAsync(ImportJob job, IDokumentyDoKsiegowania menedzerDokumentow, WaitingRoomDocumentSelection wybor)
+        {
+            var poDekretacji = PobierzOczekujace(menedzerDokumentow);
+            var poDekretacjiNumery = poDekretacji.Select(d => d.Nr).ToHashSet();
+
+            var utkniete = (wybor?.Included ?? new List<DokumentDoKsiegowania>())
+                .Where(d => poDekretacjiNumery.Contains(d.Nr))
+                .ToList();
+
+            if (utkniete.Count > 0)
+            {
+                string opis = OpiszDokumenty(utkniete);
+                _logger.LogWarning("[POCZEKALNIA WERYFIKACJA] {Count} dokumentów wysłanych do dekretacji wciąż jest w Poczekalni po zakończeniu operacji: {Dokumenty}", utkniete.Count, opis);
+                await _errorReporter.ReportJobFailureAsync(
+                    job,
+                    component: "AccountingService",
+                    activity: "Dekretacja",
+                    operation: "WeryfikacjaPoczekalni",
+                    message: $"{utkniete.Count} dokumentów przekazanych do dekretacji nie zniknęło z Poczekalni po zakończeniu operacji: {opis}",
+                    exception: null,
+                    cancellationToken: default);
+            }
+
+            await _baselineStore.ZapiszZnaneNumeryAsync(job?.DatabaseName, poDekretacjiNumery);
         }
 
         private List<Tuple<DokumentDoKsiegowania, SchematImportu>> PobierzZaakceptowanePary(dynamic werdykt)
@@ -177,15 +223,6 @@ namespace NexoBridge.Services
             return opisy.Count == 0 ? "brak" : string.Join(" || ", opisy);
         }
 
-        private NewDocumentMarkerContext PobierzKontekstZnacznikaNowosci()
-        {
-            var parametryImportu = _sfera.PodajObiektTypu<IParametryImportuKsiegowego>();
-            var parametrImportu = parametryImportu?.DaneDomyslne?.Domyslny;
-            var dataSystemowa = _sfera.PodajObiektTypu<IDataSystemowa>();
-
-            return new NewDocumentMarkerContext(parametrImportu, dataSystemowa);
-        }
-
         private OkresObrachunkowy PobierzOkresObrachunkowy(InsERT.Moria.Ksiegowosc.IOkresyObrachunkowe menedzerOkresow, DateTime dataRozliczenia)
         {
             var okresy = ((IEnumerable)menedzerOkresow.Dane.Wszystkie())
@@ -230,22 +267,30 @@ namespace NexoBridge.Services
             return $"{okres.Nazwa ?? "bez nazwy"} ({zakres})";
         }
 
-        private void LogujWyborPoczekalni(WaitingRoomDocumentSelection wybor)
+        private void LogujWyborPoczekalni(WaitingRoomDocumentSelection wybor, bool bootstrap)
         {
             if (wybor == null) return;
 
-            _logger.LogInformation("[POCZEKALNIA FILTR N] wszystkie={All}; doDekretacji={Included}; noweN={IncludedByNewMarker}; wyjatkiKadrowe={IncludedPayrollException}; bezN={SkippedNotNew}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}",
+            _logger.LogInformation("[POCZEKALNIA FILTR BASELINE] bootstrap={Bootstrap}; wszystkie={All}; doDekretacji={Included}; nowe={IncludedNew}; wyjatkiKadrowe={IncludedPayrollException}; znaneZBaseline={SkippedNotNew}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}; dokumentyWewnetrzne={InternalDocuments}",
+                bootstrap,
                 wybor.Total,
                 wybor.Included.Count,
-                wybor.IncludedByNewMarker.Count,
+                wybor.IncludedNew.Count,
                 wybor.IncludedPayrollException.Count,
                 wybor.SkippedNotNew.Count,
                 wybor.PartialAmortization.Count,
-                wybor.EmployeeBillsWithSubject.Count);
+                wybor.EmployeeBillsWithSubject.Count,
+                wybor.InternalDocuments.Count);
 
-            LogujPominiete("[POCZEKALNIA BEZ N POMINIĘTA]", wybor.SkippedNotNew);
+            if (bootstrap)
+            {
+                _logger.LogInformation("[POCZEKALNIA BASELINE] Zainicjalizowano punkt odniesienia: {Count} dokumentów potraktowano jako znane; żaden nie zostanie automatycznie zadekretowany w tym przebiegu.", wybor.Total);
+            }
+
+            LogujPominiete("[POCZEKALNIA ZNANE Z BASELINE POMINIĘTA]", wybor.SkippedNotNew);
             LogujPominiete("[AMORTYZACJA CZĄSTKOWA POMINIĘTA]", wybor.PartialAmortization);
             LogujPominiete("[RACHUNEK PRACOWNICZY Z PODMIOTEM POMINIĘTY]", wybor.EmployeeBillsWithSubject);
+            LogujPominiete("[DOKUMENT WEWNĘTRZNY RACHMISTRZA POMINIĘTY]", wybor.InternalDocuments);
         }
 
         private void LogujPominiete(string prefix, List<DokumentDoKsiegowania> dokumenty)
