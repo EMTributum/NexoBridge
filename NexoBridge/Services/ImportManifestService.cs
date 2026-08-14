@@ -88,12 +88,30 @@ namespace NexoBridge.Services
             return documents;
         }
 
-        public async Task<WaitingRoomDocumentSelection> PobierzWyborDokumentowWPoczekalni(DateTime dataRozliczenia, ImportPackageContext packageContext, ImportJob job)
+        /// <summary>
+        /// Numery dokumentów aktualnie w poczekalni - do wywołania PRZED importem EPP w danym zleceniu,
+        /// żeby ewentualny bootstrap baseline'u mógł odróżnić stary zaległy backlog od dokumentu, który
+        /// TO SAMO zlecenie właśnie zaimportowało (patrz PobierzWyborDokumentowWPoczekalni).
+        /// </summary>
+        public HashSet<int> PobierzNumeryOczekujaceTeraz()
+        {
+            return PobierzWszystkieOczekujace().Select(d => d.Nr).ToHashSet();
+        }
+
+        public async Task<WaitingRoomDocumentSelection> PobierzWyborDokumentowWPoczekalni(DateTime dataRozliczenia, ImportPackageContext packageContext, ImportJob job, HashSet<int> poolNumeryPrzedZleceniem)
         {
             var wszystkieOczekujace = PobierzWszystkieOczekujace();
             var znaneNumery = await _baselineStore.PobierzZnaneNumeryAsync(job?.DatabaseName);
             bool bootstrap = znaneNumery == null;
-            var wybor = WaitingRoomDocumentFilter.SelectForBaseline(wszystkieOczekujace, doc => bootstrap || znaneNumery.Contains(doc.Nr));
+
+            // Podczas bootstrapu "znane" to backlog sprzed TEGO zlecenia, a nie cała aktualna pula -
+            // inaczej dokument, który to samo zlecenie właśnie zaimportowało EPP-em, zostałby po cichu
+            // wrzucony do "już znanych" i nigdy by się nie zadekretował.
+            bool CzyZnany(DokumentDoKsiegowania doc) => bootstrap
+                ? (poolNumeryPrzedZleceniem == null || poolNumeryPrzedZleceniem.Contains(doc.Nr))
+                : znaneNumery.Contains(doc.Nr);
+
+            var wybor = WaitingRoomDocumentFilter.SelectForBaseline(wszystkieOczekujace, CzyZnany);
 
             _logger.LogInformation("[MANIFEST POCZEKALNIA FILTR BASELINE] bootstrap={Bootstrap}; wszystkie={All}; doObslugi={Included}; nowe={IncludedNew}; wyjatkiKadrowe={IncludedPayrollException}; znaneZBaseline={SkippedNotNew}; amortyzacjeCzastkowe={PartialAmortization}; rachunkiPracowniczeZPodmiotem={EmployeeBillsWithSubject}; dokumentyWewnetrzne={InternalDocuments}",
                 bootstrap,

@@ -38,7 +38,7 @@ namespace NexoBridge.Services
             List<Tuple<DokumentDoKsiegowania, SchematImportu>> Zatwierdzone,
             List<DokumentDoKsiegowania> Oczekujace,
             List<DokumentDoKsiegowania> BrakSchematu,
-            List<DokumentDoKsiegowania> BledneSchematy)> DekretujAsync(DateTime dataRozliczenia, ImportPackageContext packageContext, ImportJob job, Func<int, string, Task> raportujPostep)
+            List<DokumentDoKsiegowania> BledneSchematy)> DekretujAsync(DateTime dataRozliczenia, ImportPackageContext packageContext, ImportJob job, HashSet<int> poolNumeryPrzedZleceniem, Func<int, string, Task> raportujPostep)
         {
             await raportujPostep(70, "Analiza dokumentów oczekujących...");
             var menedzerDokumentow = _sfera.PodajObiektTypu<IDokumentyDoKsiegowania>();
@@ -48,7 +48,15 @@ namespace NexoBridge.Services
             var wszystkieOczekujace = PobierzOczekujace(menedzerDokumentow);
             var znaneNumery = await _baselineStore.PobierzZnaneNumeryAsync(job?.DatabaseName);
             bool bootstrap = znaneNumery == null;
-            var wybor = WaitingRoomDocumentFilter.SelectForBaseline(wszystkieOczekujace, doc => bootstrap || znaneNumery.Contains(doc.Nr));
+
+            // Podczas bootstrapu "znane" to backlog sprzed TEGO zlecenia, a nie cała aktualna pula -
+            // inaczej dokument, który to samo zlecenie właśnie zaimportowało EPP-em, zostałby po cichu
+            // wrzucony do "już znanych" i nigdy by się nie zadekretował (patrz incydent z 2026-08-14).
+            bool CzyZnany(DokumentDoKsiegowania doc) => bootstrap
+                ? (poolNumeryPrzedZleceniem == null || poolNumeryPrzedZleceniem.Contains(doc.Nr))
+                : znaneNumery.Contains(doc.Nr);
+
+            var wybor = WaitingRoomDocumentFilter.SelectForBaseline(wszystkieOczekujace, CzyZnany);
             LogujWyborPoczekalni(wybor, bootstrap);
             var oczekujace = wybor.Included;
 
