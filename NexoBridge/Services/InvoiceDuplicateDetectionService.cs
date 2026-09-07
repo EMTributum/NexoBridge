@@ -156,6 +156,173 @@ namespace NexoBridge.Services
             }
         }
 
+        /// <summary>Roczny, ręcznie wywoływany skan duplikatów (przycisk "Sprawdź duplikaty") - w
+        /// odróżnieniu od SprawdzDuplikatyAsync (automatyczny, jeden miesiąc, próg 70%, binarne
+        /// dopasowanie numeru) obejmuje cały rok i dodaje fuzzy matching numeru faktury z dwoma
+        /// progami (duplicate/review) - patrz PorownajRoczny.</summary>
+        public Task<List<YearlyDuplicateMatch>> SprawdzDuplikatyRoczneAsync(int rok)
+        {
+            try
+            {
+                DateTime dataOd = new DateTime(rok, 1, 1);
+                DateTime dataDo = new DateTime(rok, 12, 31);
+
+                var records = new List<DuplicateInvoiceRecord>();
+                records.AddRange(PobierzRekordy("VAT", "IZapisyWEwidencjiVAT", dataOd, dataDo));
+                records.AddRange(PobierzRekordy("KPiR", "IZapisyWKPiR", dataOd, dataDo));
+                records.AddRange(PobierzRekordy("EP", "IZapisyWEP", dataOd, dataDo));
+
+                records = records
+                    .GroupBy(KluczRekordu)
+                    .Select(g => g.First())
+                    .ToList();
+
+                var matches = ZnajdzPotencjalneDuplikatyRoczne(records, out int checkedPairs);
+
+                _logger.LogInformation("[DUPLIKATY ROCZNE] Rok={Rok}; rekordy={Records}; sprawdzone pary={Pairs}; trafienia={Matches}",
+                    rok, records.Count, checkedPairs, matches.Count);
+
+                if (matches.Count > 0)
+                {
+                    _logger.LogWarning("[DUPLIKATY ROCZNE WYKRYTO] Rok={Rok}; trafienia={Matches}", rok, OpiszDuplikatyRoczne(matches));
+                }
+
+                return Task.FromResult(matches);
+            }
+            catch (Exception ex)
+            {
+                string message = ex.GetBaseException().Message;
+                _logger.LogWarning(ex, "[DUPLIKATY ROCZNE BŁĄD] Nie udało się wykonać rocznego audytu duplikatów faktur: {Message}", message);
+                return Task.FromResult(new List<YearlyDuplicateMatch>());
+            }
+        }
+
+        private List<YearlyDuplicateMatch> ZnajdzPotencjalneDuplikatyRoczne(List<DuplicateInvoiceRecord> records, out int checkedPairs)
+        {
+            var matches = new List<YearlyDuplicateMatch>();
+            checkedPairs = 0;
+
+            foreach (var group in records.GroupBy(r => r.Source ?? string.Empty))
+            {
+                var list = group.ToList();
+                foreach (var pair in KandydujacePary(list))
+                {
+                    checkedPairs++;
+                    var match = PorownajRoczny(list[pair.Item1], list[pair.Item2]);
+                    if (match != null)
+                    {
+                        matches.Add(match);
+                    }
+                }
+            }
+
+            return matches
+                .OrderByDescending(m => m.Tier == "duplicate")
+                .ThenByDescending(m => m.CompositeScorePercent)
+                .ToList();
+        }
+
+        /// <summary>Para faktur musi dzielić co najmniej JEDNO z dwóch najsilniejszych kryteriów
+        /// (kwota, data), żeby w ogóle mieć szansę przekroczyć próg 70% w PorownajRoczny -
+        /// matematycznie: dzielenie wyłącznie kontrahenta (bez kwoty i daty) daje co najwyżej
+        /// 25 (kontrahent) + 25 (numer przy 100% podobieństwa) = 50 punktów, więc taka para
+        /// nigdy nie przejdzie żadnego z dwóch progów i nie trzeba jej w ogóle liczyć. To
+        /// bezstratne przycinanie (żadnego fałszywego negatywu), nie heurystyka przybliżająca.</summary>
+        private IEnumerable<Tuple<int, int>> KandydujacePary(List<DuplicateInvoiceRecord> group)
+        {
+            var byAmount = new Dictionary<decimal, List<int>>();
+            var byDate = new Dictionary<DateTime, List<int>>();
+
+            for (int i = 0; i < group.Count; i++)
+            {
+                var record = group[i];
+                if (record.Amount.HasValue)
+                {
+                    DodajDoKubelka(byAmount, record.Amount.Value, i);
+                }
+
+                if (record.Date.HasValue)
+                {
+                    DodajDoKubelka(byDate, record.Date.Value.Date, i);
+                }
+            }
+
+            var wygenerowane = new HashSet<Tuple<int, int>>();
+            foreach (var indeksy in byAmount.Values.Concat(byDate.Values))
+            {
+                foreach (var para in ParyZKubelka(indeksy))
+                {
+                    if (wygenerowane.Add(para))
+                    {
+                        yield return para;
+                    }
+                }
+            }
+        }
+
+        private static void DodajDoKubelka<TKlucz>(Dictionary<TKlucz, List<int>> kubelki, TKlucz klucz, int indeks)
+        {
+            if (!kubelki.TryGetValue(klucz, out var lista))
+            {
+                lista = new List<int>();
+                kubelki[klucz] = lista;
+            }
+
+            lista.Add(indeks);
+        }
+
+        private static IEnumerable<Tuple<int, int>> ParyZKubelka(List<int> indeksy)
+        {
+            for (int x = 0; x < indeksy.Count; x++)
+            {
+                for (int y = x + 1; y < indeksy.Count; y++)
+                {
+                    yield return Tuple.Create(indeksy[x], indeksy[y]);
+                }
+            }
+        }
+
+        /// <summary>Duplikat (twardy): podobieństwo numeru &gt;80% ORAZ kwota/kontrahent/data identyczne.
+        /// Data nie była wprost wymagana w zgłoszeniu, ale jest tu konieczna - bez niej regularnie
+        /// powtarzające się faktury od tego samego kontrahenta (czynsz, abonament - ta sama kwota,
+        /// ten sam kontrahent, kolejny numer w tym samym formacie) fałszywie łapałyby się jako
+        /// duplikat, bo numery w tym samym formacie rutynowo dają 80-90% podobieństwa Levenshteina.
+        /// Do sprawdzenia (miękki): wynik łączny (4 kryteria, numer już ciągły) &gt;70%.</summary>
+        private YearlyDuplicateMatch PorownajRoczny(DuplicateInvoiceRecord first, DuplicateInvoiceRecord second)
+        {
+            bool amountExact = KwotySaTakieSame(first.Amount, second.Amount);
+            bool partyExact = StronySaTakieSame(first, second);
+            bool dateExact = first.Date.HasValue && second.Date.HasValue && first.Date.Value.Date == second.Date.Value.Date;
+            decimal numberSim = InvoiceNumberSimilarity.NumberSimilarityPercent(first.NormalizedInvoiceNumber, second.NormalizedInvoiceNumber);
+
+            decimal composite = (amountExact ? 25m : 0m) + (partyExact ? 25m : 0m) + (dateExact ? 25m : 0m) + numberSim * 0.25m;
+            composite = Math.Round(composite, 2, MidpointRounding.AwayFromZero);
+
+            bool isDuplicate = numberSim > 80m && amountExact && partyExact && dateExact;
+            bool isReview = !isDuplicate && composite > 70m;
+
+            if (!isDuplicate && !isReview)
+            {
+                return null;
+            }
+
+            return new YearlyDuplicateMatch
+            {
+                InvoiceNumber = first.InvoiceNumber,
+                DuplicateInvoiceNumber = second.InvoiceNumber,
+                Source = first.Source,
+                NumberSimilarityPercent = numberSim,
+                CompositeScorePercent = composite,
+                Tier = isDuplicate ? "duplicate" : "review"
+            };
+        }
+
+        private string OpiszDuplikatyRoczne(IEnumerable<YearlyDuplicateMatch> matches)
+        {
+            return string.Join(" || ", matches.Take(50).Select(m =>
+                $"[{m.Tier}] {m.Source} nr={m.InvoiceNumber ?? "brak"} vs nr={m.DuplicateInvoiceNumber ?? "brak"} numSim={m.NumberSimilarityPercent}% wynik={m.CompositeScorePercent}%"));
+        }
+
         private List<DuplicateInvoiceRecord> PobierzRekordy(string source, string managerInterfaceName, DateTime dataOd, DateTime dataDo)
         {
             var records = new List<DuplicateInvoiceRecord>();

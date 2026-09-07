@@ -101,12 +101,33 @@ namespace NexoBridge.Services
                 List<Podmiot> eligibleClients = FindEligibleClients(allClients);
 
                 report.Items = eligibleClients
-                    .Select(client => new BillingClientListItem
+                    .Select(client =>
                     {
-                        Nip = ReadStringCandidate(client, "NIP", "Nip"),
-                        Name = GetDisplayName(client),
-                        Active = ReadBoolCandidate(client, "Aktywny"),
-                        DoFakturowania = HasFeature(client, "Do fakturowania")
+                        // Metoda płatności liczona tu samo z już wczytanego obiektu Podmiot (bez
+                        // dodatkowego zapytania do Sfery/Nexo) - patrz ResolvePaymentMethod, ta sama
+                        // logika co w BuildSnapshotItem. Dzięki temu lista zbiorcza (jedno zapytanie
+                        // dla wszystkich klientów) nie wymaga już N osobnych zapytań o snapshot per
+                        // klient, żeby poznać kartę/przelew - poprzednio to powodowało timeout przy
+                        // większej liczbie klientów (jeden snapshot = jedno uruchomienie Sfery).
+                        BestPaymentEntry bestPayment = ResolveBestPaymentEntry(client);
+                        (bool isDeferred, int? termDays, string summary) = ResolvePaymentSummary(client, bestPayment);
+                        (string paymentMethod, string paymentMethodSource) = ResolvePaymentMethod(bestPayment);
+
+                        return new BillingClientListItem
+                        {
+                            Nip = ReadStringCandidate(client, "NIP", "Nip"),
+                            Name = GetDisplayName(client),
+                            Active = ReadBoolCandidate(client, "Aktywny"),
+                            DoFakturowania = HasFeature(client, "Do fakturowania"),
+                            Payment = new PaymentConfigurationDto
+                            {
+                                PaymentMethod = paymentMethod,
+                                PaymentMethodSource = paymentMethodSource,
+                                IsDeferred = isDeferred,
+                                TermDays = termDays,
+                                Summary = summary
+                            }
+                        };
                     })
                     .OrderBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase)
                     .ToList();

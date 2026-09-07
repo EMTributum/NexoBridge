@@ -82,5 +82,6 @@ namespace NexoBridge.Models
         public string Name { get; set; }
         public bool? Active { get; set; }
         public bool? DoFakturowania { get; set; }
+        public PaymentConfigurationDto Payment { get; set; }
     }
 }

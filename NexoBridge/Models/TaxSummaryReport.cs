@@ -112,6 +112,9 @@ namespace NexoBridge.Models
         public decimal AmountToPay { get; set; }
         public decimal AmountToCarryOver { get; set; }
 
+        // Zignorowane, oczekiwane sytuacje (np. cichy skip miesiąca nie kończącego kwartału)
+        public string Warning { get; set; }
+
         // Błąd podczas generowania JPK
         public string ErrorMsg { get; set; }
     }

@@ -49,11 +49,11 @@ namespace NexoBridge.Services
                     return Task.FromResult(raport);
                 }
 
-                DateTime dataOd = new DateTime(dataRozliczenia.Year, dataRozliczenia.Month, 1);
+                DateTime dataOdDiagnostyka = new DateTime(dataRozliczenia.Year, dataRozliczenia.Month, 1);
                 DateTime dataDo = new DateTime(dataRozliczenia.Year, dataRozliczenia.Month, DateTime.DaysInMonth(dataRozliczenia.Year, dataRozliczenia.Month));
 
                 var okresyVat = ((IEnumerable)mgrOkresyVat.Dane.Wszystkie()).Cast<object>().ToList();
-                LogujOkresyVat(okresyVat, dataOd, dataDo);
+                LogujOkresyVat(okresyVat, dataOdDiagnostyka, dataDo);
 
                 object glownyOkres = ZnajdzOkresVatKrajowyDlaOkresu(okresyVat, dataDo);
 
@@ -77,14 +77,29 @@ namespace NexoBridge.Services
                     _logger.LogInformation("[VAT POMINIĘTO] Firma jest ustawiona jako ZWOLNIONA z podatku VAT (Metoda = 4).");
                     return Task.FromResult(raport);
                 }
+
+                DateTime dataOd;
+                RodzajJPK rodzaj;
+
+                if (metodaRozliczen == 1)
+                {
+                    dataOd = dataOdDiagnostyka;
+                    rodzaj = RodzajJPK.V7M;
+                }
                 else if (metodaRozliczen == 2)
                 {
-                    raport.ErrorMsg = "Firma rozlicza VAT KWARTALNIE (Metoda = 2). Wymagany format JPK_V7K, obecny mechanizm wspiera V7M.";
-                    raport.IsVatPayer = true;
-                    _logger.LogWarning("[VAT ODRZUCONO] {Msg}", raport.ErrorMsg);
-                    return Task.FromResult(raport);
+                    if (dataRozliczenia.Month % 3 != 0)
+                    {
+                        raport.IsVatPayer = true;
+                        raport.Warning = $"Firma rozlicza VAT kwartalnie (Metoda = 2). Miesiąc {dataRozliczenia:MM/yyyy} nie kończy kwartału — JPK_V7K zostanie wygenerowany po zakończeniu kwartału.";
+                        _logger.LogInformation("[VAT POMINIĘTO] {Msg}", raport.Warning);
+                        return Task.FromResult(raport);
+                    }
+
+                    dataOd = new DateTime(dataRozliczenia.Year, dataRozliczenia.Month - 2, 1);
+                    rodzaj = RodzajJPK.V7K;
                 }
-                else if (metodaRozliczen != 1)
+                else
                 {
                     raport.ErrorMsg = $"Firma używa nieobsługiwanej metody rozliczeń VAT (Kod: {metodaRozliczen}).";
                     raport.IsVatPayer = true;
@@ -93,29 +108,31 @@ namespace NexoBridge.Services
                 }
 
                 raport.IsVatPayer = true;
+                string etykietaJpk = OpiszRodzaj(rodzaj);
 
-                dynamic istniejacyJpk = ZnajdzJpkV7M(dataOd, dataDo);
+                dynamic istniejacyJpk = ZnajdzJpkV7(rodzaj, dataOd, dataDo);
                 if (istniejacyJpk != null)
                 {
-                    WypelnijKwotyZJpkLubFallback(raport, istniejacyJpk, dataOd, dataDo);
-                    raport.ErrorMsg = $"Plik JPK_V7 za {dataRozliczenia:MM/yyyy} został już wygenerowany wcześniej.";
+                    WypelnijKwotyZJpkLubFallback(raport, istniejacyJpk, rodzaj, dataOd, dataDo);
+                    raport.ErrorMsg = $"Plik JPK_{etykietaJpk} za {dataRozliczenia:MM/yyyy} został już wygenerowany wcześniej.";
                     string opisJpk = OpiszJpk(istniejacyJpk);
                     _logger.LogWarning("[VAT ODRZUCONO] {Msg} Istniejący plik: {Jpk}", raport.ErrorMsg, opisJpk);
                     return Task.FromResult(raport);
                 }
 
-                _logger.LogInformation("Zlecam Sferze naliczenie widocznego JPK_V7M przez moduł KontrolaSkarbowa...");
-                if (!WygenerujWidocznyJpkV7M(dataOd, dataDo, out dynamic wygenerowanyJpk, out string bladGenerowania))
+                _logger.LogInformation("Zlecam Sferze naliczenie widocznego JPK_{Etykieta} przez moduł KontrolaSkarbowa...", etykietaJpk);
+                if (!WygenerujWidocznyJpkV7(rodzaj, dataOd, dataDo, out dynamic wygenerowanyJpk, out string bladGenerowania))
                 {
                     raport.ErrorMsg = bladGenerowania;
                     _logger.LogWarning("[VAT ODRZUCONO] {Msg}", raport.ErrorMsg);
                     return Task.FromResult(raport);
                 }
 
-                WypelnijKwotyZJpkLubFallback(raport, wygenerowanyJpk, dataOd, dataDo);
+                WypelnijKwotyZJpkLubFallback(raport, wygenerowanyJpk, rodzaj, dataOd, dataDo);
 
                 string opisWygenerowanegoJpk = OpiszJpk(wygenerowanyJpk);
-                _logger.LogInformation("[VAT SUKCES] Wygenerowano i zapisano widoczny JPK_V7M. Do zapłaty: {VAT} PLN. JPK={Jpk}",
+                _logger.LogInformation("[VAT SUKCES] Wygenerowano i zapisano widoczny JPK_{Etykieta}. Do zapłaty: {VAT} PLN. JPK={Jpk}",
+                    etykietaJpk,
                     raport.AmountToPay,
                     opisWygenerowanegoJpk);
             }
@@ -176,7 +193,7 @@ namespace NexoBridge.Services
                 string.Join(" || ", opisy));
         }
 
-        private void WypelnijKwotyZJpkLubFallback(VatReport raport, dynamic jpk, DateTime dataOd, DateTime dataDo)
+        private void WypelnijKwotyZJpkLubFallback(VatReport raport, dynamic jpk, RodzajJPK rodzaj, DateTime dataOd, DateTime dataDo)
         {
             if (WypelnijKwotyZPowiazanejDeklaracji(raport, jpk))
             {
@@ -191,7 +208,7 @@ namespace NexoBridge.Services
             }
 
             _logger.LogWarning("[VAT KWOTY] Nie udało się odczytać kwot z zapisanego JPK. Używam awaryjnego wyliczenia deklaracyjnego bez zapisu.");
-            WypelnijKwotyDeklaracyjnieAwaryjnie(raport, dataOd, dataDo);
+            WypelnijKwotyDeklaracyjnieAwaryjnie(raport, rodzaj, dataOd, dataDo);
         }
 
         private bool WypelnijKwotyZPowiazanejDeklaracji(VatReport raport, dynamic jpk)
@@ -264,8 +281,10 @@ namespace NexoBridge.Services
             }
         }
 
-        private void WypelnijKwotyDeklaracyjnieAwaryjnie(VatReport raport, DateTime dataOd, DateTime dataDo)
+        private void WypelnijKwotyDeklaracyjnieAwaryjnie(VatReport raport, RodzajJPK rodzaj, DateTime dataOd, DateTime dataDo)
         {
+            string etykieta = OpiszRodzaj(rodzaj);
+
             try
             {
                 dynamic mgrDeklaracji = PobierzMenedzera("IDeklaracjeSkarbowe") ?? PobierzMenedzera("IDeklaracje");
@@ -281,13 +300,13 @@ namespace NexoBridge.Services
 
                 var wszystkieWersje = ((IEnumerable)mgrWersjiDeklaracji.Wersje).Cast<dynamic>().ToList();
                 var wybranyWzorzec = wszystkieWersje
-                    .Where(w => { try { return ((string)w.Nazwa).Contains("V7M"); } catch { return false; } })
+                    .Where(w => { try { return ((string)w.Nazwa).Contains(etykieta); } catch { return false; } })
                     .OrderByDescending(w => w.Id)
                     .FirstOrDefault();
 
                 if (wybranyWzorzec == null)
                 {
-                    _logger.LogWarning("[VAT KWOTY] Brak wzorca JPK_V7M do awaryjnego wyliczenia kwot VAT.");
+                    _logger.LogWarning("[VAT KWOTY] Brak wzorca JPK_{Etykieta} do awaryjnego wyliczenia kwot VAT.", etykieta);
                     return;
                 }
 
@@ -413,36 +432,38 @@ namespace NexoBridge.Services
                 || decimal.TryParse(text, NumberStyles.Any, CultureInfo.GetCultureInfo("pl-PL"), out value);
         }
 
-        private bool WygenerujWidocznyJpkV7M(DateTime dataOd, DateTime dataDo, out dynamic wygenerowanyJpk, out string blad)
+        private bool WygenerujWidocznyJpkV7(RodzajJPK rodzaj, DateTime dataOd, DateTime dataDo, out dynamic wygenerowanyJpk, out string blad)
         {
             wygenerowanyJpk = null;
             blad = null;
             var bledySciezek = new List<string>();
+            string etykieta = OpiszRodzaj(rodzaj);
+            string nazwaMenedzeraWysylki = $"IMenadzerNaliczaniaWysylki{etykieta}";
 
             dynamic mgrNaliczania = PobierzMenedzera("IMenadzerNaliczaniaPlikowJPK");
             if (mgrNaliczania != null)
             {
-                if (WygenerujPrzezMenedzerPlikowJpk(mgrNaliczania, dataOd, dataDo, out wygenerowanyJpk, out blad))
+                if (WygenerujPrzezMenedzerPlikowJpk(mgrNaliczania, rodzaj, dataOd, dataDo, out wygenerowanyJpk, out blad))
                 {
                     return true;
                 }
 
                 bledySciezek.Add($"IMenadzerNaliczaniaPlikowJPK: {blad}");
-                _logger.LogWarning("[VAT JPK FALLBACK] Ogólny menedżer JPK nie wygenerował V7M. Próbuję menedżera wysyłki V7M. Powód: {Blad}", blad);
+                _logger.LogWarning("[VAT JPK FALLBACK] Ogólny menedżer JPK nie wygenerował {Etykieta}. Próbuję menedżera wysyłki {Etykieta}. Powód: {Blad}", etykieta, etykieta, blad);
             }
 
-            dynamic mgrWysylkiV7M = PobierzMenedzera("IMenadzerNaliczaniaWysylkiV7M");
-            if (mgrWysylkiV7M != null)
+            dynamic mgrWysylki = PobierzMenedzera(nazwaMenedzeraWysylki);
+            if (mgrWysylki != null)
             {
-                if (WygenerujPrzezMenedzerWysylkiV7M(mgrWysylkiV7M, dataOd, dataDo, out wygenerowanyJpk, out blad))
+                if (WygenerujPrzezMenedzerWysylkiV7(mgrWysylki, rodzaj, dataOd, dataDo, out wygenerowanyJpk, out blad))
                 {
                     return true;
                 }
 
-                bledySciezek.Add($"IMenadzerNaliczaniaWysylkiV7M: {blad}");
+                bledySciezek.Add($"{nazwaMenedzeraWysylki}: {blad}");
             }
 
-            if (WygenerujPrzezBezposredniJpkV7M(dataOd, dataDo, out wygenerowanyJpk, out blad))
+            if (WygenerujPrzezBezposredniJpkV7(rodzaj, dataOd, dataDo, out wygenerowanyJpk, out blad))
             {
                 return true;
             }
@@ -450,28 +471,29 @@ namespace NexoBridge.Services
             bledySciezek.Add($"IJednolityPlikKontrolny.Generuj: {blad}");
 
             blad = bledySciezek.Count > 0
-                ? "Nie udało się wygenerować JPK_V7M żadną dostępną ścieżką Sfery. " + string.Join(" || ", bledySciezek)
-                : "Nie udało się pobrać menedżera naliczania JPK_V7M (IMenadzerNaliczaniaPlikowJPK / IMenadzerNaliczaniaWysylkiV7M).";
+                ? $"Nie udało się wygenerować JPK_{etykieta} żadną dostępną ścieżką Sfery. " + string.Join(" || ", bledySciezek)
+                : $"Nie udało się pobrać menedżera naliczania JPK_{etykieta} (IMenadzerNaliczaniaPlikowJPK / {nazwaMenedzeraWysylki}).";
             return false;
         }
 
-        private bool WygenerujPrzezMenedzerPlikowJpk(dynamic mgr, DateTime dataOd, DateTime dataDo, out dynamic wygenerowanyJpk, out string blad)
+        private bool WygenerujPrzezMenedzerPlikowJpk(dynamic mgr, RodzajJPK rodzaj, DateTime dataOd, DateTime dataDo, out dynamic wygenerowanyJpk, out string blad)
         {
             wygenerowanyJpk = null;
             blad = null;
             WynikGenerowaniaPlikuJPK wynikNaliczania = null;
+            string etykieta = OpiszRodzaj(rodzaj);
 
             try
             {
                 mgr.Inicjalizuj();
                 UstawJesliMozna(mgr, "UzyjWlasnychWyrazen", false);
                 UstawJesliMozna(mgr, "ZapiszPowiazaniaZEwidencjaZrodlowa", true);
-                UstawJesliMozna(mgr, "Nazwa", $"JPK_V7M {dataOd:yyyy-MM}");
+                UstawJesliMozna(mgr, "Nazwa", $"JPK_{etykieta} {dataOd:yyyy-MM}");
                 UstawJesliMozna(mgr, "Opis", "Wygenerowano automatycznie przez NexoBridge.");
                 UstawJesliMozna(mgr, "DomyslnaDataOd", dataOd);
                 UstawJesliMozna(mgr, "DomyslnaDataDo", dataDo);
 
-                dynamic plik = mgr.DodajPlik(RodzajJPK.V7M, dataOd, dataDo, false);
+                dynamic plik = mgr.DodajPlik(rodzaj, dataOd, dataDo, false);
                 PrzygotujParametryJpkV7(plik, dataOd, dataDo);
                 UzupelnijParametryZManagera(mgr, plik);
 
@@ -499,11 +521,11 @@ namespace NexoBridge.Services
                     return false;
                 }
 
-                wygenerowanyJpk = ZnajdzJpkV7M(dataOd, dataDo) ?? ZnajdzJpkPoId(wynikNaliczania?.Id ?? 0);
+                wygenerowanyJpk = ZnajdzJpkV7(rodzaj, dataOd, dataDo) ?? ZnajdzJpkPoId(wynikNaliczania?.Id ?? 0);
 
                 if (wygenerowanyJpk == null)
                 {
-                    blad = $"Sfera zakończyła naliczanie JPK_V7M, ale po operacji nie znaleziono pliku JPK w bazie. Wynik: {OpiszWynikGenerowaniaJpk(wynikNaliczania)}";
+                    blad = $"Sfera zakończyła naliczanie JPK_{etykieta}, ale po operacji nie znaleziono pliku JPK w bazie. Wynik: {OpiszWynikGenerowaniaJpk(wynikNaliczania)}";
                     return false;
                 }
 
@@ -511,7 +533,7 @@ namespace NexoBridge.Services
             }
             catch (Exception ex)
             {
-                blad = $"Sfera odrzuciła naliczenie widocznego JPK_V7M. Powód: {ex.InnerException?.Message ?? ex.Message}. Szczegóły: {PobierzBledyWalidacji(mgr)}";
+                blad = $"Sfera odrzuciła naliczenie widocznego JPK_{etykieta}. Powód: {ex.InnerException?.Message ?? ex.Message}. Szczegóły: {PobierzBledyWalidacji(mgr)}";
                 return false;
             }
             finally
@@ -520,32 +542,34 @@ namespace NexoBridge.Services
             }
         }
 
-        private bool WygenerujPrzezMenedzerWysylkiV7M(dynamic mgr, DateTime dataOd, DateTime dataDo, out dynamic wygenerowanyJpk, out string blad)
+        private bool WygenerujPrzezMenedzerWysylkiV7(dynamic mgr, RodzajJPK rodzaj, DateTime dataOd, DateTime dataDo, out dynamic wygenerowanyJpk, out string blad)
         {
             wygenerowanyJpk = null;
             blad = null;
             WynikGenerowaniaPlikuJPK wynikNaliczania = null;
+            string etykieta = OpiszRodzaj(rodzaj);
+            string sciezka = $"IMenadzerNaliczaniaWysylki{etykieta}";
 
             try
             {
                 mgr.Inicjalizuj();
-                PrzygotujManagerWysylkiV7M(mgr, dataOd);
+                PrzygotujManagerWysylkiV7(mgr, dataOd, rodzaj);
 
                 dynamic plik = null;
                 try { plik = mgr.DodajDomyslnyPlik(); } catch { }
                 PrzygotujParametryJpkV7(plik ?? mgr.Plik, dataOd, dataDo);
                 UzupelnijParametryZManagera(mgr, plik ?? mgr.Plik);
-                LogujBrakiParametrowJpk("IMenadzerNaliczaniaWysylkiV7M", mgr, plik ?? mgr.Plik);
+                LogujBrakiParametrowJpk(sciezka, mgr, plik ?? mgr.Plik);
 
                 if (CzyDaneNiekompletne(mgr))
                 {
                     string bledyWalidacji = PobierzBledyWalidacji(mgr);
-                    _logger.LogWarning("[VAT JPK] Menedżer V7M zgłasza niekompletne dane przed wyliczeniem. Szczegóły: {Bledy}", bledyWalidacji);
-                    LogujDiagnostykeJpk("IMenadzerNaliczaniaWysylkiV7M", mgr, plik ?? mgr.Plik);
+                    _logger.LogWarning("[VAT JPK] Menedżer {Etykieta} zgłasza niekompletne dane przed wyliczeniem. Szczegóły: {Bledy}", etykieta, bledyWalidacji);
+                    LogujDiagnostykeJpk(sciezka, mgr, plik ?? mgr.Plik);
                 }
 
                 Action<WynikGenerowaniaPlikuJPK> ustawWynik = wynik => wynikNaliczania = wynik;
-                IDisposable subskrypcja = PodepnijNaliczonoEventHandler((object)mgr, ustawWynik, "IMenadzerNaliczaniaWysylkiV7M");
+                IDisposable subskrypcja = PodepnijNaliczonoEventHandler((object)mgr, ustawWynik, sciezka);
                 try
                 {
                     mgr.Wylicz();
@@ -561,11 +585,11 @@ namespace NexoBridge.Services
                     return false;
                 }
 
-                wygenerowanyJpk = ZnajdzJpkV7M(dataOd, dataDo) ?? ZnajdzJpkPoId(wynikNaliczania?.Id ?? 0);
+                wygenerowanyJpk = ZnajdzJpkV7(rodzaj, dataOd, dataDo) ?? ZnajdzJpkPoId(wynikNaliczania?.Id ?? 0);
 
                 if (wygenerowanyJpk == null)
                 {
-                    blad = $"Sfera zakończyła naliczanie JPK_V7M przez menedżer V7M, ale po operacji nie znaleziono pliku JPK w bazie. Wynik: {OpiszWynikGenerowaniaJpk(wynikNaliczania)}";
+                    blad = $"Sfera zakończyła naliczanie JPK_{etykieta} przez menedżer {etykieta}, ale po operacji nie znaleziono pliku JPK w bazie. Wynik: {OpiszWynikGenerowaniaJpk(wynikNaliczania)}";
                     return false;
                 }
 
@@ -573,7 +597,7 @@ namespace NexoBridge.Services
             }
             catch (Exception ex)
             {
-                blad = $"Sfera odrzuciła naliczenie JPK_V7M przez menedżer V7M. Powód: {ex.InnerException?.Message ?? ex.Message}. Szczegóły: {PobierzBledyWalidacji(mgr)}";
+                blad = $"Sfera odrzuciła naliczenie JPK_{etykieta} przez menedżer {etykieta}. Powód: {ex.InnerException?.Message ?? ex.Message}. Szczegóły: {PobierzBledyWalidacji(mgr)}";
                 return false;
             }
             finally
@@ -582,10 +606,12 @@ namespace NexoBridge.Services
             }
         }
 
-        private bool WygenerujPrzezBezposredniJpkV7M(DateTime dataOd, DateTime dataDo, out dynamic wygenerowanyJpk, out string blad)
+        private bool WygenerujPrzezBezposredniJpkV7(RodzajJPK rodzaj, DateTime dataOd, DateTime dataDo, out dynamic wygenerowanyJpk, out string blad)
         {
             wygenerowanyJpk = null;
             blad = null;
+            string etykieta = OpiszRodzaj(rodzaj);
+            string nazwaMenedzeraWysylki = $"IMenadzerNaliczaniaWysylki{etykieta}";
 
             dynamic mgrParametrow = null;
             dynamic mgrJpk = null;
@@ -593,16 +619,16 @@ namespace NexoBridge.Services
 
             try
             {
-                mgrParametrow = PobierzMenedzera("IMenadzerNaliczaniaWysylkiV7M");
+                mgrParametrow = PobierzMenedzera(nazwaMenedzeraWysylki);
                 mgrJpk = PobierzMenedzera("IJednolitePlikiKontrolne");
                 if (mgrParametrow == null || mgrJpk == null)
                 {
-                    blad = "Brak menedżera parametrów V7M lub menedżera IJednolitePlikiKontrolne.";
+                    blad = $"Brak menedżera parametrów {etykieta} lub menedżera IJednolitePlikiKontrolne.";
                     return false;
                 }
 
                 mgrParametrow.Inicjalizuj();
-                PrzygotujManagerWysylkiV7M(mgrParametrow, dataOd);
+                PrzygotujManagerWysylkiV7(mgrParametrow, dataOd, rodzaj);
 
                 dynamic plik = null;
                 try { plik = mgrParametrow.DodajDomyslnyPlik(); } catch { }
@@ -627,16 +653,16 @@ namespace NexoBridge.Services
                 try { zapisano = jpkBO.Zapisz(); } catch { }
                 if (!zapisano)
                 {
-                    blad = $"JPK_V7M został wygenerowany bezpośrednio, ale nie udało się go zapisać jako widocznego pliku. Wynik: {OpiszWynikGenerowaniaJpk(wynik)}";
+                    blad = $"JPK_{etykieta} został wygenerowany bezpośrednio, ale nie udało się go zapisać jako widocznego pliku. Wynik: {OpiszWynikGenerowaniaJpk(wynik)}";
                     return false;
                 }
 
                 try { wygenerowanyJpk = jpkBO.Dane; } catch { }
-                wygenerowanyJpk = wygenerowanyJpk ?? ZnajdzJpkPoId(wynik?.Id ?? 0) ?? ZnajdzJpkV7M(dataOd, dataDo);
+                wygenerowanyJpk = wygenerowanyJpk ?? ZnajdzJpkPoId(wynik?.Id ?? 0) ?? ZnajdzJpkV7(rodzaj, dataOd, dataDo);
 
                 if (wygenerowanyJpk == null)
                 {
-                    blad = $"JPK_V7M został wygenerowany i zapisany bezpośrednio, ale nie udało się odczytać encji JPK po zapisie. Wynik: {OpiszWynikGenerowaniaJpk(wynik)}";
+                    blad = $"JPK_{etykieta} został wygenerowany i zapisany bezpośrednio, ale nie udało się odczytać encji JPK po zapisie. Wynik: {OpiszWynikGenerowaniaJpk(wynik)}";
                     return false;
                 }
 
@@ -644,7 +670,7 @@ namespace NexoBridge.Services
             }
             catch (Exception ex)
             {
-                blad = $"Bezpośrednie generowanie JPK_V7M przez IJednolityPlikKontrolny nie powiodło się. Powód: {ex.InnerException?.Message ?? ex.Message}. Szczegóły parametrów: {OpiszKrytyczneParametryJpk(mgrParametrow, null)}";
+                blad = $"Bezpośrednie generowanie JPK_{etykieta} przez IJednolityPlikKontrolny nie powiodło się. Powód: {ex.InnerException?.Message ?? ex.Message}. Szczegóły parametrów: {OpiszKrytyczneParametryJpk(mgrParametrow, null)}";
                 return false;
             }
             finally
@@ -655,13 +681,13 @@ namespace NexoBridge.Services
             }
         }
 
-        private void PrzygotujManagerWysylkiV7M(dynamic mgr, DateTime dataOd)
+        private void PrzygotujManagerWysylkiV7(dynamic mgr, DateTime dataOd, RodzajJPK rodzaj)
         {
             UstawJesliMozna(mgr, "MiesiacNaliczenia", dataOd);
             UstawDateSystemowaJesliMozna(mgr, "DataWystawienia", DateTime.Today);
             UstawJesliMozna(mgr, "Korekta", false);
             UstawJesliMozna(mgr, "EwidencjaVAT", true);
-            UstawJesliMozna(mgr, "Nazwa", $"JPK_V7M {dataOd:yyyy-MM}");
+            UstawJesliMozna(mgr, "Nazwa", $"JPK_{OpiszRodzaj(rodzaj)} {dataOd:yyyy-MM}");
             UstawJesliMozna(mgr, "AdresEmail", PobierzAdresEmailJpk(mgr));
             UstawJesliMozna(mgr, "TrybNaliczaniaKorektyCzesciDeklaracyjnej", TrybNaliczaniaKorektyCzesciDeklaracyjnejWysylkiV7.Auto);
             UstawJesliMozna(mgr, "TrybNaliczaniaKorektyCzesciEwidencyjnej", TrybNaliczaniaKorektyCzesciEwidencyjnejWysylkiV7.Auto);
@@ -893,7 +919,7 @@ namespace NexoBridge.Services
             }
         }
 
-        private dynamic ZnajdzJpkV7M(DateTime dataOd, DateTime dataDo)
+        private dynamic ZnajdzJpkV7(RodzajJPK rodzaj, DateTime dataOd, DateTime dataDo)
         {
             dynamic mgrJpk = PobierzMenedzera("IJednolitePlikiKontrolne");
             if (mgrJpk == null) return null;
@@ -902,7 +928,7 @@ namespace NexoBridge.Services
             {
                 var znalezione = ((IEnumerable)mgrJpk.Dane.ZnajdzWysylkeVATRozliczeniowaWOkresie(dataOd, dataDo))
                     .Cast<dynamic>()
-                    .Where(CzyJpkV7M)
+                    .Where(j => CzyJpkRodzaju(j, rodzaj))
                     .OrderByDescending(j => { try { return (int)j.Id; } catch { return 0; } })
                     .ToList();
 
@@ -910,7 +936,7 @@ namespace NexoBridge.Services
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Nie udało się sprawdzić istniejących plików JPK_V7M dla okresu {Od:yyyy-MM-dd} - {Do:yyyy-MM-dd}.", dataOd, dataDo);
+                _logger.LogWarning(ex, "Nie udało się sprawdzić istniejących plików JPK_{Etykieta} dla okresu {Od:yyyy-MM-dd} - {Do:yyyy-MM-dd}.", OpiszRodzaj(rodzaj), dataOd, dataDo);
                 return null;
             }
         }
@@ -939,18 +965,20 @@ namespace NexoBridge.Services
             return null;
         }
 
-        private bool CzyJpkV7M(dynamic jpk)
+        private bool CzyJpkRodzaju(dynamic jpk, RodzajJPK rodzajOczekiwany)
         {
             try
             {
                 int rodzaj = Convert.ToInt32(jpk.Rodzaj);
-                return rodzaj == Convert.ToInt32(RodzajJPK.V7M);
+                return rodzaj == Convert.ToInt32(rodzajOczekiwany);
             }
             catch
             {
                 return false;
             }
         }
+
+        private string OpiszRodzaj(RodzajJPK rodzaj) => rodzaj == RodzajJPK.V7K ? "V7K" : "V7M";
 
         private IDisposable PodepnijNaliczonoEventHandler(object manager, Action<WynikGenerowaniaPlikuJPK> ustawWynik, string sciezka)
         {
@@ -991,7 +1019,7 @@ namespace NexoBridge.Services
                 return true;
             }
 
-            blad = $"Sfera zwróciła niepoprawny wynik generowania JPK_V7M: {OpiszWynikGenerowaniaJpk(wynik)}";
+            blad = $"Sfera zwróciła niepoprawny wynik generowania JPK_V7: {OpiszWynikGenerowaniaJpk(wynik)}";
             return false;
         }
 

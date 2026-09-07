@@ -1176,6 +1176,13 @@ namespace NexoBridge.Services
                     : $"{error.GetType().Name}.ErrorMessage='{efMessage}'";
             }
 
+            // Sfera czasem wkłada do InvalidData bezpośrednio niepoprawną ENCJĘ BIZNESOWĄ (np. Zalacznik),
+            // a nie osobny obiekt błędu z komunikatem. Wtedy jedna z poniższych nazw (np. "Opis") może
+            // trafić na zwykłe pole encji, które nie ma nic wspólnego z przyczyną odrzucenia - dlatego
+            // NIE wolno zwracać się od razu po pierwszym trafieniu: trzeba też sprawdzić zagnieżdżone
+            // kolekcje błędów i pełny zrzut właściwości, inaczej prawdziwa przyczyna zostaje ukryta
+            // (tak się stało: "Zalacznik.Opis='Oryginał ze Scanye'" zamaskowało realny błąd zapisu).
+            string dopasowanaWlasciwosc = null;
             string[] messageProps =
             {
                 "Komunikat", "Tresc", "Treść", "Opis", "Message",
@@ -1186,7 +1193,8 @@ namespace NexoBridge.Services
             {
                 if (TryReadStringProperty(error, propertyName, out string value))
                 {
-                    return $"{error.GetType().Name}.{propertyName}='{value}'";
+                    dopasowanaWlasciwosc = $"{error.GetType().Name}.{propertyName}='{value}'";
+                    break;
                 }
             }
 
@@ -1202,7 +1210,8 @@ namespace NexoBridge.Services
 
                     if (nestedDescribed.Count > 0)
                     {
-                        return $"{error.GetType().Name}.{collectionProp}=[{string.Join("; ", nestedDescribed)}]";
+                        string zagniezdzone = $"{error.GetType().Name}.{collectionProp}=[{string.Join("; ", nestedDescribed)}]";
+                        return dopasowanaWlasciwosc != null ? $"{dopasowanaWlasciwosc}; {zagniezdzone}" : zagniezdzone;
                     }
                 }
             }
@@ -1230,9 +1239,11 @@ namespace NexoBridge.Services
                 .Where(x => x != null)
                 .ToList();
 
-            return dump.Count > 0
+            string pelnyZrzut = dump.Count > 0
                 ? $"{error.GetType().FullName}[{string.Join(", ", dump)}]"
                 : $"{error.GetType().FullName}: {error}";
+
+            return dopasowanaWlasciwosc != null ? $"{dopasowanaWlasciwosc}; {pelnyZrzut}" : pelnyZrzut;
         }
 
         private static bool TryReadStringProperty(object source, string propertyName, out string value)
