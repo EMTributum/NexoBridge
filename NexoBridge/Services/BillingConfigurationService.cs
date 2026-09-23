@@ -4,7 +4,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using InsERT.Moria.Klienci;
 using InsERT.Moria.ModelDanych;
-using InsERT.Moria.OperacjeZewnetrzne;
 using InsERT.Moria.Sfera;
 using Microsoft.Extensions.Logging;
 using NexoBridge.Models;
@@ -59,9 +58,7 @@ namespace NexoBridge.Services
                 }
 
                 await raportujPostep(80, "Odczyt stawek i formy płatności...");
-                (DateTime? periodStart, DateTime? periodEnd) = ResolvePeriodRange(job.PeriodYear, job.PeriodMonth);
-                IFabrykaLicznikowObiektow counterFactory = periodStart.HasValue ? TryGetCounterFactory() : null;
-                report.Item = BuildSnapshotItem(client, counterFactory, periodStart, periodEnd);
+                report.Item = BuildSnapshotItem(client);
 
                 await raportujPostep(100, "Odczyt konfiguracji billingowej zakończony.");
                 return report;
@@ -103,13 +100,6 @@ namespace NexoBridge.Services
                 await raportujPostep(70, "Filtrowanie aktywnych klientów z cechą „Do fakturowania”...");
                 List<Podmiot> eligibleClients = FindEligibleClients(allClients);
 
-                // Liczniki obiektów (rachunki/listy płac) są rozwiązywane RAZ dla całego przebiegu, nie
-                // per klient - to jest jeden lookup w kontenerze Sfery, a nie osobna sesja/połączenie,
-                // więc nie odtwarza to kosztu, który wcześniej powodował timeout przy N osobnych
-                // zapytaniach o snapshot per klient (patrz komentarz niżej przy metodzie płatności).
-                (DateTime? periodStart, DateTime? periodEnd) = ResolvePeriodRange(job.PeriodYear, job.PeriodMonth);
-                IFabrykaLicznikowObiektow counterFactory = periodStart.HasValue ? TryGetCounterFactory() : null;
-
                 report.Items = eligibleClients
                     .Select(client =>
                     {
@@ -124,10 +114,12 @@ namespace NexoBridge.Services
                         (string paymentMethod, string paymentMethodSource) = ResolvePaymentMethod(bestPayment);
 
                         // Stawka księgowa - tak samo jak metoda płatności, liczona z już wczytanego
-                        // obiektu Podmiot, zero dodatkowych zapytań do Sfery.
+                        // obiektu Podmiot, zero dodatkowych zapytań do Sfery. Kadry/płace - patrz komentarz
+                        // przy PayrollCountsService: liczone WYŁĄCZNIE w osobnym, per-klienckim
+                        // przebiegu (sesja Gratyfikant do bazy klienta), nigdy tutaj w sesji biura - patrz
+                        // ZNANY BŁĄD (2026-09-22) w historii tego pliku, tu zostaje tylko płaski fallback.
                         MonthlyFeeLine baseFee = FindPrimaryMonthlyServiceLine(client, MonthlyServiceKind.Accounting);
-                        List<MonthlyFeeLine> payrollLines = ResolvePayrollFeeLines(client, counterFactory, periodStart, periodEnd);
-                        MonthlyFeeLine payrollFallback = payrollLines.Count == 0 ? FindPrimaryMonthlyServiceLine(client, MonthlyServiceKind.Payroll) : null;
+                        MonthlyFeeLine payrollFallback = FindPrimaryMonthlyServiceLine(client, MonthlyServiceKind.Payroll);
 
                         return new BillingClientListItem
                         {
@@ -148,10 +140,7 @@ namespace NexoBridge.Services
                             BaseFeeGross = baseFee?.Gross,
                             PayrollFeeName = payrollFallback?.Name,
                             PayrollFeeNet = payrollFallback?.Net,
-                            PayrollFeeGross = payrollFallback?.Gross,
-                            PayrollFeeLines = payrollLines
-                                .Select(line => new PayrollFeeLineDto { Name = line.Name, Net = line.Net, Gross = line.Gross })
-                                .ToList()
+                            PayrollFeeGross = payrollFallback?.Gross
                         };
                     })
                     .OrderBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase)
@@ -172,16 +161,16 @@ namespace NexoBridge.Services
             }
         }
 
-        private ClientBillingSnapshotItem BuildSnapshotItem(
-            Podmiot client, IFabrykaLicznikowObiektow counterFactory, DateTime? periodStart, DateTime? periodEnd)
+        private ClientBillingSnapshotItem BuildSnapshotItem(Podmiot client)
         {
             BestPaymentEntry bestPayment = ResolveBestPaymentEntry(client);
             (bool isDeferred, int? termDays, string summary) = ResolvePaymentSummary(client, bestPayment);
             (string paymentMethod, string paymentMethodSource) = ResolvePaymentMethod(bestPayment);
 
+            // Kadry/płace liczone WYŁĄCZNIE przez PayrollCountsService (osobna sesja Gratyfikant do
+            // bazy klienta) - tu zostaje tylko płaski fallback. Patrz ZNANY BŁĄD w historii tego pliku.
             MonthlyFeeLine baseFee = FindPrimaryMonthlyServiceLine(client, MonthlyServiceKind.Accounting);
-            List<MonthlyFeeLine> payrollLines = ResolvePayrollFeeLines(client, counterFactory, periodStart, periodEnd);
-            MonthlyFeeLine payrollFallback = payrollLines.Count == 0 ? FindPrimaryMonthlyServiceLine(client, MonthlyServiceKind.Payroll) : null;
+            MonthlyFeeLine payrollFallback = FindPrimaryMonthlyServiceLine(client, MonthlyServiceKind.Payroll);
 
             return new ClientBillingSnapshotItem
             {
@@ -203,154 +192,11 @@ namespace NexoBridge.Services
                 BaseFeeGross = baseFee?.Gross,
                 PayrollFeeName = payrollFallback?.Name,
                 PayrollFeeNet = payrollFallback?.Net,
-                PayrollFeeGross = payrollFallback?.Gross,
-                PayrollFeeLines = payrollLines
-                    .Select(line => new PayrollFeeLineDto { Name = line.Name, Net = line.Net, Gross = line.Gross })
-                    .ToList()
+                PayrollFeeGross = payrollFallback?.Gross
             };
         }
 
-        private static (DateTime? Start, DateTime? End) ResolvePeriodRange(int? year, int? month)
-        {
-            if (!year.HasValue || !month.HasValue || month.Value < 1 || month.Value > 12)
-            {
-                return (null, null);
-            }
-
-            DateTime start = new DateTime(year.Value, month.Value, 1);
-            return (start, start.AddMonths(1).AddDays(-1));
-        }
-
-        private IFabrykaLicznikowObiektow TryGetCounterFactory()
-        {
-            try
-            {
-                return GetRequiredService<IFabrykaLicznikowObiektow>(_sfera, DateTime.Today);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Nie udało się pobrać IFabrykaLicznikowObiektow - pozycje kadrowo-płacowe będą liczone starym, płaskim fallbackiem.");
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Kadry/płace - Faza 4 planu billingu, zweryfikowana na realnych danych produkcyjnych
-        /// (--dump-cennik-fields w NexoBillingKonsola). W cenniku biura pozycje typu "Rachunek do umowy
-        /// pracowniczej"/"Wypłata wg miesiąca rozliczenia" mają WŁASNY, wbudowany w Nexo mechanizm
-        /// liczenia (ObiektPozycjiCennikaUslug.FunkcjaZliczajaca -> IFabrykaLicznikowObiektow.Znajdz ->
-        /// ILicznikObiektow.Zlicz(dataOd, dataDo)) - nie trzeba tego liczyć samemu z Gratyfikanta.
-        /// Warunek "ten cennik jest kadrowo-płacowy" zostaje po nazwie cennika (jak dotychczas), ale
-        /// każda pozycja z podpiętym licznikiem staje się WŁASNĄ linią faktury z realną ilością w nazwie,
-        /// zamiast brania ceny z pierwszego napotkanego przedziału i ignorowania ilości.
-        /// </summary>
-        private static List<MonthlyFeeLine> ResolvePayrollFeeLines(
-            Podmiot client, IFabrykaLicznikowObiektow counterFactory, DateTime? periodStart, DateTime? periodEnd)
-        {
-            var lines = new List<MonthlyFeeLine>();
-            if (counterFactory == null || !periodStart.HasValue || !periodEnd.HasValue)
-            {
-                return lines;
-            }
-
-            if (!TryReadPropertyPath(client, "KlientBiura", out object biuroClient) || biuroClient == null)
-            {
-                return lines;
-            }
-
-            if (!TryReadPropertyPath(biuroClient, "CennikUslug", out object pricing) || pricing == null)
-            {
-                return lines;
-            }
-
-            string pricingName = ReadStringCandidate(pricing, "Nazwa");
-            if (!MatchesMonthlyServiceKind(pricingName, MonthlyServiceKind.Payroll))
-            {
-                return lines;
-            }
-
-            foreach (object position in ReadObjectCollection(pricing, "PozycjeCennikaUslug"))
-            {
-                string counterGuidText = ReadStringCandidate(position, "ObiektPozycjiCennikaUslug.FunkcjaZliczajaca");
-                if (string.IsNullOrWhiteSpace(counterGuidText) || !Guid.TryParse(counterGuidText, out Guid counterGuid) || counterGuid == Guid.Empty)
-                {
-                    continue;
-                }
-
-                int quantity;
-                try
-                {
-                    ILicznikObiektow counter = counterFactory.Znajdz(counterGuid);
-                    if (counter == null)
-                    {
-                        continue;
-                    }
-
-                    quantity = (int)Math.Round(counter.Zlicz(periodStart.Value, periodEnd.Value), MidpointRounding.AwayFromZero);
-                }
-                catch
-                {
-                    // Błąd wywołania licznika dla TEJ pozycji - pomijamy ją, ale nie zrywamy reszty
-                    // (klient nadal dostaje pozostałe pozycje kadrowe, plus stary fallback jeśli lista
-                    // finalnie wyjdzie pusta).
-                    continue;
-                }
-
-                if (quantity <= 0)
-                {
-                    continue;
-                }
-
-                (decimal? net, decimal? gross) = ComputeTierAmount(position, quantity);
-                if (!net.HasValue && !gross.HasValue)
-                {
-                    continue;
-                }
-
-                string label = GetPositionLabel(position) ?? GetDefaultServiceName(MonthlyServiceKind.Payroll);
-                lines.Add(new MonthlyFeeLine($"{label} za {quantity}", net, gross));
-            }
-
-            return lines;
-        }
-
-        /// <summary>
-        /// Kwota CAŁKOWITA (nie jednostkowa) dla danej ilości: znajduje przedział Od/Do zawierający
-        /// quantity, i jeśli ma cenę jednostkową (naliczanie "za element") mnoży ją przez ilość, a jeśli
-        /// ma tylko cenę zbiorczą (ryczałt za cały przedział) zwraca ją bez mnożenia.
-        /// </summary>
-        private static (decimal? Net, decimal? Gross) ComputeTierAmount(object position, int quantity)
-        {
-            foreach (object tier in ReadObjectCollection(position, "WartosciPozycjiCennikaUslug"))
-            {
-                int from = ReadIntCandidate(tier, "Od") ?? 1;
-                int to = ReadIntCandidate(tier, "Do") ?? int.MaxValue;
-                if (quantity < from || quantity > to)
-                {
-                    continue;
-                }
-
-                decimal? unitNet = ReadDecimalCandidate(tier, "CenaJednostkowaNetto");
-                decimal? unitGross = ReadDecimalCandidate(tier, "CenaJednostkowaBrutto");
-                if (unitNet.HasValue || unitGross.HasValue)
-                {
-                    return (
-                        unitNet.HasValue ? unitNet.Value * quantity : (decimal?)null,
-                        unitGross.HasValue ? unitGross.Value * quantity : (decimal?)null);
-                }
-
-                decimal? collectiveNet = ReadDecimalCandidate(tier, "CenaZbiorczaWPrzedzialeNetto", "CenaZbiorczaNetto");
-                decimal? collectiveGross = ReadDecimalCandidate(tier, "CenaZbiorczaWPrzedzialeBrutto", "CenaZbiorczaBrutto");
-                if (collectiveNet.HasValue || collectiveGross.HasValue)
-                {
-                    return (collectiveNet, collectiveGross);
-                }
-            }
-
-            return (null, null);
-        }
-
-        private static string GetDisplayName(Podmiot client)
+        internal static string GetDisplayName(Podmiot client)
         {
             string name = ReadStringCandidate(client, "Nazwa", "PelnaNazwa", "NazwaSkrocona");
             if (!string.IsNullOrWhiteSpace(name))
@@ -602,7 +448,7 @@ namespace NexoBridge.Services
             }
         }
 
-        private static string GetPositionLabel(object position)
+        internal static string GetPositionLabel(object position)
         {
             return ReadStringCandidate(
                 position,
@@ -631,7 +477,7 @@ namespace NexoBridge.Services
                 ReadDecimalCandidate(position, "CenaBrutto"));
         }
 
-        private static bool MatchesMonthlyServiceKind(string value, MonthlyServiceKind kind)
+        internal static bool MatchesMonthlyServiceKind(string value, MonthlyServiceKind kind)
         {
             if (string.IsNullOrWhiteSpace(value))
             {
@@ -653,7 +499,7 @@ namespace NexoBridge.Services
                     : normalized.Contains(token, StringComparison.Ordinal));
         }
 
-        private static string GetDefaultServiceName(MonthlyServiceKind kind)
+        internal static string GetDefaultServiceName(MonthlyServiceKind kind)
         {
             return kind == MonthlyServiceKind.Accounting ? "Obsługa księgowa" : "Obsługa kadrowa";
         }
@@ -663,7 +509,7 @@ namespace NexoBridge.Services
             public bool HasAmount => Net.HasValue || Gross.HasValue;
         }
 
-        private enum MonthlyServiceKind
+        internal enum MonthlyServiceKind
         {
             Accounting,
             Payroll

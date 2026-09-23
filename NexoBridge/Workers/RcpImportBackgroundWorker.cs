@@ -59,6 +59,7 @@ namespace NexoBridge.Workers
                 {
                     await WyslijPostep(job.JobId, 5, "Budzę Sferę Gratyfikanta...");
 
+                    using (await SferaSessionGate.AcquireAsync(stoppingToken))
                     using (var silnik = new SferaEngine())
                     {
                         silnik.Uruchom(job.Username, job.Password, job.DatabaseName, ProductId.Gratyfikant);

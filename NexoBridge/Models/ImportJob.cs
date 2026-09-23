@@ -40,7 +40,8 @@ namespace NexoBridge.Models
         public string DocumentNumber { get; set; }
         public string VendorNip { get; set; }
         public string FileName { get; set; }
-        public byte[] Content { get; set; }
+        public string InvoiceFileId { get; set; }
+        public string ViewerUrl { get; set; }
     }
 
     public class InvoiceMetadata

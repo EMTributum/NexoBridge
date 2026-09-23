@@ -34,6 +34,7 @@ namespace NexoBridge.Models
         public string KsefCode { get; set; }
         public string KsefCodeStatus { get; set; } = "notProvided";
         public string PdfFileName { get; set; }
+        public string ViewerUrl { get; set; }
 
         public string MatchStatus { get; set; } = "pending";
         public string WaitingRoomStatus { get; set; } = "notChecked";

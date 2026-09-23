@@ -152,25 +152,40 @@ namespace NexoBridge.Services
                 }
             }
 
-            TData fromContainer = TryGetServiceFromContainer<TData>(sfera);
+            Exception lastError = null;
+            TData fromContainer = TryGetServiceFromContainer<TData>(sfera, ref lastError);
             if (fromContainer != null)
             {
                 return fromContainer;
             }
 
-            throw new InvalidOperationException($"Nie udało się pobrać {label} ani z managera, ani z kontenera Sfery.");
+            string message = $"Nie udało się pobrać {label} ani z managera, ani z kontenera Sfery.";
+            throw lastError != null ? new InvalidOperationException(message, lastError) : new InvalidOperationException(message);
         }
 
         public static T GetRequiredService<T>(Uchwyt sfera, DateTime operationDate)
             where T : class
         {
-            T service = TryGetServiceFromSfera<T>(sfera, operationDate)
-                ?? TryGetServiceFromContainer<T>(sfera);
+            Exception lastError = null;
+            T service = TryGetServiceFromSfera<T>(sfera, operationDate, ref lastError)
+                ?? TryGetServiceFromContainer<T>(sfera, ref lastError);
 
-            return service ?? throw new InvalidOperationException($"Nie udało się pobrać {typeof(T).FullName} ze Sfery.");
+            if (service != null)
+            {
+                return service;
+            }
+
+            string message = $"Nie udało się pobrać {typeof(T).FullName} ze Sfery.";
+            throw lastError != null ? new InvalidOperationException(message, lastError) : new InvalidOperationException(message);
         }
 
-        private static T TryGetServiceFromSfera<T>(Uchwyt sfera, DateTime operationDate)
+        // lastError NIE jest resetowany do null przez te metody - celowo zbiera OSTATNI napotkany
+        // wyjątek across wszystkich prób (Sfera, potem kontener), żeby wołający miał choć jakiś ślad
+        // prawdziwej przyczyny zamiast generycznego "nie udało się pobrać X". Wcześniej wszystkie te
+        // catch-e po cichu połykały wyjątek (`catch { return null; }`) - w logu z 2026-09-22 10:24
+        // widać był tego efekt: "Nie udało się pobrać ... ze Sfery" bez ŻADNEGO inner exception, czyli
+        // prawdziwa przyczyna (licencja? zajęty operator? coś trzeciego?) przepadła bezpowrotnie.
+        private static T TryGetServiceFromSfera<T>(Uchwyt sfera, DateTime operationDate, ref Exception lastError)
             where T : class
         {
             MethodInfo method = sfera.GetType()
@@ -195,13 +210,14 @@ namespace NexoBridge.Services
                 TrySetSystemDateContext(typed, operationDate);
                 return typed;
             }
-            catch
+            catch (Exception ex)
             {
+                lastError = ex.GetBaseException();
                 return null;
             }
         }
 
-        private static T TryGetServiceFromContainer<T>(Uchwyt sfera)
+        private static T TryGetServiceFromContainer<T>(Uchwyt sfera, ref Exception lastError)
             where T : class
         {
             InsERT.Mox.Runtime.IInjectionContainer container = GetSferaContainer(sfera);
@@ -217,8 +233,9 @@ namespace NexoBridge.Services
                     return typed;
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                lastError = ex.GetBaseException();
             }
 
             try
@@ -228,8 +245,9 @@ namespace NexoBridge.Services
                     return typed;
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                lastError = ex.GetBaseException();
             }
 
             return null;
@@ -483,6 +501,52 @@ namespace NexoBridge.Services
             }
         }
 
+        // Reflekcyjne pobranie menedżera Sfery po nazwie interfejsu (np. "IKomentarzeNexo",
+        // "IZapisyWKPiR") - port AttachmentService.PobierzMenedzera/NexoBridgeKonsola.GetSferaManager,
+        // wyniesiony tutaj bo teraz potrzebuje go więcej niż jeden serwis (AttachmentService, BackfillService).
+        public static object GetManagerByInterfaceName(Uchwyt sfera, string interfaceName)
+        {
+            Type interfaceType = FindInterfaceTypeByName(interfaceName);
+            if (interfaceType == null)
+            {
+                return null;
+            }
+
+            MethodInfo method = sfera.GetType()
+                .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .FirstOrDefault(m => m.Name == "PodajObiektTypu" && m.IsGenericMethodDefinition && m.GetParameters().Length == 0);
+
+            return method?.MakeGenericMethod(interfaceType).Invoke(sfera, null);
+        }
+
+        private static Type FindInterfaceTypeByName(string interfaceName)
+        {
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type[] types;
+                try
+                {
+                    types = assembly.GetTypes();
+                }
+                catch (ReflectionTypeLoadException ex)
+                {
+                    types = ex.Types.Where(t => t != null).ToArray();
+                }
+                catch
+                {
+                    continue;
+                }
+
+                Type found = types.FirstOrDefault(t => t?.IsInterface == true && t.Name == interfaceName);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+
+            return null;
+        }
+
         public static object SafeGetPropertyValue(object target, PropertyInfo property)
         {
             try
@@ -614,6 +678,66 @@ namespace NexoBridge.Services
             }
 
             return null;
+        }
+
+        public static DateTime? ReadDateCandidate(object target, params string[] propertyPaths)
+        {
+            foreach (string propertyPath in propertyPaths)
+            {
+                if (!TryReadPropertyPath(target, propertyPath, out object value) || value == null)
+                {
+                    continue;
+                }
+
+                if (value is DateTime dateTimeValue)
+                {
+                    return dateTimeValue;
+                }
+
+                if (value is DateTimeOffset dateTimeOffsetValue)
+                {
+                    return dateTimeOffsetValue.DateTime;
+                }
+
+                if (DateTime.TryParse(value.ToString(), out DateTime parsed))
+                {
+                    return parsed;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>Woła WszystkieDostepne(string[]) przez refleksję - port QueryAllViaWszystkieDostepne z
+        /// prototypu NexoBillingKonsola/Program.cs (zweryfikowanego na żywych danych), potrzebny bo
+        /// statyczne wywołania na tych generowanych interfejsach Sfery ("Duze" managery) czasem nie
+        /// kompilują się zgodnie z oczekiwaniami.</summary>
+        public static List<object> QueryAllViaWszystkieDostepne(object dane, string[] razemZ)
+        {
+            MethodInfo method = dane.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                .FirstOrDefault(m => m.Name == "WszystkieDostepne" && m.GetParameters().Length == 1
+                    && m.GetParameters()[0].ParameterType == typeof(string[]));
+
+            if (method == null)
+            {
+                throw new InvalidOperationException($"{dane.GetType().FullName} nie ma metody WszystkieDostepne(string[]).");
+            }
+
+            object result = method.Invoke(dane, new object[] { razemZ });
+            if (result is not IEnumerable enumerable)
+            {
+                throw new InvalidOperationException($"WszystkieDostepne() na {dane.GetType().FullName} nie zwróciło kolekcji.");
+            }
+
+            List<object> items = new();
+            foreach (object item in enumerable)
+            {
+                if (item != null)
+                {
+                    items.Add(item);
+                }
+            }
+            return items;
         }
 
         public static List<object> ReadObjectCollection(object target, string propertyPath)

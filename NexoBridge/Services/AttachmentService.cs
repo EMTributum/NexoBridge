@@ -7,10 +7,8 @@ using NexoBridge.Models;
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Security.Cryptography;
 using System.Threading.Tasks;
 
 namespace NexoBridge.Services
@@ -31,7 +29,7 @@ namespace NexoBridge.Services
             _freshSferaFactory = freshSferaFactory;
         }
 
-        public async Task PodepnijZalacznikiAsync(
+        public async Task DodajLinkiKomentarzyAsync(
             ImportJob job,
             object rezultat,
             List<Tuple<DokumentDoKsiegowania, SchematImportu>> zatwierdzone,
@@ -41,8 +39,8 @@ namespace NexoBridge.Services
             _logger.LogDebug("[ZAŁĄCZNIKI SERVICE] Uruchomiono usługę załączników dla zadania: {JobId}", job.JobId);
             if (rezultat == null || zatwierdzone == null || zatwierdzone.Count == 0) return;
 
-            await raportujPostep(10, "Podpinanie załączników (bezpieczne dopasowanie)...");
-            var bibliotekaZalacznikow = _sfera.PodajObiektTypu<InsERT.Moria.BibliotekaZalacznikow.IBibliotekaZalacznikow>();
+            await raportujPostep(10, "Dopisywanie linków do podglądu faktur (bezpieczne dopasowanie)...");
+            object komentarzeManager = PobierzMenedzera("IKomentarzeNexo");
 
             var menedzerowie = new Dictionary<string, dynamic> {
                 { "KPiR", PobierzMenedzera("IZapisyWKPiR") },
@@ -129,44 +127,25 @@ namespace NexoBridge.Services
                 operacja.PdfFileName = zalacznik.FileName;
                 operacja.AttachmentDocumentNumber = zalacznik.DocumentNumber;
                 operacja.AttachmentVendorNip = zalacznik.VendorNip;
-                operacja.AttachmentBytes = zalacznik.Content?.Length ?? 0;
+                operacja.ViewerUrl = zalacznik.ViewerUrl;
 
                 _logger.LogDebug("[ZAŁĄCZNIK DOPASOWANY] Dokument={Numer}; NIP={Nip}; plik={Plik}; match={Match}",
                     nrSystemowy,
                     nipSystemowy,
                     zalacznik.FileName,
                     attachmentMatchStatus);
-                _logger.LogDebug("[ZAŁĄCZNIK DOPASOWANY SZCZEGÓŁY] Dokument={Numer}; NIP={Nip}; plik={Plik}; documentNumber={DocumentNumber}; vendorNip={VendorNip}; bytes={Bytes}; match={Match}",
+                _logger.LogDebug("[ZAŁĄCZNIK DOPASOWANY SZCZEGÓŁY] Dokument={Numer}; NIP={Nip}; plik={Plik}; documentNumber={DocumentNumber}; vendorNip={VendorNip}; viewerUrl={ViewerUrl}; match={Match}",
                     nrSystemowy,
                     nipSystemowy,
                     zalacznik.FileName,
                     zalacznik.DocumentNumber,
                     zalacznik.VendorNip,
-                    zalacznik.Content?.Length ?? 0,
+                    zalacznik.ViewerUrl ?? "brak",
                     attachmentMatchStatus);
 
-                string bezpiecznaNazwa = nrSystemowy.Replace("/", "_").Replace("\\", "_").Replace(":", "_").Replace(" ", "_");
-                bezpiecznaNazwa = string.Join("_", bezpiecznaNazwa.Split(Path.GetInvalidFileNameChars()));
-                if (string.IsNullOrWhiteSpace(bezpiecznaNazwa)) bezpiecznaNazwa = $"Skan_{Guid.NewGuid():N}";
-
-                string tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-                Directory.CreateDirectory(tempDir);
-
-                string rozszerzenie = Path.GetExtension(zalacznik.FileName);
-                if (string.IsNullOrWhiteSpace(rozszerzenie)) rozszerzenie = ".pdf";
-                string tempPath = Path.Combine(tempDir, $"{bezpiecznaNazwa}{rozszerzenie}");
-
-                File.WriteAllBytes(tempPath, zalacznik.Content);
-                string sha256 = ObliczSha256(zalacznik.Content);
-                operacja.SafeAttachmentName = bezpiecznaNazwa;
-                operacja.AttachmentExtension = rozszerzenie;
-                operacja.TempPath = tempPath;
-                operacja.Sha256 = sha256;
-                _logger.LogDebug("[ZAŁĄCZNIK TEMP] Plik={Plik}; tempPath={TempPath}; bytes={Bytes}; sha256={Sha256}",
-                    zalacznik.FileName,
-                    tempPath,
-                    zalacznik.Content?.Length ?? 0,
-                    sha256);
+                string viewerUrl = zalacznik.ViewerUrl;
+                string plainTextFallback = $"Podgląd faktury (oryginał): {viewerUrl}";
+                string htmlLink = $"<a href=\"{System.Net.WebUtility.HtmlEncode(viewerUrl)}\">Podgląd faktury (oryginał)</a>";
 
                 try
                 {
@@ -226,22 +205,18 @@ namespace NexoBridge.Services
                         AttachmentTargetRef cel = ZnajdzCelPowiazania(menedzerowie, wynik, dok);
                         if (cel?.Entity != null)
                         {
-                            cel.CanHaveLibrary = CzyMaBiblioteke(bibliotekaZalacznikow, cel.Entity, out string bibliotekaError);
-                            cel.LibraryCheckError = bibliotekaError;
                             celeDoPowiazania.Add(cel);
                             string wynikTypLog = typWyniku ?? "brak";
                             string encjaTypLog = cel.Entity?.GetType().FullName ?? "brak";
                             string dokumentIdLog = dokumentId?.ToString() ?? "brak";
-                            _logger.LogDebug("[ZAŁĄCZNIK POWIĄZANIE PLAN] Plik={Plik}; Dokument={Numer}; wynikTyp={WynikTyp}; dokumentId={DokumentId}; encjaId={EncjaId}; encjaTyp={EncjaTyp}; menedzer={Manager}; czyMaBiblioteke={CzyMaBiblioteke}; bibliotekaBlad={BibliotekaBlad}",
+                            _logger.LogDebug("[ZAŁĄCZNIK POWIĄZANIE PLAN] Plik={Plik}; Dokument={Numer}; wynikTyp={WynikTyp}; dokumentId={DokumentId}; encjaId={EncjaId}; encjaTyp={EncjaTyp}; menedzer={Manager}",
                                 zalacznik.FileName,
                                 nrSystemowy,
                                 wynikTypLog,
                                 dokumentIdLog,
                                 cel.EntityId,
                                 encjaTypLog,
-                                cel.ManagerKey,
-                                FormatNullableBool(cel.CanHaveLibrary),
-                                string.IsNullOrWhiteSpace(bibliotekaError) ? "brak" : bibliotekaError);
+                                cel.ManagerKey);
                         }
                         else
                         {
@@ -269,19 +244,17 @@ namespace NexoBridge.Services
                         continue;
                     }
 
-                    _logger.LogDebug("[ZAŁĄCZNIK ZAPIS START] Plik={Plik}; Dokument={Numer}; NIP={Nip}; nazwaSfery={Skan}; bytes={Bytes}; sha256={Sha256}; powiazania={Powiazania}",
+                    _logger.LogDebug("[ZAŁĄCZNIK ZAPIS START] Plik={Plik}; Dokument={Numer}; NIP={Nip}; viewerUrl={ViewerUrl}; powiazania={Powiazania}",
                         zalacznik.FileName,
                         nrSystemowy,
                         nipSystemowy,
-                        bezpiecznaNazwa,
-                        zalacznik.Content?.Length ?? 0,
-                        sha256,
+                        viewerUrl,
                         OpiszCelePowiazania(celeDoPowiazania));
 
                     operacja.TargetsCount = celeDoPowiazania.Count;
                     operacja.TargetsDescription = OpiszCelePowiazania(celeDoPowiazania);
 
-                    int zapisane = ZapiszZalacznikiOsobno(job, bibliotekaZalacznikow, tempPath, celeDoPowiazania, out string bledyZapisu, out List<AttachmentSaveResult> zapisaneCele);
+                    int zapisane = NapiszKomentarzeOsobno(job, komentarzeManager, htmlLink, plainTextFallback, celeDoPowiazania, out string bledyZapisu, out List<AttachmentSaveResult> zapisaneCele);
                     string wpisPodsumowania = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
                     operacja.FallbackSavedCount = zapisane;
                     operacja.FallbackTotalCount = celeDoPowiazania.Count;
@@ -292,8 +265,6 @@ namespace NexoBridge.Services
                     if (pierwszyZapis != null)
                     {
                         operacja.SavedAttachmentId = pierwszyZapis.AttachmentId;
-                        operacja.SavedAttachmentName = pierwszyZapis.AttachmentName;
-                        operacja.SavedAttachmentType = pierwszyZapis.AttachmentType;
                     }
 
                     if (zapisane > 0)
@@ -305,7 +276,7 @@ namespace NexoBridge.Services
                             raport.AttachmentStatus = zapisane == celeDoPowiazania.Count ? "attachedPendingVerification" : "attachedPartial";
                             if (zapisane != celeDoPowiazania.Count)
                             {
-                                ImportManifestService.DodajWarning(raport, $"Załącznik zapisano tylko na części zapisów wynikowych: {zapisane}/{celeDoPowiazania.Count}. Błędy: {bledyZapisu}");
+                                ImportManifestService.DodajWarning(raport, $"Link do podglądu zapisano tylko na części zapisów wynikowych: {zapisane}/{celeDoPowiazania.Count}. Błędy: {bledyZapisu}");
                             }
                         }
 
@@ -315,12 +286,7 @@ namespace NexoBridge.Services
                             raport,
                             operacja,
                             zapis.Target,
-                            bezpiecznaNazwa,
-                            rozszerzenie,
                             zapis.AttachmentId,
-                            zapis.AttachmentName,
-                            zapis.AttachmentType,
-                            sha256,
                             zapis.SavedByFreshSession)));
 
                         _logger.LogDebug("[ZAŁĄCZNIK ZAPIS OK] Plik={Plik}; Dokument={Numer}; NIP={Nip}; zapisane={Saved}/{Total}; tryb={Tryby}; bledy={Bledy}",
@@ -336,11 +302,11 @@ namespace NexoBridge.Services
                     {
                         niepodpieteZalaczniki.Add(wpisPodsumowania + $" | zapis=0/{celeDoPowiazania.Count} | {bledyZapisu}");
                         operacja.FinalStatus = "notAttached";
-                        operacja.FailureReason = $"Nie zapisano załącznika na żadnym zapisie wynikowym. Błędy={bledyZapisu}";
+                        operacja.FailureReason = $"Nie zapisano linku na żadnym zapisie wynikowym. Błędy={bledyZapisu}";
                         if (raport != null)
                         {
                             raport.AttachmentStatus = "notAttached";
-                            ImportManifestService.DodajWarning(raport, $"Nie udało się zapisać załącznika w Sferze: {bledyZapisu}");
+                            ImportManifestService.DodajWarning(raport, $"Nie udało się zapisać komentarza z linkiem w Sferze: {bledyZapisu}");
                         }
                         _logger.LogDebug("[ZAŁĄCZNIK ZAPIS NIEUDANY] Plik={Plik}; Dokument={Numer}; NIP={Nip}; Błędy={Bledy}",
                             zalacznik.FileName,
@@ -358,18 +324,12 @@ namespace NexoBridge.Services
                     if (raport != null)
                     {
                         raport.AttachmentStatus = "notAttached";
-                        ImportManifestService.DodajWarning(raport, $"Wyjątek podczas podpinania załącznika: {ex.GetBaseException().Message}");
+                        ImportManifestService.DodajWarning(raport, $"Wyjątek podczas zapisu linku do podglądu: {ex.GetBaseException().Message}");
                     }
-                    _logger.LogError(ex, "[ZAŁĄCZNIK BŁĄD] Wystąpił wyjątek podczas podpinania pliku '{Skan}' do dokumentu: {Numer}; plik={Plik}; NIP={Nip}",
-                        bezpiecznaNazwa,
+                    _logger.LogError(ex, "[ZAŁĄCZNIK BŁĄD] Wystąpił wyjątek podczas zapisu linku do podglądu dla dokumentu: {Numer}; plik={Plik}; NIP={Nip}",
                         nrSystemowy,
                         zalacznik.FileName,
                         nipSystemowy);
-                }
-                finally
-                {
-                    if (File.Exists(tempPath)) File.Delete(tempPath);
-                    if (Directory.Exists(tempDir)) Directory.Delete(tempDir);
                 }
             }
 
@@ -450,10 +410,11 @@ namespace NexoBridge.Services
             }
         }
 
-        private int ZapiszZalacznikiOsobno(
+        private int NapiszKomentarzeOsobno(
             ImportJob job,
-            object bibliotekaZalacznikow,
-            string tempPath,
+            object komentarzeManager,
+            string htmlLink,
+            string plainTextFallback,
             IEnumerable<AttachmentTargetRef> cele,
             out string bledy,
             out List<AttachmentSaveResult> zapisaneCele)
@@ -463,16 +424,17 @@ namespace NexoBridge.Services
             int saved = 0;
             SferaEngine freshEngine = null;
             Uchwyt freshSfera = null;
-            object freshBibliotekaZalacznikow = null;
+            object freshKomentarzeManager = null;
 
             try
             {
                 foreach (var cel in cele ?? Enumerable.Empty<AttachmentTargetRef>())
                 {
-                    if (ZapiszZalacznikDlaCelu(
-                        bibliotekaZalacznikow,
+                    if (NapiszKomentarzDlaCelu(
+                        komentarzeManager,
                         _sfera,
-                        tempPath,
+                        htmlLink,
+                        plainTextFallback,
                         cel,
                         "currentSession",
                         savedByFreshSession: false,
@@ -502,14 +464,15 @@ namespace NexoBridge.Services
                                 throw new InvalidOperationException("Fabryka świeżej sesji Sfery nie zwróciła uchwytu.");
                             }
 
-                            freshBibliotekaZalacznikow = freshSfera.PodajObiektTypu<InsERT.Moria.BibliotekaZalacznikow.IBibliotekaZalacznikow>();
-                            _logger.LogDebug("[ZAŁĄCZNIK FRESH SESSION] JobId={JobId}; Uruchomiono świeżą sesję Sfery do awaryjnego zapisu załączników.", job.JobId);
+                            freshKomentarzeManager = PobierzMenedzera("IKomentarzeNexo", freshSfera);
+                            _logger.LogDebug("[ZAŁĄCZNIK FRESH SESSION] JobId={JobId}; Uruchomiono świeżą sesję Sfery do awaryjnego zapisu linków w komentarzach.", job.JobId);
                         }
 
-                        if (ZapiszZalacznikDlaCelu(
-                            freshBibliotekaZalacznikow,
+                        if (NapiszKomentarzDlaCelu(
+                            freshKomentarzeManager,
                             freshSfera,
-                            tempPath,
+                            htmlLink,
+                            plainTextFallback,
                             cel,
                             "freshSessionFallback",
                             savedByFreshSession: true,
@@ -539,10 +502,13 @@ namespace NexoBridge.Services
             return saved;
         }
 
-        private bool ZapiszZalacznikDlaCelu(
-            object bibliotekaZalacznikow,
+        // internal: reużywane bezpośrednio przez BackfillService (retroaktywny backfill 2026) - ta sama,
+        // potwierdzona na żywo ścieżka zapisu linku w komentarzu, żeby nie duplikować logiki.
+        internal bool NapiszKomentarzDlaCelu(
+            object komentarzeManager,
             Uchwyt sfera,
-            string tempPath,
+            string htmlLink,
+            string plainTextFallback,
             AttachmentTargetRef cel,
             string savePath,
             bool savedByFreshSession,
@@ -553,13 +519,10 @@ namespace NexoBridge.Services
             zapisany = null;
             blad = null;
             string krok = "start";
-            dynamic zalacznikBO = null;
+            dynamic komentarzBO = null;
             AttachmentTargetRef zapisanyCel = null;
-            string bibliotekaError = null;
             bool zapisZwrocilTrue = false;
-            int? attachmentId = null;
-            string attachmentName = null;
-            string attachmentType = null;
+            int? komentarzId = null;
 
             try
             {
@@ -571,38 +534,36 @@ namespace NexoBridge.Services
                     return false;
                 }
 
-                krok = "SprawdzBiblioteke";
                 zapisanyCel = SkopiujCelZEncja(cel, encja);
-                zapisanyCel.CanHaveLibrary = CzyMaBiblioteke(bibliotekaZalacznikow, encja, out bibliotekaError);
-                zapisanyCel.LibraryCheckError = bibliotekaError;
 
                 // BO Sfery żyje do zamknięcia uchwytu. Ręczne Dispose potrafi zamknąć współdzielony ObjectContext.
                 krok = "UtworzBO";
-                zalacznikBO = ((dynamic)bibliotekaZalacznikow).Utworz();
+                komentarzBO = ((dynamic)komentarzeManager).Utworz();
 
-                _logger.LogDebug("[ZAŁĄCZNIK ZAPIS TARGET KROK] tryb={Tryb}; krok={Krok}; target={Target}; tempPath={TempPath}; bytes={Bytes}; czyMaBiblioteke={CzyMaBiblioteke}; bibliotekaBlad={BibliotekaBlad}",
+                _logger.LogDebug("[ZAŁĄCZNIK ZAPIS TARGET KROK] tryb={Tryb}; krok={Krok}; target={Target}",
                     savePath,
                     krok,
-                    OpiszCelPowiazania(zapisanyCel),
-                    tempPath,
-                    PobierzRozmiarPliku(tempPath),
-                    FormatNullableBool(zapisanyCel.CanHaveLibrary),
-                    string.IsNullOrWhiteSpace(bibliotekaError) ? "brak" : bibliotekaError);
+                    OpiszCelPowiazania(zapisanyCel));
 
-                krok = "Wczytaj";
-                zalacznikBO.Wczytaj(tempPath);
+                krok = "TrescIZserializowanaTresc";
+                object dane = PobierzDaneBO(komentarzBO);
+                if (!SferaReflectionHelpers.TrySetPropertyPath(dane, "Tresc", plainTextFallback))
+                {
+                    ((dynamic)dane).Tresc = plainTextFallback;
+                }
+                if (!SferaReflectionHelpers.TrySetPropertyPath(dane, "ZserializowanaTresc", htmlLink))
+                {
+                    ((dynamic)dane).ZserializowanaTresc = htmlLink;
+                }
 
-                krok = "Opis";
-                zalacznikBO.Dane.Opis = "Oryginał ze Scanye";
-
-                krok = "DodajPowiazanie";
-                zalacznikBO.DodajPowiazanie((dynamic)encja);
+                krok = "PowiazZObiektem";
+                komentarzBO.PowiazZObiektem((dynamic)encja);
 
                 krok = "Zapisz";
-                zapisZwrocilTrue = zalacznikBO.Zapisz();
+                zapisZwrocilTrue = komentarzBO.Zapisz();
                 if (!zapisZwrocilTrue)
                 {
-                    blad = $"krok={krok}; Zapisz=false; invalidData={WyciagnijBledySfery(zalacznikBO)}";
+                    blad = $"krok={krok}; Zapisz=false; invalidData={WyciagnijBledySfery(komentarzBO)}";
                     _logger.LogDebug("[ZAŁĄCZNIK ZAPIS TARGET FALSE] tryb={Tryb}; target={Target}; szczegoly={Szczegoly}",
                         savePath,
                         OpiszCelPowiazania(zapisanyCel),
@@ -611,36 +572,28 @@ namespace NexoBridge.Services
                 }
 
                 krok = "OdczytDanychPoZapisie";
-                object daneZalacznika = PobierzDaneBO(zalacznikBO);
-                attachmentId = PobierzInt(daneZalacznika, "Id");
-                attachmentName = PobierzString(daneZalacznika, "Nazwa");
-                attachmentType = PobierzString(daneZalacznika, "Typ");
+                object daneKomentarza = PobierzDaneBO(komentarzBO);
+                komentarzId = PobierzInt(daneKomentarza, "Id");
 
                 zapisany = new AttachmentSaveResult
                 {
                     Target = zapisanyCel,
-                    AttachmentId = attachmentId,
-                    AttachmentName = attachmentName,
-                    AttachmentType = attachmentType,
+                    AttachmentId = komentarzId,
                     SavePath = savePath,
                     SavedByFreshSession = savedByFreshSession
                 };
 
-                _logger.LogDebug("[ZAŁĄCZNIK ZAPIS TARGET OK] tryb={Tryb}; target={Target}; zalacznikId={ZalacznikId}; nazwa={Nazwa}; typ={Typ}; czyMaBiblioteke={CzyMaBiblioteke}; bibliotekaBlad={BibliotekaBlad}",
+                _logger.LogDebug("[ZAŁĄCZNIK ZAPIS TARGET OK] tryb={Tryb}; target={Target}; komentarzId={KomentarzId}",
                     savePath,
                     OpiszCelPowiazania(zapisanyCel),
-                    FormatNullableInt(attachmentId),
-                    attachmentName ?? "brak",
-                    attachmentType ?? "brak",
-                    FormatNullableBool(zapisanyCel.CanHaveLibrary),
-                    string.IsNullOrWhiteSpace(bibliotekaError) ? "brak" : bibliotekaError);
+                    FormatNullableInt(komentarzId));
 
                 return true;
             }
             catch (Exception ex)
             {
                 string komunikat = ex.GetBaseException().Message;
-                string invalidData = WyciagnijBledySfery(zalacznikBO);
+                string invalidData = WyciagnijBledySfery(komentarzBO);
                 blad = $"krok={krok}; zapisZwrocilTrue={zapisZwrocilTrue}; wyjątek={komunikat}; invalidData={invalidData}";
 
                 if (zapisZwrocilTrue)
@@ -648,9 +601,7 @@ namespace NexoBridge.Services
                     zapisany = new AttachmentSaveResult
                     {
                         Target = zapisanyCel ?? cel,
-                        AttachmentId = attachmentId,
-                        AttachmentName = attachmentName,
-                        AttachmentType = attachmentType,
+                        AttachmentId = komentarzId,
                         SavePath = savePath + ":postSaveException",
                         SavedByFreshSession = savedByFreshSession
                     };
@@ -664,7 +615,7 @@ namespace NexoBridge.Services
 
                 if (dozwolonyRetryPoDisposed && CzyObjectDisposed(ex))
                 {
-                    _logger.LogWarning(ex, "[ZAŁĄCZNIK RETRY] tryb={Tryb}; target={Target}; krok={Krok}; Biblioteka załączników zgłosiła zamknięty ObjectContext. Pobieram świeży manager z tej samej sesji Sfery i ponawiam zapis raz. baseException={BaseException}",
+                    _logger.LogWarning(ex, "[ZAŁĄCZNIK RETRY] tryb={Tryb}; target={Target}; krok={Krok}; Komentarze zgłosiły zamknięty ObjectContext. Pobieram świeży manager z tej samej sesji Sfery i ponawiam zapis raz. baseException={BaseException}",
                         savePath,
                         OpiszCelPowiazania(zapisanyCel ?? cel),
                         krok,
@@ -672,11 +623,12 @@ namespace NexoBridge.Services
 
                     try
                     {
-                        object swiezaBiblioteka = sfera.PodajObiektTypu<InsERT.Moria.BibliotekaZalacznikow.IBibliotekaZalacznikow>();
-                        return ZapiszZalacznikDlaCelu(
-                            swiezaBiblioteka,
+                        object swiezyManager = PobierzMenedzera("IKomentarzeNexo", sfera);
+                        return NapiszKomentarzDlaCelu(
+                            swiezyManager,
                             sfera,
-                            tempPath,
+                            htmlLink,
+                            plainTextFallback,
                             cel,
                             savePath,
                             savedByFreshSession,
@@ -751,9 +703,7 @@ namespace NexoBridge.Services
                 ResultType = cel.ResultType,
                 DocumentId = cel.DocumentId,
                 EntityId = PobierzInt(encja, "Id") ?? cel.EntityId ?? cel.DocumentId,
-                EntityType = encja?.GetType().FullName ?? cel.EntityType,
-                CanHaveLibrary = cel.CanHaveLibrary,
-                LibraryCheckError = cel.LibraryCheckError
+                EntityType = encja?.GetType().FullName ?? cel.EntityType
             };
         }
 
@@ -796,7 +746,7 @@ namespace NexoBridge.Services
                 }
 
                 var auditSfera = auditEngine.Sfera;
-                var bibliotekaZalacznikow = auditSfera.PodajObiektTypu<InsERT.Moria.BibliotekaZalacznikow.IBibliotekaZalacznikow>();
+                object komentarzeManager = PobierzMenedzera("IKomentarzeNexo", auditSfera);
                 var menedzerowie = new Dictionary<string, dynamic> {
                     { "KPiR", PobierzMenedzera("IZapisyWKPiR", auditSfera) },
                     { "Vat", PobierzMenedzera("IZapisyWEwidencjiVAT", auditSfera) },
@@ -835,25 +785,23 @@ namespace NexoBridge.Services
                         continue;
                     }
 
-                    bool? czyMaBiblioteke = CzyMaBiblioteke(bibliotekaZalacznikow, encja, out string bibliotekaBlad);
-                    var widoczneZalaczniki = PobierzZalaczniki(bibliotekaZalacznikow, encja, out string odczytBlad);
-                    var dopasowany = widoczneZalaczniki.FirstOrDefault(z => CzyZalacznikPasujeDoKandydata(z, kandydat));
+                    var widoczneKomentarze = PobierzKomentarze(komentarzeManager, encja, out string odczytBlad);
+                    var dopasowany = widoczneKomentarze.FirstOrDefault(k => CzyKomentarzPasujeDoKandydata(k, kandydat));
 
                     if (dopasowany != null)
                     {
                         kandydat.Verified = true;
                         kandydat.VerificationStatus = "verified";
-                        kandydat.VerificationDetails = $"Potwierdzono załącznik {dopasowany.DisplayName}.";
-                        _logger.LogDebug("[ZAŁĄCZNIK AUDYT OK] {Kandydat}; czyMaBiblioteke={CzyMaBiblioteke}; znaleziony={Znaleziony}; wszystkie={Wszystkie}",
+                        kandydat.VerificationDetails = $"Potwierdzono komentarz z linkiem {dopasowany.DisplayName}.";
+                        _logger.LogDebug("[ZAŁĄCZNIK AUDYT OK] {Kandydat}; znaleziony={Znaleziony}; wszystkie={Wszystkie}",
                             OpiszKandydataAudytu(kandydat),
-                            FormatNullableBool(czyMaBiblioteke),
                             dopasowany.DisplayName,
-                            OpiszDeskryptoryZalacznikow(widoczneZalaczniki));
+                            OpiszDeskryptoryZalacznikow(widoczneKomentarze));
                     }
                     else
                     {
                         kandydat.VerificationStatus = "notVisibleAfterSave";
-                        kandydat.VerificationDetails = $"Nie widać oczekiwanego załącznika po świeżym odczycie. czyMaBiblioteke={FormatNullableBool(czyMaBiblioteke)}, bibliotekaBlad={bibliotekaBlad ?? "brak"}, odczytBlad={odczytBlad ?? "brak"}, widoczne={OpiszDeskryptoryZalacznikow(widoczneZalaczniki)}.";
+                        kandydat.VerificationDetails = $"Nie widać oczekiwanego komentarza po świeżym odczycie. odczytBlad={odczytBlad ?? "brak"}, widoczne={OpiszDeskryptoryZalacznikow(widoczneKomentarze)}.";
                         _logger.LogDebug("[ZAŁĄCZNIK AUDYT BRAK WIDOCZNOŚCI] {Kandydat}; {Szczegoly}",
                             OpiszKandydataAudytu(kandydat),
                             kandydat.VerificationDetails);
@@ -945,22 +893,14 @@ namespace NexoBridge.Services
             DocumentProcessingReport raport,
             AttachmentOperationRecord operacja,
             AttachmentTargetRef cel,
-            string bezpiecznaNazwa,
-            string rozszerzenie,
-            int? zapisanyZalacznikId,
-            string zapisanaNazwa,
-            string zapisanyTyp,
-            string sha256,
+            int? zapisanyKomentarzId,
             bool savedByFallback)
         {
             return new AttachmentAuditCandidate
             {
                 JobId = job.JobId,
                 FileName = zalacznik.FileName,
-                SafeName = bezpiecznaNazwa,
-                Extension = rozszerzenie,
-                ContentLength = zalacznik.Content?.Length ?? 0,
-                Sha256 = sha256,
+                ViewerUrl = zalacznik.ViewerUrl,
                 Report = raport,
                 OperationRecord = operacja,
                 InvoiceNumber = raport?.InvoiceNumber,
@@ -971,9 +911,7 @@ namespace NexoBridge.Services
                 DocumentId = cel.DocumentId,
                 EntityId = cel.EntityId,
                 EntityType = cel.EntityType,
-                SavedAttachmentId = zapisanyZalacznikId,
-                SavedAttachmentName = zapisanaNazwa,
-                SavedAttachmentType = zapisanyTyp,
+                SavedAttachmentId = zapisanyKomentarzId,
                 SavedByFallback = savedByFallback
             };
         }
@@ -1019,7 +957,7 @@ namespace NexoBridge.Services
 
             var opisy = zalaczniki
                 .Take(200)
-                .Select(z => $"fileName={z.FileName}, documentNumber={z.DocumentNumber}, vendorNip={z.VendorNip}, bytes={z.Content?.Length ?? 0}")
+                .Select(z => $"fileName={z.FileName}, documentNumber={z.DocumentNumber}, vendorNip={z.VendorNip}, viewerUrl={z.ViewerUrl ?? "brak"}")
                 .ToList();
 
             return ListaDoLogu(opisy);
@@ -1053,7 +991,7 @@ namespace NexoBridge.Services
                 .Where(g => !string.IsNullOrWhiteSpace(g.Key.Trim('|')) && g.Count() > 1)
                 .Select(g => $"{g.Key}x{g.Count()}");
 
-            return $"count={list.Count}; bytes={list.Sum(a => (long)(a.Content?.Length ?? 0))}; emptyContent={list.Count(a => a.Content == null || a.Content.Length == 0)}; missingFileName={list.Count(a => string.IsNullOrWhiteSpace(a.FileName))}; missingDocumentNumber={list.Count(a => string.IsNullOrWhiteSpace(a.DocumentNumber))}; missingVendorNip={list.Count(a => string.IsNullOrWhiteSpace(a.VendorNip))}; duplicateFileNames={ListaDoLogu(duplicateFileNames)}; duplicateInvoiceKeys={ListaDoLogu(duplicateInvoiceKeys)}";
+            return $"count={list.Count}; missingViewerUrl={list.Count(a => string.IsNullOrWhiteSpace(a.ViewerUrl))}; missingFileName={list.Count(a => string.IsNullOrWhiteSpace(a.FileName))}; missingDocumentNumber={list.Count(a => string.IsNullOrWhiteSpace(a.DocumentNumber))}; missingVendorNip={list.Count(a => string.IsNullOrWhiteSpace(a.VendorNip))}; duplicateFileNames={ListaDoLogu(duplicateFileNames)}; duplicateInvoiceKeys={ListaDoLogu(duplicateInvoiceKeys)}";
         }
 
         private string OpiszStatystykeMetadanych(IEnumerable<InvoiceMetadata> metadane)
@@ -1356,10 +1294,10 @@ namespace NexoBridge.Services
                 $"manifest[invoice={op.ManifestInvoiceNumber}, nip={op.ManifestVendorNip}, pdf={op.ManifestPdfFileName}, ksef={op.KsefNumber}, ksefCode={op.KsefCode}]; " +
                 $"poczekalnia[nr={FormatNullableInt(op.WaitingRoomNr)}, id={op.WaitingRoomId}, numer={op.WaitingRoomNumber}, nip={op.WaitingRoomNip}, status={op.WaitingRoomStatus}]; " +
                 $"dopasowanie[match={op.MatchStatus}, attachmentBefore={op.AttachmentStatusBefore}, decree={op.DecreeStatus}]; " +
-                $"pdf[file={op.PdfFileName}, documentNumber={op.AttachmentDocumentNumber}, vendorNip={op.AttachmentVendorNip}, bytes={op.AttachmentBytes}, sha256={op.Sha256}, safeName={op.SafeAttachmentName}, ext={op.AttachmentExtension}, tempPath={op.TempPath}]; " +
+                $"pdf[file={op.PdfFileName}, documentNumber={op.AttachmentDocumentNumber}, vendorNip={op.AttachmentVendorNip}, viewerUrl={op.ViewerUrl}]; " +
                 $"wyniki[resultEntries={op.ResultEntriesCount}, entries={op.ResultEntriesDescription}, missingEntities={op.MissingEntityCount}]; " +
                 $"targety[count={op.TargetsCount}, list={op.TargetsDescription}]; " +
-                $"zapis[result={op.SaveResult}, attachmentId={FormatNullableInt(op.SavedAttachmentId)}, name={op.SavedAttachmentName}, type={op.SavedAttachmentType}, invalidData={op.InvalidData}, fallback={op.FallbackSavedCount}/{op.FallbackTotalCount}, fallbackErrors={op.FallbackErrors}]; " +
+                $"zapis[result={op.SaveResult}, komentarzId={FormatNullableInt(op.SavedAttachmentId)}, invalidData={op.InvalidData}, fallback={op.FallbackSavedCount}/{op.FallbackTotalCount}, fallbackErrors={op.FallbackErrors}]; " +
                 $"audyt[ok={op.AuditVerifiedCount}/{op.AuditTargetsCount}, failed={op.AuditFailedCount}, details={op.AuditDetails}]; " +
                 $"final[status={op.Report?.AttachmentStatus ?? op.FinalStatus}, reason={op.FailureReason}]";
         }
@@ -1409,120 +1347,97 @@ namespace NexoBridge.Services
         private string OpiszCelPowiazania(AttachmentTargetRef cel)
         {
             if (cel == null) return "brak";
-            return $"manager={cel.ManagerKey}, resultType={cel.ResultType}, documentId={FormatNullableInt(cel.DocumentId)}, entityId={FormatNullableInt(cel.EntityId)}, entityType={cel.EntityType}, czyMaBiblioteke={FormatNullableBool(cel.CanHaveLibrary)}";
+            return $"manager={cel.ManagerKey}, resultType={cel.ResultType}, documentId={FormatNullableInt(cel.DocumentId)}, entityId={FormatNullableInt(cel.EntityId)}, entityType={cel.EntityType}";
         }
 
         private string OpiszKandydataAudytu(AttachmentAuditCandidate kandydat)
         {
             if (kandydat == null) return "brak";
-            return $"plik={kandydat.FileName}, safeName={kandydat.SafeName}, zalacznikId={FormatNullableInt(kandydat.SavedAttachmentId)}, manager={kandydat.ManagerKey}, resultType={kandydat.ResultType}, documentId={FormatNullableInt(kandydat.DocumentId)}, entityId={FormatNullableInt(kandydat.EntityId)}, invoice={kandydat.InvoiceNumber}, nip={kandydat.VendorNip}, bytes={kandydat.ContentLength}, sha256={kandydat.Sha256}, fallback={kandydat.SavedByFallback}";
+            return $"plik={kandydat.FileName}, komentarzId={FormatNullableInt(kandydat.SavedAttachmentId)}, manager={kandydat.ManagerKey}, resultType={kandydat.ResultType}, documentId={FormatNullableInt(kandydat.DocumentId)}, entityId={FormatNullableInt(kandydat.EntityId)}, invoice={kandydat.InvoiceNumber}, nip={kandydat.VendorNip}, viewerUrl={kandydat.ViewerUrl ?? "brak"}, fallback={kandydat.SavedByFallback}";
         }
 
-        private bool? CzyMaBiblioteke(object bibliotekaZalacznikow, object encja, out string error)
-        {
-            error = null;
-            try
-            {
-                object result = InvokeBestMethod(bibliotekaZalacznikow, "CzyMaBiblioteke", encja);
-                return result == null ? null : Convert.ToBoolean(result);
-            }
-            catch (Exception ex)
-            {
-                error = ex.GetBaseException().Message;
-                return null;
-            }
-        }
+        // Nazwa metody odczytu komentarzy na IKomentarzeNexo nie została jeszcze potwierdzona na
+        // żywym Rachmistrzu (prototyp w NexoBridgeKonsola testował tylko zapis) - próbujemy kilku
+        // prawdopodobnych nazw po kolei, tak jak reszta kodu radzi sobie z niepewną powierzchnią API Sfery.
+        private static readonly string[] KandydaciMetodOdczytuKomentarzy = { "PodajKomentarze", "PobierzKomentarze", "Komentarze", "ListaKomentarzy" };
 
-        private List<AttachmentDescriptor> PobierzZalaczniki(object bibliotekaZalacznikow, object encja, out string error)
+        private List<AttachmentDescriptor> PobierzKomentarze(object komentarzeManager, object encja, out string error)
         {
             error = null;
             var wynik = new List<AttachmentDescriptor>();
-            try
+            if (komentarzeManager == null || encja == null)
             {
-                object result = InvokeBestMethod(bibliotekaZalacznikow, "PodajZalaczniki", encja);
-                if (result is not IEnumerable enumerable)
+                error = "brak menedżera komentarzy lub encji";
+                return wynik;
+            }
+
+            object result = null;
+            var bledyProby = new List<string>();
+            foreach (string nazwaMetody in KandydaciMetodOdczytuKomentarzy)
+            {
+                try
                 {
-                    return wynik;
+                    result = InvokeBestMethod(komentarzeManager, nazwaMetody, encja);
+                    if (result != null) break;
                 }
-
-                foreach (object item in enumerable)
+                catch (Exception ex)
                 {
-                    object dane = PobierzWlasciwosc(item, "Dane") ?? item;
-                    string nazwa = PobierzString(dane, "Nazwa");
-                    string typ = PobierzString(dane, "Typ");
-                    int? id = PobierzInt(dane, "Id") ?? PobierzInt(item, "Id");
-                    string opis = PobierzString(dane, "Opis");
-
-                    wynik.Add(new AttachmentDescriptor
-                    {
-                        Id = id,
-                        Name = nazwa,
-                        Type = typ,
-                        Description = opis,
-                        DisplayName = $"{(string.IsNullOrWhiteSpace(nazwa) ? "brak" : nazwa)}.{(string.IsNullOrWhiteSpace(typ) ? "brak" : typ)}#{FormatNullableInt(id)}"
-                    });
+                    bledyProby.Add($"{nazwaMetody}: {ex.GetBaseException().Message}");
                 }
             }
-            catch (Exception ex)
+
+            if (result is not IEnumerable enumerable)
             {
-                error = ex.GetBaseException().Message;
+                error = bledyProby.Count == 0 ? "brak metody odczytu komentarzy" : string.Join(" | ", bledyProby);
+                return wynik;
+            }
+
+            foreach (object item in enumerable)
+            {
+                object dane = PobierzWlasciwosc(item, "Dane") ?? item;
+                int? id = PobierzInt(dane, "Id") ?? PobierzInt(item, "Id");
+                string tresc = PobierzString(dane, "Tresc");
+                string zserializowanaTresc = PobierzString(dane, "ZserializowanaTresc");
+
+                wynik.Add(new AttachmentDescriptor
+                {
+                    Id = id,
+                    Tresc = tresc,
+                    ZserializowanaTresc = zserializowanaTresc,
+                    DisplayName = $"komentarz#{FormatNullableInt(id)}"
+                });
             }
 
             return wynik;
         }
 
-        private bool CzyZalacznikPasujeDoKandydata(AttachmentDescriptor zalacznik, AttachmentAuditCandidate kandydat)
+        private bool CzyKomentarzPasujeDoKandydata(AttachmentDescriptor komentarz, AttachmentAuditCandidate kandydat)
         {
-            if (zalacznik == null || kandydat == null)
+            if (komentarz == null || kandydat == null)
             {
                 return false;
             }
 
-            if (kandydat.SavedAttachmentId.HasValue && zalacznik.Id == kandydat.SavedAttachmentId)
+            if (kandydat.SavedAttachmentId.HasValue && komentarz.Id == kandydat.SavedAttachmentId)
             {
                 return true;
             }
 
-            var oczekiwaneNazwy = new HashSet<string>(
-                new[]
+            if (!string.IsNullOrWhiteSpace(kandydat.ViewerUrl))
+            {
+                if ((!string.IsNullOrWhiteSpace(komentarz.ZserializowanaTresc) && komentarz.ZserializowanaTresc.Contains(kandydat.ViewerUrl, StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrWhiteSpace(komentarz.Tresc) && komentarz.Tresc.Contains(kandydat.ViewerUrl, StringComparison.OrdinalIgnoreCase)))
                 {
-                    NormalizujNazweZalacznika(kandydat.SafeName),
-                    NormalizujNazweZalacznika(kandydat.SafeName + kandydat.Extension),
-                    NormalizujNazweZalacznika(kandydat.SavedAttachmentName),
-                    NormalizujNazweZalacznika(kandydat.FileName),
-                    NormalizujNazweZalacznika(Path.GetFileNameWithoutExtension(kandydat.FileName))
-                }.Where(x => !string.IsNullOrWhiteSpace(x)),
-                StringComparer.OrdinalIgnoreCase);
-
-            string nazwaWidoczna = NormalizujNazweZalacznika(zalacznik.Name);
-            if (!oczekiwaneNazwy.Contains(nazwaWidoczna))
-            {
-                return false;
+                    return true;
+                }
             }
 
-            string oczekiwanyTyp = NormalizujTypZalacznika(kandydat.SavedAttachmentType)
-                ?? NormalizujTypZalacznika(kandydat.Extension)
-                ?? NormalizujTypZalacznika(Path.GetExtension(kandydat.FileName));
-            string widocznyTyp = NormalizujTypZalacznika(zalacznik.Type);
-
-            return string.IsNullOrWhiteSpace(widocznyTyp)
-                || string.IsNullOrWhiteSpace(oczekiwanyTyp)
-                || string.Equals(widocznyTyp, oczekiwanyTyp, StringComparison.OrdinalIgnoreCase);
+            return false;
         }
 
-        private string OpiszDeskryptoryZalacznikow(IEnumerable<AttachmentDescriptor> zalaczniki)
+        private string OpiszDeskryptoryZalacznikow(IEnumerable<AttachmentDescriptor> komentarze)
         {
-            return ListaDoLogu((zalaczniki ?? Enumerable.Empty<AttachmentDescriptor>()).Select(z => z.DisplayName));
-        }
-
-        private string ObliczSha256(byte[] content)
-        {
-            if (content == null || content.Length == 0)
-            {
-                return "brak";
-            }
-
-            return Convert.ToHexString(SHA256.HashData(content));
+            return ListaDoLogu((komentarze ?? Enumerable.Empty<AttachmentDescriptor>()).Select(z => z.DisplayName));
         }
 
         private string FormatNullableBool(bool? value)
@@ -1533,23 +1448,6 @@ namespace NexoBridge.Services
         private string FormatNullableInt(int? value)
         {
             return value.HasValue ? value.Value.ToString() : "brak";
-        }
-
-        private string PobierzRozmiarPliku(string path)
-        {
-            try
-            {
-                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-                {
-                    return "brak";
-                }
-
-                return new FileInfo(path).Length.ToString();
-            }
-            catch
-            {
-                return "brak";
-            }
         }
 
         private object PobierzDaneBO(object businessObject)
@@ -1652,27 +1550,6 @@ namespace NexoBridge.Services
             }
 
             return parameterType.IsInstanceOfType(value);
-        }
-
-        private string NormalizujNazweZalacznika(string value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return "";
-            }
-
-            string fileName = Path.GetFileNameWithoutExtension(value.Trim());
-            return string.IsNullOrWhiteSpace(fileName) ? value.Trim() : fileName.Trim();
-        }
-
-        private string NormalizujTypZalacznika(string value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return null;
-            }
-
-            return value.Trim().TrimStart('.').ToLowerInvariant();
         }
 
         private object ZnajdzEncje(Dictionary<string, dynamic> menedzerowie, dynamic wynik, DokumentDoKsiegowania dokumentZrodlowy)
@@ -1881,7 +1758,7 @@ namespace NexoBridge.Services
             return null;
         }
 
-        private sealed class AttachmentTargetRef
+        internal sealed class AttachmentTargetRef
         {
             public object Entity { get; set; }
             public string ManagerKey { get; set; }
@@ -1889,16 +1766,12 @@ namespace NexoBridge.Services
             public int? DocumentId { get; set; }
             public int? EntityId { get; set; }
             public string EntityType { get; set; }
-            public bool? CanHaveLibrary { get; set; }
-            public string LibraryCheckError { get; set; }
         }
 
-        private sealed class AttachmentSaveResult
+        internal sealed class AttachmentSaveResult
         {
             public AttachmentTargetRef Target { get; set; }
             public int? AttachmentId { get; set; }
-            public string AttachmentName { get; set; }
-            public string AttachmentType { get; set; }
             public string SavePath { get; set; }
             public bool SavedByFreshSession { get; set; }
         }
@@ -1907,10 +1780,7 @@ namespace NexoBridge.Services
         {
             public string JobId { get; set; }
             public string FileName { get; set; }
-            public string SafeName { get; set; }
-            public string Extension { get; set; }
-            public int ContentLength { get; set; }
-            public string Sha256 { get; set; }
+            public string ViewerUrl { get; set; }
             public DocumentProcessingReport Report { get; set; }
             public AttachmentOperationRecord OperationRecord { get; set; }
             public string InvoiceNumber { get; set; }
@@ -1922,8 +1792,6 @@ namespace NexoBridge.Services
             public int? EntityId { get; set; }
             public string EntityType { get; set; }
             public int? SavedAttachmentId { get; set; }
-            public string SavedAttachmentName { get; set; }
-            public string SavedAttachmentType { get; set; }
             public bool SavedByFallback { get; set; }
             public bool Verified { get; set; }
             public string VerificationStatus { get; set; } = "pending";
@@ -1954,11 +1822,7 @@ namespace NexoBridge.Services
             public string PdfFileName { get; set; }
             public string AttachmentDocumentNumber { get; set; }
             public string AttachmentVendorNip { get; set; }
-            public int AttachmentBytes { get; set; }
-            public string Sha256 { get; set; }
-            public string SafeAttachmentName { get; set; }
-            public string AttachmentExtension { get; set; }
-            public string TempPath { get; set; }
+            public string ViewerUrl { get; set; }
             public int ResultEntriesCount { get; set; }
             public string ResultEntriesDescription { get; set; }
             public int MissingEntityCount { get; set; }
@@ -1966,8 +1830,6 @@ namespace NexoBridge.Services
             public string TargetsDescription { get; set; }
             public string SaveResult { get; set; }
             public int? SavedAttachmentId { get; set; }
-            public string SavedAttachmentName { get; set; }
-            public string SavedAttachmentType { get; set; }
             public string InvalidData { get; set; }
             public int FallbackSavedCount { get; set; }
             public int FallbackTotalCount { get; set; }
@@ -1984,9 +1846,8 @@ namespace NexoBridge.Services
         private sealed class AttachmentDescriptor
         {
             public int? Id { get; set; }
-            public string Name { get; set; }
-            public string Type { get; set; }
-            public string Description { get; set; }
+            public string Tresc { get; set; }
+            public string ZserializowanaTresc { get; set; }
             public string DisplayName { get; set; }
         }
     }

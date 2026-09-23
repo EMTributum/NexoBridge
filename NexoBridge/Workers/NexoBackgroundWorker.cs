@@ -51,6 +51,14 @@ namespace NexoBridge.Workers
                         JobProgressPlan.CalculateTotalUnits(job));
 
                     // Bezpieczne zamknięcie Sfery w bloku using! Licencja odblokuje się natychmiast po wykonaniu.
+                    // SferaSessionGate: bez tego dwie sesje logujące się w tym samym momencie z różnych
+                    // workerów (np. import faktury + enumeracja backfillu) potrafią zderzyć się wewnątrz
+                    // statycznego stanu SDK Sfery (MenedzerPolaczen.Polacz -> LicenceController) i rzucić
+                    // różne generyczne wyjątki (InvalidOperationException, IndexOutOfRangeException, "Brak
+                    // zalogowanego operatora") - patrz SferaSessionGate.cs. Pozostałe workery (BillingClients,
+                    // PayrollCounts, DuplicateScan, ...) już to robią; ten, najstarszy, dotąd nie trzymał
+                    // bramki wcale.
+                    using (await SferaSessionGate.AcquireAsync(stoppingToken))
                     using (var silnik = new SferaEngine())
                     {
                         var sferaProgress = progress.BeginSegment(JobProgressPlan.SferaStartupUnits);
@@ -84,6 +92,15 @@ namespace NexoBridge.Workers
                         var attService = new AttachmentService(
                             silnik.Sfera,
                             attLogger,
+                            // CELOWO bez SferaSessionGate: ta fabryka jest wołana z WNĘTRZA bloku `using`
+                            // powyżej, który już trzyma bramkę (SemaphoreSlim(1,1), niereentrantny) - druga
+                            // próba jej zajęcia tutaj zablokowałaby się na zawsze (bramka zwalnia się dopiero
+                            // po zamknięciu zewnętrznego `silnik`, a to nigdy nie nastąpi, bo czekamy właśnie
+                            // na tę fabrykę). Ryzyko kolizji jest tu mniejsze niż przy otwieraniu głównej sesji:
+                            // zewnętrzny `silnik` w tym momencie żyje, ale nic nim aktywnie nie woła, więc nie
+                            // toczy się jego własny Polacz() - kolizje obserwowaliśmy dotąd wyłącznie między
+                            // dwoma RÓWNOLEGŁYMI wywołaniami Polacz() (logowaniami), nie między żywą-ale-bezczynną
+                            // sesją a nową.
                             (auditJob, auditProgress) =>
                             {
                                 var auditEngine = new SferaEngine();

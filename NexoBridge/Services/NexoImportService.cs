@@ -308,7 +308,7 @@ namespace NexoBridge.Services
                         try
                         {
                             await attachmentsProgress.ReportAsync(5, "Podpinanie załączników PDF...");
-                            await _attachmentService.PodepnijZalacznikiAsync(job, rezultatDekretacji, zatwierdzoneDekretacji, finalReport.Documents, attachmentsProgress.ReportAsync);
+                            await _attachmentService.DodajLinkiKomentarzyAsync(job, rezultatDekretacji, zatwierdzoneDekretacji, finalReport.Documents, attachmentsProgress.ReportAsync);
                             await attachmentsProgress.CompleteAsync("Obsługa załączników PDF zakończona.");
                         }
                         catch (Exception ex)

@@ -14,4 +14,122 @@ NexoDLLs/
 *.user
 *.suo
 
-graphify-out/
+graphify-out/AT-UE z Biura...
+2026-09-21 16:09:41.923 +02:00 [INF] [RCP IMPORT WORKER] Gotowy do pracy. Czekam na zlecenia importu RCP...
+2026-09-21 16:09:41.924 +02:00 [INF] [WORKER] Gotowy do pracy. Czekam na zlecenia z API...
+2026-09-21 16:09:41.925 +02:00 [INF] Nastêpny polling RCP zaplanowany na "2026-10-01T06:00:00.0000000+02:00".
+2026-09-21 16:09:41.928 +02:00 [INF] [INVOICE CREATION WORKER] Gotowy do pracy. Czekam na zlecenia tworzenia faktur...
+2026-09-21 16:09:41.928 +02:00 [INF] [BILLING SNAPSHOT WORKER] Gotowy do pracy. Czekam na zlecenia odczytu konfiguracji billingowej...
+2026-09-21 16:09:41.929 +02:00 [INF] [BILLING CLIENTS WORKER] Gotowy do pracy. Czekam na zlecenia odczytu listy klientów do rozliczenia...
+2026-09-21 16:09:41.930 +02:00 [INF] [PAYROLL COUNTS WORKER] Gotowy do pracy. Czekam na zlecenia liczenia pozycji kadrowo-p³acowych...
+2026-09-21 16:09:41.932 +02:00 [INF] [SKAN DUPLIKATÓW WORKER] Gotowy do pracy. Czekam na zlecenia rocznego skanu duplikatów...
+2026-09-21 16:09:49.917 +02:00 [INF] Rozpoczynam liczenie pozycji kadrowo-p³acowych b0b92eee (Baza biura: Nexo_EMTRIBUTUM SP. Z O.O., Okres: 2026-08, Klientów z baz¹: 225)
+2026-09-21 16:09:49.917 +02:00 [INF] Zlecenie liczenia pozycji kadrowo-p³acowych b0b92eee dodane do kolejki (Baza biura: Nexo_EMTRIBUTUM SP. Z O.O., Okres: 2026-08, Klientów: 225)
+2026-09-21 16:10:08.345 +02:00 [WRN] Nie uda³o siê uruchomiæ osobnego procesu licz¹cego pozycje kadrowo-p³acowe dla klienta NIP=5782847485 (baza Nexo_PASZKIEWICZ IZABELA - ISPL).
+System.Text.Json.JsonException: ' ' is invalid within a number, immediately after a decimal point ('.'). Expected a digit ('0'-'9'). Path: $ | LineNumber: 0 | BytePositionInLine: 3.
+ ---> System.Text.Json.JsonReaderException: ' ' is invalid within a number, immediately after a decimal point ('.'). Expected a digit ('0'-'9'). LineNumber: 0 | BytePositionInLine: 3.
+   at System.Text.Json.ThrowHelper.ThrowJsonReaderException(Utf8JsonReader& json, ExceptionResource resource, Byte nextByte, ReadOnlySpan`1 bytes)
+   at System.Text.Json.Utf8JsonReader.ConsumeDecimalDigits(ReadOnlySpan`1& data, Int32& i)
+   at System.Text.Json.Utf8JsonReader.TryGetNumber(ReadOnlySpan`1 data, Int32& consumed)
+   at System.Text.Json.Utf8JsonReader.ReadFirstToken(Byte first)
+   at System.Text.Json.Utf8JsonReader.ReadSingleSegment()
+   at System.Text.Json.Utf8JsonReader.Read()
+   at System.Text.Json.Serialization.JsonConverter`1.ReadCore(Utf8JsonReader& reader, T& value, JsonSerializerOptions options, ReadStack& state)
+   --- End of inner exception stack trace ---
+   at System.Text.Json.ThrowHelper.ReThrowWithPath(ReadStack& state, JsonReaderException ex)
+   at System.Text.Json.Serialization.JsonConverter`1.ReadCore(Utf8JsonReader& reader, T& value, JsonSerializerOptions options, ReadStack& state)
+   at System.Text.Json.Serialization.Metadata.JsonTypeInfo`1.Deserialize(Utf8JsonReader& reader, ReadStack& state)
+   at System.Text.Json.JsonSerializer.ReadFromSpan[TValue](ReadOnlySpan`1 utf8Json, JsonTypeInfo`1 jsonTypeInfo, Nullable`1 actualByteCount)
+   at System.Text.Json.JsonSerializer.ReadFromSpan[TValue](ReadOnlySpan`1 json, JsonTypeInfo`1 jsonTypeInfo)
+   at System.Text.Json.JsonSerializer.Deserialize[TValue](String json, JsonSerializerOptions options)
+   at NexoBridge.Services.PayrollCountsService.PoliczDlaKlientaWProcesie(ClientPayrollSpec spec, String clientDatabaseName, PayrollCountsBatchJob job, DateTime periodStart, DateTime periodEnd, CancellationToken cancellationToken) in C:\Automatyzacja\NexoBridge\NexoBridge\Services\PayrollCountsService.cs:line 247
+2026-09-21 16:10:12.531 +02:00 [WRN] Nie uda³o siê uruchomiæ osobnego procesu licz¹cego pozycje kadrowo-p³acowe dla klienta NIP=5781995054 (baza Nexo_CHYBI_SKI_TOMASZ_R).
+System.Text.Json.JsonException: ' ' is invalid within a number, immediately after a decimal point ('.'). Expected a digit ('0'-'9'). Path: $ | LineNumber: 0 | BytePositionInLine: 3.
+ ---> System.Text.Json.JsonReaderException: ' ' is invalid within a number, immediately after a decimal point ('.'). Expected a digit ('0'-'9'). LineNumber: 0 | BytePositionInLine: 3.
+   at System.Text.Json.ThrowHelper.ThrowJsonReaderException(Utf8JsonReader& json, ExceptionResource resource, Byte nextByte, ReadOnlySpan`1 bytes)
+   at System.Text.Json.Utf8JsonReader.ConsumeDecimalDigits(ReadOnlySpan`1& data, Int32& i)
+   at System.Text.Json.Utf8JsonReader.TryGetNumber(ReadOnlySpan`1 data, Int32& consumed)
+   at System.Text.Json.Utf8JsonReader.ReadFirstToken(Byte first)
+   at System.Text.Json.Utf8JsonReader.ReadSingleSegment()
+   at System.Text.Json.Utf8JsonReader.Read()
+   at System.Text.Json.Serialization.JsonConverter`1.ReadCore(Utf8JsonReader& reader, T& value, JsonSerializerOptions options, ReadStack& state)
+   --- End of inner exception stack trace ---
+   at System.Text.Json.ThrowHelper.ReThrowWithPath(ReadStack& state, JsonReaderException ex)
+   at System.Text.Json.Serialization.JsonConverter`1.ReadCore(Utf8JsonReader& reader, T& value, JsonSerializerOptions options, ReadStack& state)
+   at System.Text.Json.Serialization.Metadata.JsonTypeInfo`1.Deserialize(Utf8JsonReader& reader, ReadStack& state)
+   at System.Text.Json.JsonSerializer.ReadFromSpan[TValue](ReadOnlySpan`1 utf8Json, JsonTypeInfo`1 jsonTypeInfo, Nullable`1 actualByteCount)
+   at System.Text.Json.JsonSerializer.ReadFromSpan[TValue](ReadOnlySpan`1 json, JsonTypeInfo`1 jsonTypeInfo)
+   at System.Text.Json.JsonSerializer.Deserialize[TValue](String json, JsonSerializerOptions options)
+   at NexoBridge.Services.PayrollCountsService.PoliczDlaKlientaWProcesie(ClientPayrollSpec spec, String clientDatabaseName, PayrollCountsBatchJob job, DateTime periodStart, DateTime periodEnd, CancellationToken cancellationToken) in C:\Automatyzacja\NexoBridge\NexoBridge\Services\PayrollCountsService.cs:line 247
+2026-09-21 16:10:23.486 +02:00 [WRN] Nie uda³o siê uruchomiæ osobnego procesu licz¹cego pozycje kadrowo-p³acowe dla klienta NIP=7412114828 (baza Nexo_BIO-AGRO PRODUKT SK).
+System.Text.Json.JsonException: ' ' is invalid within a number, immediately after a decimal point ('.'). Expected a digit ('0'-'9'). Path: $ | LineNumber: 0 | BytePositionInLine: 3.
+ ---> System.Text.Json.JsonReaderException: ' ' is invalid within a number, immediately after a decimal point ('.'). Expected a digit ('0'-'9'). LineNumber: 0 | BytePositionInLine: 3.
+   at System.Text.Json.ThrowHelper.ThrowJsonReaderException(Utf8JsonReader& json, ExceptionResource resource, Byte nextByte, ReadOnlySpan`1 bytes)
+   at System.Text.Json.Utf8JsonReader.ConsumeDecimalDigits(ReadOnlySpan`1& data, Int32& i)
+   at System.Text.Json.Utf8JsonReader.TryGetNumber(ReadOnlySpan`1 data, Int32& consumed)
+   at System.Text.Json.Utf8JsonReader.ReadFirstToken(Byte first)
+   at System.Text.Json.Utf8JsonReader.ReadSingleSegment()
+   at System.Text.Json.Utf8JsonReader.Read()
+   at System.Text.Json.Serialization.JsonConverter`1.ReadCore(Utf8JsonReader& reader, T& value, JsonSerializerOptions options, ReadStack& state)
+   --- End of inner exception stack trace ---
+   at System.Text.Json.ThrowHelper.ReThrowWithPath(ReadStack& state, JsonReaderException ex)
+   at System.Text.Json.Serialization.JsonConverter`1.ReadCore(Utf8JsonReader& reader, T& value, JsonSerializerOptions options, ReadStack& state)
+   at System.Text.Json.Serialization.Metadata.JsonTypeInfo`1.Deserialize(Utf8JsonReader& reader, ReadStack& state)
+   at System.Text.Json.JsonSerializer.ReadFromSpan[TValue](ReadOnlySpan`1 utf8Json, JsonTypeInfo`1 jsonTypeInfo, Nullable`1 actualByteCount)
+   at System.Text.Json.JsonSerializer.ReadFromSpan[TValue](ReadOnlySpan`1 json, JsonTypeInfo`1 jsonTypeInfo)
+   at System.Text.Json.JsonSerializer.Deserialize[TValue](String json, JsonSerializerOptions options)
+   at NexoBridge.Services.PayrollCountsService.PoliczDlaKlientaWProcesie(ClientPayrollSpec spec, String clientDatabaseName, PayrollCountsBatchJob job, DateTime periodStart, DateTime periodEnd, CancellationToken cancellationToken) in C:\Automatyzacja\NexoBridge\NexoBridge\Services\PayrollCountsService.cs:line 247
+2026-09-21 16:10:33.149 +02:00 [WRN] Nie uda³o siê uruchomiæ osobnego procesu licz¹cego pozycje kadrowo-p³acowe dla klienta NIP=5782556977 (baza Nexo_KS_POLONIA_PAS__K).
+System.Text.Json.JsonException: ' ' is invalid within a number, immediately after a decimal point ('.'). Expected a digit ('0'-'9'). Path: $ | LineNumber: 0 | BytePositionInLine: 3.
+ ---> System.Text.Json.JsonReaderException: ' ' is invalid within a number, immediately after a decimal point ('.'). Expected a digit ('0'-'9'). LineNumber: 0 | BytePositionInLine: 3.
+   at System.Text.Json.ThrowHelper.ThrowJsonReaderException(Utf8JsonReader& json, ExceptionResource resource, Byte nextByte, ReadOnlySpan`1 bytes)
+   at System.Text.Json.Utf8JsonReader.ConsumeDecimalDigits(ReadOnlySpan`1& data, Int32& i)
+   at System.Text.Json.Utf8JsonReader.TryGetNumber(ReadOnlySpan`1 data, Int32& consumed)
+   at System.Text.Json.Utf8JsonReader.ReadFirstToken(Byte first)
+   at System.Text.Json.Utf8JsonReader.ReadSingleSegment()
+   at System.Text.Json.Utf8JsonReader.Read()
+   at System.Text.Json.Serialization.JsonConverter`1.ReadCore(Utf8JsonReader& reader, T& value, JsonSerializerOptions options, ReadStack& state)
+   --- End of inner exception stack trace ---
+   at System.Text.Json.ThrowHelper.ReThrowWithPath(ReadStack& state, JsonReaderException ex)
+   at System.Text.Json.Serialization.JsonConverter`1.ReadCore(Utf8JsonReader& reader, T& value, JsonSerializerOptions options, ReadStack& state)
+   at System.Text.Json.Serialization.Metadata.JsonTypeInfo`1.Deserialize(Utf8JsonReader& reader, ReadStack& state)
+   at System.Text.Json.JsonSerializer.ReadFromSpan[TValue](ReadOnlySpan`1 utf8Json, JsonTypeInfo`1 jsonTypeInfo, Nullable`1 actualByteCount)
+   at System.Text.Json.JsonSerializer.ReadFromSpan[TValue](ReadOnlySpan`1 json, JsonTypeInfo`1 jsonTypeInfo)
+   at System.Text.Json.JsonSerializer.Deserialize[TValue](String json, JsonSerializerOptions options)
+   at NexoBridge.Services.PayrollCountsService.PoliczDlaKlientaWProcesie(ClientPayrollSpec spec, String clientDatabaseName, PayrollCountsBatchJob job, DateTime periodStart, DateTime periodEnd, CancellationToken cancellationToken) in C:\Automatyzacja\NexoBridge\NexoBridge\Services\PayrollCountsService.cs:line 247
+2026-09-21 16:10:43.847 +02:00 [WRN] Nie uda³o siê uruchomiæ osobnego procesu licz¹cego pozycje kadrowo-p³acowe dla klienta NIP=5783116080 (baza Nexo_LEKSO).
+System.Text.Json.JsonException: ' ' is invalid within a number, immediately after a decimal point ('.'). Expected a digit ('0'-'9'). Path: $ | LineNumber: 0 | BytePositionInLine: 3.
+ ---> System.Text.Json.JsonReaderException: ' ' is invalid within a number, immediately after a decimal point ('.'). Expected a digit ('0'-'9'). LineNumber: 0 | BytePositionInLine: 3.
+   at System.Text.Json.ThrowHelper.ThrowJsonReaderException(Utf8JsonReader& json, ExceptionResource resource, Byte nextByte, ReadOnlySpan`1 bytes)
+   at System.Text.Json.Utf8JsonReader.ConsumeDecimalDigits(ReadOnlySpan`1& data, Int32& i)
+   at System.Text.Json.Utf8JsonReader.TryGetNumber(ReadOnlySpan`1 data, Int32& consumed)
+   at System.Text.Json.Utf8JsonReader.ReadFirstToken(Byte first)
+   at System.Text.Json.Utf8JsonReader.ReadSingleSegment()
+   at System.Text.Json.Utf8JsonReader.Read()
+   at System.Text.Json.Serialization.JsonConverter`1.ReadCore(Utf8JsonReader& reader, T& value, JsonSerializerOptions options, ReadStack& state)
+   --- End of inner exception stack trace ---
+   at System.Text.Json.ThrowHelper.ReThrowWithPath(ReadStack& state, JsonReaderException ex)
+   at System.Text.Json.Serialization.JsonConverter`1.ReadCore(Utf8JsonReader& reader, T& value, JsonSerializerOptions options, ReadStack& state)
+   at System.Text.Json.Serialization.Metadata.JsonTypeInfo`1.Deserialize(Utf8JsonReader& reader, ReadStack& state)
+   at System.Text.Json.JsonSerializer.ReadFromSpan[TValue](ReadOnlySpan`1 utf8Json, JsonTypeInfo`1 jsonTypeInfo, Nullable`1 actualByteCount)
+   at System.Text.Json.JsonSerializer.ReadFromSpan[TValue](ReadOnlySpan`1 json, JsonTypeInfo`1 jsonTypeInfo)
+   at System.Text.Json.JsonSerializer.Deserialize[TValue](String json, JsonSerializerOptions options)
+   at NexoBridge.Services.PayrollCountsService.PoliczDlaKlientaWProcesie(ClientPayrollSpec spec, String clientDatabaseName, PayrollCountsBatchJob job, DateTime periodStart, DateTime periodEnd, CancellationToken cancellationToken) in C:\Automatyzacja\NexoBridge\NexoBridge\Services\PayrollCountsService.cs:line 247
+2026-09-21 16:10:54.517 +02:00 [WRN] Nie uda³o siê uruchomiæ osobnego procesu licz¹cego pozycje kadrowo-p³acowe dla klienta NIP=5833284515 (baza Nexo_LEKSO_SP__Z_O_O_).
+System.Text.Json.JsonException: ' ' is invalid within a number, immediately after a decimal point ('.'). Expected a digit ('0'-'9'). Path: $ | LineNumber: 0 | BytePositionInLine: 3.
+ ---> System.Text.Json.JsonReaderException: ' ' is invalid within a number, immediately after a decimal point ('.'). Expected a digit ('0'-'9'). LineNumber: 0 | BytePositionInLine: 3.
+   at System.Text.Json.ThrowHelper.ThrowJsonReaderException(Utf8JsonReader& json, ExceptionResource resource, Byte nextByte, ReadOnlySpan`1 bytes)
+   at System.Text.Json.Utf8JsonReader.ConsumeDecimalDigits(ReadOnlySpan`1& data, Int32& i)
+   at System.Text.Json.Utf8JsonReader.TryGetNumber(ReadOnlySpan`1 data, Int32& consumed)
+   at System.Text.Json.Utf8JsonReader.ReadFirstToken(Byte first)
+   at System.Text.Json.Utf8JsonReader.ReadSingleSegment()
+   at System.Text.Json.Utf8JsonReader.Read()
+   at System.Text.Json.Serialization.JsonConverter`1.ReadCore(Utf8JsonReader& reader, T& value, JsonSerializerOptions options, ReadStack& state)
+   --- End of inner exception stack trace ---
+   at System.Text.Json.ThrowHelper.ReThrowWithPath(ReadStack& state, JsonReaderException ex)
+   at System.Text.Json.Serialization.JsonConverter`1.ReadCore(Utf8JsonReader& reader, T& value, JsonSerializerOptions options, ReadStack& state)
+   at System.Text.Json.Serialization.Metadata.JsonTypeInfo`1.Deserialize(Utf8JsonReader& reader, ReadStack& state)
+   at System.Text.Json.JsonSerializer.ReadFromSpan[TValue](ReadOnlySpan`1 utf8Json, JsonTypeInfo`1 jsonTypeInfo, Nullable`1 actualByteCount)
+   at System.Text.Json.JsonSerializer.ReadFromSpan[TValue](ReadOnlySpan`1 json, JsonTypeInfo`1 jsonTypeInfo)
+   at System.Text.Json.JsonSerializer.Deserialize[TValue](String json, JsonSerializerOptions options)
+   at NexoBridge.Services.PayrollCountsService.PoliczDlaKlientaWProcesie(ClientPayrollSpec spec, String clientDatabaseName, PayrollCountsBatchJob job, DateTime periodStart, DateTime periodEnd, CancellationToken cancellationToken) in C:\Automatyzacja\NexoBridge\NexoBridge\Services\PayrollCountsService.cs:line 247

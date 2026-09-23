@@ -10,8 +10,13 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
+using System.Text.Json;
 using DotNetEnv;
+using InsERT.Moria.OperacjeZewnetrzne;
+using InsERT.Mox.Product;
 using NexoBridge.API;
+using NexoBridge.Infrastructure;
+using NexoBridge.Models;
 using NexoBridge.Services;
 using NexoBridge.Workers;
 using NexoBridge.Hubs;
@@ -28,8 +33,78 @@ namespace NexoBridge
         private const string LogLevelEnvName = "NEXO_LOG_LEVEL";
         private const string BuildMarker = "VAT_STATUS_AUDIT_2026_08_13_1225";
 
+        /// <summary>Znaczniki otaczające JSON zwracany przez "--payroll-client-worker". Sfera nigdy
+        /// nie była projektowana do pracy bez konsoli/UI - w praktyce coś wewnątrz jej własnego,
+        /// zamkniętego kodu potrafi dopisać do stdout dodatkowy tekst (obserwowane na produkcji:
+        /// JSON zwracany przez proces potomny nie parsował się, bo poprzedzał go jakiś obcy fragment).
+        /// Zamiast zakładać "cały stdout to czysty JSON", rodzic wycina TYLKO fragment między tymi
+        /// znacznikami - odporne na cokolwiek innego, co SDK dorzuci do stdout.</summary>
+        internal const string PayrollWorkerResultStartMarker = "###PAYROLL_WORKER_RESULT_START###";
+        internal const string PayrollWorkerResultEndMarker = "###PAYROLL_WORKER_RESULT_END###";
+
+        /// <summary>Te same znaczniki, ten sam powód (patrz komentarz nad Payroll*Marker powyżej),
+        /// współdzielone przez oba tryby procesu potomnego backfillu (enumeracja i zapis komentarzy) -
+        /// nigdy nie działają w tym samym procesie naraz, więc jedna para wystarcza.</summary>
+        internal const string BackfillWorkerResultStartMarker = "###BACKFILL_WORKER_RESULT_START###";
+        internal const string BackfillWorkerResultEndMarker = "###BACKFILL_WORKER_RESULT_END###";
+
         public static void Main(string[] args)
         {
+            // Tryb procesu potomnego dla POJEDYNCZEGO klienta w Payroll Counts - patrz
+            // RunPayrollClientWorker i uzasadnienie w PayrollCountsService.PoliczDlaKlientaWProcesie.
+            // Musi być SAMOTNĄ, pierwszą gałęzią w Main - żadnego Seriloga na konsolę (zaśmieciłby
+            // stdout, na którym oczekujemy WYŁĄCZNIE jednej linii JSON), żadnego Kestrela/SignalR.
+            //
+            // UWAGA: LoadEnvironment()/RegisterNexoRuntimeResolvers() MUSZĄ się wykonać TUTAJ, w Main,
+            // PRZED wywołaniem RunPayrollClientWorker() - a nie jako pierwsze linie WEWNĄTRZ tamtej
+            // metody. RunPayrollClientWorker odwołuje się do typów z assembly InsERT.Moria.* (SferaEngine,
+            // IFabrykaLicznikowObiektow...), więc .NET JIT-uje CAŁE jej ciało (czyli już próbuje
+            // rozwiązać te referencje) w momencie WEJŚCIA do metody - zanim wykona się choćby pierwsza
+            // linia jej kodu. Gdyby rejestracja resolverów była pierwszą linią WEWNĄTRZ tej metody,
+            // byłoby za późno: JIT rzuca FileNotFoundException, bo próbuje znaleźć np.
+            // "InsERT.Moria.API" zanim resolver, który wie jak je znaleźć w folderze NexoDLLs, w ogóle
+            // zdążył się zarejestrować. Potwierdzone empirycznie przy pierwszym teście tego trybu.
+            if (args.Length > 0 && string.Equals(args[0], "--payroll-client-worker", StringComparison.Ordinal))
+            {
+                LoadEnvironment();
+                RegisterNexoRuntimeResolvers();
+                Environment.Exit(RunPayrollClientWorker());
+                return;
+            }
+
+            // Tryb procesu potomnego dla POJEDYNCZEGO klienta w Raw Payroll Counts - patrz
+            // RunRawPayrollClientWorker i uzasadnienie w RawPayrollCountsService.PoliczDlaKlientaWProcesie.
+            // Ten sam powód, dla którego to MUSI być osobna, wczesna gałąź w Main (patrz komentarz nad
+            // gałęzią --payroll-client-worker powyżej - JIT rozwiązuje referencje InsERT.Moria.* przy
+            // wejściu do metody, więc LoadEnvironment/RegisterNexoRuntimeResolvers muszą wykonać się PRZED
+            // wywołaniem RunRawPayrollClientWorker(), nie jako pierwsze linie w jej wnętrzu).
+            if (args.Length > 0 && string.Equals(args[0], "--raw-payroll-client-worker", StringComparison.Ordinal))
+            {
+                LoadEnvironment();
+                RegisterNexoRuntimeResolvers();
+                Environment.Exit(RunRawPayrollClientWorker());
+                return;
+            }
+
+            // Tryb procesu potomnego dla POJEDYNCZEGO klienta w backfillu linków do podglądu faktur -
+            // patrz BackfillService (EnumerateOneClientInChildProcessAsync) i to samo uzasadnienie co
+            // przy --payroll-client-worker powyżej (JIT + świeży, nieskażony stan statyczny Sfery).
+            if (args.Length > 0 && string.Equals(args[0], "--backfill-enumerate-client-worker", StringComparison.Ordinal))
+            {
+                LoadEnvironment();
+                RegisterNexoRuntimeResolvers();
+                Environment.Exit(RunBackfillEnumerateClientWorker());
+                return;
+            }
+
+            if (args.Length > 0 && string.Equals(args[0], "--backfill-write-comments-worker", StringComparison.Ordinal))
+            {
+                LoadEnvironment();
+                RegisterNexoRuntimeResolvers();
+                Environment.Exit(RunBackfillWriteCommentsWorker());
+                return;
+            }
+
             LoadEnvironment();
             RegisterNexoRuntimeResolvers();
 
@@ -157,8 +232,16 @@ namespace NexoBridge
                 builder.Services.AddSingleton<InvoiceCreationResultStore>();
                 builder.Services.AddSingleton<BillingClientsJobQueue>();
                 builder.Services.AddSingleton<BillingClientsResultStore>();
+                builder.Services.AddSingleton<PayrollCountsJobQueue>();
+                builder.Services.AddSingleton<PayrollCountsResultStore>();
+                builder.Services.AddSingleton<RawPayrollCountsJobQueue>();
+                builder.Services.AddSingleton<RawPayrollCountsResultStore>();
                 builder.Services.AddSingleton<DuplicateScanJobQueue>();
                 builder.Services.AddSingleton<DuplicateScanResultStore>();
+                builder.Services.AddSingleton<BackfillEnumerateJobQueue>();
+                builder.Services.AddSingleton<BackfillEnumerateResultStore>();
+                builder.Services.AddSingleton<BackfillWriteCommentsJobQueue>();
+                builder.Services.AddSingleton<BackfillWriteCommentsResultStore>();
                 builder.Services.AddHttpClient<NexoBridgeErrorReporter>();
                 builder.Services.AddHttpClient<RcpSourceClient>();
                 builder.Services.AddHostedService<NexoBackgroundWorker>();
@@ -168,7 +251,11 @@ namespace NexoBridge
                 builder.Services.AddHostedService<BillingSnapshotBackgroundWorker>();
                 builder.Services.AddHostedService<InvoiceCreationBackgroundWorker>();
                 builder.Services.AddHostedService<BillingClientsBackgroundWorker>();
+                builder.Services.AddHostedService<PayrollCountsBackgroundWorker>();
+                builder.Services.AddHostedService<RawPayrollCountsBackgroundWorker>();
                 builder.Services.AddHostedService<DuplicateScanBackgroundWorker>();
+                builder.Services.AddHostedService<BackfillEnumerateBackgroundWorker>();
+                builder.Services.AddHostedService<BackfillWriteCommentsBackgroundWorker>();
 
                 var app = builder.Build();
 
@@ -206,7 +293,10 @@ namespace NexoBridge
                 app.MapRcpImportEndpoints();
                 app.MapLogEndpoints();
                 app.MapBillingEndpoints();
+                app.MapPayrollCountsEndpoints();
+                app.MapRawPayrollCountsEndpoints();
                 app.MapDuplicateScanEndpoints();
+                app.MapBackfillEndpoints();
 
                 Log.Information("NexoBridge nasłuchuje na porcie 5000...");
                 app.Run("http://0.0.0.0:5000");
@@ -219,6 +309,221 @@ namespace NexoBridge
             {
                 // Zapewnia zrzucenie ostatnich logów z pamięci do pliku przed zamknięciem
                 Log.CloseAndFlush();
+            }
+        }
+
+        /// <summary>
+        /// Liczy pozycje kadrowo-płacowe DOKŁADNIE JEDNEGO klienta, w kompletnie IZOLOWANYM procesie
+        /// systemowym - patrz pełne uzasadnienie w PayrollCountsService.PoliczDlaKlientaWProcesie.
+        /// Wejście: JSON (PayrollClientWorkerRequest) na stdin. Wyjście: JSON (PayrollClientWorkerResponse)
+        /// na stdout, otoczony PayrollWorkerResultStartMarker/EndMarker - rodzic wycina TYLKO ten
+        /// fragment (patrz uzasadnienie przy definicji znaczników), bo Sfera potrafi dopisać do stdout
+        /// coś od siebie. Diagnostyka poza kontraktem idzie na stderr.
+        /// </summary>
+        private static int RunPayrollClientWorker()
+        {
+            var response = new PayrollClientWorkerResponse { Status = "SUCCESS" };
+
+            try
+            {
+                string inputJson = Console.In.ReadToEnd();
+                var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                PayrollClientWorkerRequest request = JsonSerializer.Deserialize<PayrollClientWorkerRequest>(inputJson, jsonOptions);
+
+                try
+                {
+                    using (var silnik = new SferaEngine())
+                    {
+                        silnik.Uruchom(request.Username, request.Password, request.DatabaseName, ProductId.Gratyfikant);
+
+                        IFabrykaLicznikowObiektow counterFactory =
+                            SferaReflectionHelpers.GetRequiredService<IFabrykaLicznikowObiektow>(silnik.Sfera, DateTime.Today);
+
+                        foreach (PayrollClientWorkerLineSpec lineSpec in request.Lines)
+                        {
+                            try
+                            {
+                                var pendingSpec = new PendingPayrollLineSpec(
+                                    lineSpec.Label,
+                                    lineSpec.CounterGuid,
+                                    lineSpec.Tiers
+                                        .Select(t => new PayrollTierSpec(t.From, t.To, t.UnitNet, t.UnitGross, t.CollectiveNet, t.CollectiveGross))
+                                        .ToList());
+
+                                PayrollFeeLineDto line = PayrollLineSpecExtractor.ComputeLine(
+                                    pendingSpec, counterFactory, request.PeriodStart, request.PeriodEnd);
+                                if (line != null)
+                                {
+                                    response.Lines.Add(line);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.Error.WriteLine($"[payroll-client-worker] Błąd pozycji '{lineSpec.Label}': {ex.GetBaseException().Message}");
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    response.Status = "FAILED";
+                    response.Error = ex.GetBaseException().Message;
+                }
+
+                string outputJson = JsonSerializer.Serialize(response, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                Console.Out.Write(PayrollWorkerResultStartMarker);
+                Console.Out.Write(outputJson);
+                Console.Out.Write(PayrollWorkerResultEndMarker);
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[payroll-client-worker] Krytyczny błąd: {ex}");
+                return 1;
+            }
+        }
+
+        /// <summary>Analogiczne do RunPayrollClientWorker, ale liczy SUROWE rachunki do umów
+        /// pracowniczych i wypłaty bezpośrednio z bazy klienta (RawPayrollExtractor), BEZ pośrednictwa
+        /// licznika obiektów cennika - patrz RawPayrollCountsService i RawPayrollExtractor.</summary>
+        private static int RunRawPayrollClientWorker()
+        {
+            var response = new RawPayrollClientWorkerResponse { Status = "SUCCESS" };
+
+            try
+            {
+                string inputJson = Console.In.ReadToEnd();
+                var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                RawPayrollClientWorkerRequest request = JsonSerializer.Deserialize<RawPayrollClientWorkerRequest>(inputJson, jsonOptions);
+
+                try
+                {
+                    using (var silnik = new SferaEngine())
+                    {
+                        silnik.Uruchom(request.Username, request.Password, request.DatabaseName, ProductId.Gratyfikant);
+
+                        response.RachunekCount = RawPayrollExtractor.CountRachunkiDoUmowPracowniczych(silnik.Sfera, request.PeriodStart, request.PeriodEnd);
+                        response.WyplataCount = RawPayrollExtractor.CountWyplaty(silnik.Sfera, request.PeriodStart, request.PeriodEnd);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    response.Status = "FAILED";
+                    response.Error = ex.GetBaseException().Message;
+                }
+
+                string outputJson = JsonSerializer.Serialize(response, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                Console.Out.Write(PayrollWorkerResultStartMarker);
+                Console.Out.Write(outputJson);
+                Console.Out.Write(PayrollWorkerResultEndMarker);
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[raw-payroll-client-worker] Krytyczny błąd: {ex}");
+                return 1;
+            }
+        }
+
+        /// <summary>
+        /// Enumeruje/wyciąga załączniki DOKŁADNIE JEDNEGO klienta backfillu, w kompletnie IZOLOWANYM
+        /// procesie systemowym - patrz pełne uzasadnienie w PayrollCountsService (ten sam mechanizm,
+        /// ten sam powód: powtarzane logowania Sfery w jednym procesie psują jej stan statyczny nawet
+        /// przy pełnej serializacji). Wejście: JSON (BackfillEnumerateClientWorkerRequest) na stdin.
+        /// Wyjście: JSON (BackfillEnumerateClientWorkerResponse) na stdout, otoczony
+        /// BackfillWorkerResultStartMarker/EndMarker. Diagnostyka poza kontraktem idzie na stderr.
+        /// </summary>
+        private static int RunBackfillEnumerateClientWorker()
+        {
+            var response = new BackfillEnumerateClientWorkerResponse { Status = "SUCCESS" };
+
+            try
+            {
+                string inputJson = Console.In.ReadToEnd();
+                var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                BackfillEnumerateClientWorkerRequest request = JsonSerializer.Deserialize<BackfillEnumerateClientWorkerRequest>(inputJson, jsonOptions);
+
+                try
+                {
+                    using (var silnik = new SferaEngine())
+                    {
+                        silnik.Uruchom(request.Username, request.Password, request.DatabaseName);
+
+                        var loggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder => { });
+                        var service = new BackfillService(loggerFactory);
+                        var client = new BackfillClientRef
+                        {
+                            Nip = request.ClientNip,
+                            ClientName = request.ClientName,
+                            DatabaseName = request.DatabaseName
+                        };
+
+                        response.Rows = service.EnumerateOneClient(silnik.Sfera, client, request.Year);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    response.Status = "FAILED";
+                    response.Error = ex.GetBaseException().Message;
+                }
+
+                string outputJson = JsonSerializer.Serialize(response, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                Console.Out.Write(BackfillWorkerResultStartMarker);
+                Console.Out.Write(outputJson);
+                Console.Out.Write(BackfillWorkerResultEndMarker);
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[backfill-enumerate-client-worker] Krytyczny błąd: {ex}");
+                return 1;
+            }
+        }
+
+        /// <summary>Analogiczne do RunBackfillEnumerateClientWorker, ale dopisuje komentarze z linkiem
+        /// dla WSZYSTKICH wierszy JEDNEJ bazy (DatabaseName) w jednym, izolowanym procesie.</summary>
+        private static int RunBackfillWriteCommentsWorker()
+        {
+            var response = new BackfillWriteCommentsClientWorkerResponse { Status = "SUCCESS" };
+
+            try
+            {
+                string inputJson = Console.In.ReadToEnd();
+                var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                BackfillWriteCommentsClientWorkerRequest request = JsonSerializer.Deserialize<BackfillWriteCommentsClientWorkerRequest>(inputJson, jsonOptions);
+
+                try
+                {
+                    using (var silnik = new SferaEngine())
+                    {
+                        silnik.Uruchom(request.Username, request.Password, request.DatabaseName);
+
+                        var loggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder => { });
+                        var service = new BackfillService(loggerFactory);
+                        BackfillService.WriteCommentsResult result = service.WriteCommentsForDatabase(silnik.Sfera, request.Rows);
+
+                        response.Written = result.Written;
+                        response.SkippedAlreadyLinked = result.SkippedAlreadyLinked;
+                        response.Failed = result.Failed;
+                        response.Errors = result.Errors;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    response.Status = "FAILED";
+                    response.Error = ex.GetBaseException().Message;
+                }
+
+                string outputJson = JsonSerializer.Serialize(response, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                Console.Out.Write(BackfillWorkerResultStartMarker);
+                Console.Out.Write(outputJson);
+                Console.Out.Write(BackfillWorkerResultEndMarker);
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[backfill-write-comments-worker] Krytyczny błąd: {ex}");
+                return 1;
             }
         }
 
