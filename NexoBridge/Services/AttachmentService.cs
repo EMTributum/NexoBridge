@@ -18,6 +18,9 @@ namespace NexoBridge.Services
         private readonly Uchwyt _sfera;
         private readonly ILogger<AttachmentService> _logger;
         private readonly Func<ImportJob, Action<int, string>, SferaEngine> _freshSferaFactory;
+        private SferaEngine _sesjaZapasowa;
+        private object _sesjaZapasowaKomentarze;
+        private bool _sesjaZapasowaNiedostepna;
 
         public AttachmentService(
             Uchwyt sfera,
@@ -39,13 +42,30 @@ namespace NexoBridge.Services
             _logger.LogDebug("[ZAŁĄCZNIKI SERVICE] Uruchomiono usługę załączników dla zadania: {JobId}", job.JobId);
             if (rezultat == null || zatwierdzone == null || zatwierdzone.Count == 0) return;
 
+            try
+            {
+                await DodajLinkiKomentarzyWewnAsync(job, rezultat, zatwierdzone, manifest, raportujPostep);
+            }
+            finally
+            {
+                ZamknijSesjeZapasowa();
+            }
+        }
+
+        private async Task DodajLinkiKomentarzyWewnAsync(
+            ImportJob job,
+            object rezultat,
+            List<Tuple<DokumentDoKsiegowania, SchematImportu>> zatwierdzone,
+            List<DocumentProcessingReport> manifest,
+            Func<int, string, Task> raportujPostep)
+        {
             await raportujPostep(10, "Dopisywanie linków do podglądu faktur (bezpieczne dopasowanie)...");
             object komentarzeManager = PobierzMenedzera("IKomentarzeNexo");
 
+            // Rachmistrz nie ma dekretów (interfejs IDekrety nie istnieje w DLL-ach) - tylko KPiR, VAT i EP.
             var menedzerowie = new Dictionary<string, dynamic> {
                 { "KPiR", PobierzMenedzera("IZapisyWKPiR") },
                 { "Vat", PobierzMenedzera("IZapisyWEwidencjiVAT") },
-                { "Dekret", PobierzMenedzera("IDekrety") },
                 { "EP", PobierzMenedzera("IZapisyWEP") }
             };
 
@@ -93,8 +113,8 @@ namespace NexoBridge.Services
                     bool oczekiwanoPdf = CzyOczekiwanoPdf(raport);
                     operacja.FinalStatus = oczekiwanoPdf ? "notFound" : "notProvided";
                     operacja.FailureReason = oczekiwanoPdf
-                        ? "Nie znaleziono pasującego PDF w paczce."
-                        : "Dla dokumentu nie przekazano PDF w metadanych.";
+                        ? "Nie znaleziono pasującego załącznika (linku do podglądu) w paczce."
+                        : "Dla dokumentu nie przekazano załącznika w metadanych.";
                     operacja.MatchStatus = attachmentMatchStatus;
                     if (oczekiwanoPdf)
                     {
@@ -103,7 +123,7 @@ namespace NexoBridge.Services
                         if (raport != null)
                         {
                             raport.AttachmentStatus = "notFound";
-                            ImportManifestService.DodajWarning(raport, $"Nie znaleziono załącznika PDF dla dokumentu {nrSystemowy}. Dostępne pliki: {OpiszZalaczniki(job.Attachments)}");
+                            ImportManifestService.DodajWarning(raport, $"Nie znaleziono linku do podglądu faktury dla dokumentu {nrSystemowy} (brak pasującego załącznika w paczce: {job.Attachments?.Count ?? 0} szt.).");
                         }
                     }
                     _logger.LogDebug("[ZAŁĄCZNIK BRAK] Dokument={Numer}; NIP={Nip}; status={Status}; oczekiwanoPdf={OczekiwanoPdf}",
@@ -144,6 +164,21 @@ namespace NexoBridge.Services
                     attachmentMatchStatus);
 
                 string viewerUrl = zalacznik.ViewerUrl;
+                if (string.IsNullOrWhiteSpace(viewerUrl))
+                {
+                    // Bez URL-a komentarz byłby pustym linkiem (href="") - nic nie zapisujemy.
+                    niepodpieteZalaczniki.Add($"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy}) | brak viewerUrl");
+                    operacja.FinalStatus = "notProvided";
+                    operacja.FailureReason = "Dopasowany załącznik nie ma linku do podglądu (viewerUrl).";
+                    if (raport != null)
+                    {
+                        raport.AttachmentStatus = "notProvided";
+                        ImportManifestService.DodajWarning(raport, $"Załącznik {zalacznik.FileName} nie ma linku do podglądu - nie dopisano komentarza.");
+                    }
+                    _logger.LogDebug("[ZAŁĄCZNIK BEZ URL] Plik={Plik}; Dokument={Numer}; NIP={Nip}", zalacznik.FileName, nrSystemowy, nipSystemowy);
+                    continue;
+                }
+
                 string plainTextFallback = $"Podgląd faktury (oryginał): {viewerUrl}";
                 string htmlLink = $"<a href=\"{System.Net.WebUtility.HtmlEncode(viewerUrl)}\">Podgląd faktury (oryginał)</a>";
 
@@ -197,12 +232,41 @@ namespace NexoBridge.Services
                         OpiszWyniki(wynikowe));
 
                     var celeDoPowiazania = new List<AttachmentTargetRef>();
+                    var odrzuconeCele = new List<string>();
                     foreach (var wynik in wynikowe)
                     {
                         object wynikObj = wynik;
                         string typWyniku = wynikObj?.GetType().Name;
                         object dokumentId = PobierzDokumentId(wynik);
                         AttachmentTargetRef cel = ZnajdzCelPowiazania(menedzerowie, wynik, dok);
+                        if (cel?.Entity != null && CzyEncjaNalezyDoDokumentu(cel.Entity, cel.ManagerKey, dok) == false)
+                        {
+                            // Zapis wskazuje inny dokument do księgowania - link trafiłby na cudzą fakturę.
+                            odrzuconeCele.Add($"{cel.ManagerKey}/{FormatNullableInt(cel.EntityId)}");
+                            operacja.MissingEntityCount++;
+                            _logger.LogWarning("[ZAŁĄCZNIK CEL Z INNEGO DOKUMENTU] Plik={Plik}; Dokument={Numer}; wynikTyp={WynikTyp}; encjaId={EncjaId}; menedzer={Manager}. Pomijam ten zapis.",
+                                zalacznik.FileName,
+                                nrSystemowy,
+                                typWyniku ?? "brak",
+                                cel.EntityId,
+                                cel.ManagerKey);
+                            continue;
+                        }
+
+                        if (cel?.Entity != null && celeDoPowiazania.Any(c =>
+                                string.Equals(c.ManagerKey, cel.ManagerKey, StringComparison.OrdinalIgnoreCase) &&
+                                (c.EntityId ?? c.DocumentId) == (cel.EntityId ?? cel.DocumentId)))
+                        {
+                            // Dwa wyniki dekretacji wskazujące ten sam zapis (np. dwa wyniki VAT rozwiązane przez
+                            // relację z dokumentem źródłowym) - jeden komentarz wystarczy.
+                            _logger.LogDebug("[ZAŁĄCZNIK CEL POWTÓRZONY] Plik={Plik}; Dokument={Numer}; menedzer={Manager}; encjaId={EncjaId}",
+                                zalacznik.FileName,
+                                nrSystemowy,
+                                cel.ManagerKey,
+                                cel.EntityId);
+                            continue;
+                        }
+
                         if (cel?.Entity != null)
                         {
                             celeDoPowiazania.Add(cel);
@@ -227,6 +291,11 @@ namespace NexoBridge.Services
                                 typWyniku,
                                 dokumentId);
                         }
+                    }
+
+                    if (odrzuconeCele.Count > 0 && raport != null)
+                    {
+                        ImportManifestService.DodajWarning(raport, $"Pominięto zapisy wynikowe należące do innego dokumentu: {string.Join(", ", odrzuconeCele)}.");
                     }
 
                     if (celeDoPowiazania.Count == 0)
@@ -254,7 +323,7 @@ namespace NexoBridge.Services
                     operacja.TargetsCount = celeDoPowiazania.Count;
                     operacja.TargetsDescription = OpiszCelePowiazania(celeDoPowiazania);
 
-                    int zapisane = NapiszKomentarzeOsobno(job, komentarzeManager, htmlLink, plainTextFallback, celeDoPowiazania, out string bledyZapisu, out List<AttachmentSaveResult> zapisaneCele);
+                    int zapisane = NapiszKomentarzeOsobno(job, komentarzeManager, htmlLink, plainTextFallback, viewerUrl, celeDoPowiazania, out string bledyZapisu, out List<AttachmentSaveResult> zapisaneCele);
                     string wpisPodsumowania = $"{zalacznik.FileName} -> {nrSystemowy} ({nipSystemowy})";
                     operacja.FallbackSavedCount = zapisane;
                     operacja.FallbackTotalCount = celeDoPowiazania.Count;
@@ -415,6 +484,7 @@ namespace NexoBridge.Services
             object komentarzeManager,
             string htmlLink,
             string plainTextFallback,
+            string viewerUrl,
             IEnumerable<AttachmentTargetRef> cele,
             out string bledy,
             out List<AttachmentSaveResult> zapisaneCele)
@@ -422,11 +492,7 @@ namespace NexoBridge.Services
             var errors = new List<string>();
             zapisaneCele = new List<AttachmentSaveResult>();
             int saved = 0;
-            SferaEngine freshEngine = null;
-            Uchwyt freshSfera = null;
-            object freshKomentarzeManager = null;
 
-            try
             {
                 foreach (var cel in cele ?? Enumerable.Empty<AttachmentTargetRef>())
                 {
@@ -439,7 +505,8 @@ namespace NexoBridge.Services
                         "currentSession",
                         savedByFreshSession: false,
                         out AttachmentSaveResult zapisany,
-                        out string blad))
+                        out string blad,
+                        viewerUrl: viewerUrl))
                     {
                         saved++;
                         zapisaneCele.Add(zapisany);
@@ -448,36 +515,30 @@ namespace NexoBridge.Services
 
                     errors.Add($"{OpiszCelPowiazania(cel)}: currentSession={blad}");
 
-                    if (_freshSferaFactory == null)
+                    if (_freshSferaFactory == null || _sesjaZapasowaNiedostepna)
                     {
                         continue;
                     }
 
                     try
                     {
-                        if (freshEngine == null)
+                        if (!UpewnijSieZeSesjaZapasowaDziala(job, out string bladSesji))
                         {
-                            freshEngine = _freshSferaFactory(job, (_, __) => { });
-                            freshSfera = freshEngine?.Sfera;
-                            if (freshSfera == null)
-                            {
-                                throw new InvalidOperationException("Fabryka świeżej sesji Sfery nie zwróciła uchwytu.");
-                            }
-
-                            freshKomentarzeManager = PobierzMenedzera("IKomentarzeNexo", freshSfera);
-                            _logger.LogDebug("[ZAŁĄCZNIK FRESH SESSION] JobId={JobId}; Uruchomiono świeżą sesję Sfery do awaryjnego zapisu linków w komentarzach.", job.JobId);
+                            errors.Add($"{OpiszCelPowiazania(cel)}: freshSessionFallback={bladSesji}");
+                            continue;
                         }
 
                         if (NapiszKomentarzDlaCelu(
-                            freshKomentarzeManager,
-                            freshSfera,
+                            _sesjaZapasowaKomentarze,
+                            _sesjaZapasowa.Sfera,
                             htmlLink,
                             plainTextFallback,
                             cel,
                             "freshSessionFallback",
                             savedByFreshSession: true,
                             out AttachmentSaveResult zapisanyFresh,
-                            out string bladFresh))
+                            out string bladFresh,
+                            viewerUrl: viewerUrl))
                         {
                             saved++;
                             zapisaneCele.Add(zapisanyFresh);
@@ -493,13 +554,65 @@ namespace NexoBridge.Services
                     }
                 }
             }
-            finally
-            {
-                freshEngine?.Dispose();
-            }
 
             bledy = errors.Count == 0 ? "brak" : string.Join(" | ", errors);
             return saved;
+        }
+
+        // Jedna awaryjna sesja Sfery na całe zadanie (wcześniej osobne logowanie dla każdego dokumentu
+        // z nieudanym zapisem - repo dokumentuje, że wielokrotne Uruchom() w jednym procesie psuje statyczny
+        // stan Sfery). Otwierana leniwie przy pierwszej potrzebie, zamykana w DodajLinkiKomentarzyAsync.
+        // Jeśli nie da się jej otworzyć, kolejne dokumenty nie próbują ponownie.
+        private bool UpewnijSieZeSesjaZapasowaDziala(ImportJob job, out string blad)
+        {
+            blad = null;
+            if (_sesjaZapasowa?.Sfera != null && _sesjaZapasowaKomentarze != null)
+            {
+                return true;
+            }
+
+            try
+            {
+                _sesjaZapasowa = _freshSferaFactory(job, (_, __) => { });
+                if (_sesjaZapasowa?.Sfera == null)
+                {
+                    throw new InvalidOperationException("Fabryka świeżej sesji Sfery nie zwróciła uchwytu.");
+                }
+
+                _sesjaZapasowaKomentarze = PobierzMenedzera("IKomentarzeNexo", _sesjaZapasowa.Sfera);
+                if (_sesjaZapasowaKomentarze == null)
+                {
+                    throw new InvalidOperationException("Brak IKomentarzeNexo w sesji zapasowej.");
+                }
+
+                _logger.LogDebug("[ZAŁĄCZNIK FRESH SESSION] JobId={JobId}; Uruchomiono świeżą sesję Sfery do awaryjnego zapisu linków w komentarzach (jedna na zadanie).", job.JobId);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                blad = $"nie udało się otworzyć sesji zapasowej: {ex.GetBaseException().Message}";
+                _sesjaZapasowaNiedostepna = true;
+                ZamknijSesjeZapasowa();
+                _logger.LogWarning(ex, "[ZAŁĄCZNIK FRESH SESSION BŁĄD] JobId={JobId}; Sesja zapasowa niedostępna - kolejne dokumenty nie będą jej próbować.", job.JobId);
+                return false;
+            }
+        }
+
+        private void ZamknijSesjeZapasowa()
+        {
+            try
+            {
+                _sesjaZapasowa?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[ZAŁĄCZNIK FRESH SESSION] Błąd zamykania sesji zapasowej.");
+            }
+            finally
+            {
+                _sesjaZapasowa = null;
+                _sesjaZapasowaKomentarze = null;
+            }
         }
 
         // internal: reużywane bezpośrednio przez BackfillService (retroaktywny backfill 2026) - ta sama,
@@ -514,7 +627,8 @@ namespace NexoBridge.Services
             bool savedByFreshSession,
             out AttachmentSaveResult zapisany,
             out string blad,
-            bool dozwolonyRetryPoDisposed = true)
+            bool dozwolonyRetryPoDisposed = true,
+            string viewerUrl = null)
         {
             zapisany = null;
             blad = null;
@@ -535,6 +649,40 @@ namespace NexoBridge.Services
                 }
 
                 zapisanyCel = SkopiujCelZEncja(cel, encja);
+
+                // Idempotencja: jeśli zapis ma już aktywny komentarz z tym linkiem (ponowienie po zapisie, który
+                // jednak przeszedł, ten sam zapis jako dwa cele, ponowny import/backfill) - nie dopisujemy drugiego,
+                // tylko oddajemy istniejący do audytu. Błąd odczytu nie blokuje zapisu.
+                if (!string.IsNullOrWhiteSpace(viewerUrl))
+                {
+                    krok = "SprawdzIstniejacy";
+                    var istniejace = NexoCommentReader.ForEntity(komentarzeManager, encja, out string bladOdczytu);
+                    var istniejacy = istniejace.FirstOrDefault(k => !k.Deleted && k.ContainsUrl(viewerUrl));
+                    if (istniejacy != null)
+                    {
+                        zapisany = new AttachmentSaveResult
+                        {
+                            Target = zapisanyCel,
+                            AttachmentId = istniejacy.Id,
+                            SavePath = savePath + ":alreadyLinked",
+                            SavedByFreshSession = savedByFreshSession,
+                            AlreadyLinked = true
+                        };
+                        _logger.LogDebug("[ZAŁĄCZNIK JUŻ PODPIĘTY] tryb={Tryb}; target={Target}; komentarz={Komentarz}. Pomijam ponowny zapis.",
+                            savePath,
+                            OpiszCelPowiazania(zapisanyCel),
+                            istniejacy.Describe());
+                        return true;
+                    }
+
+                    if (bladOdczytu != null)
+                    {
+                        _logger.LogDebug("[ZAŁĄCZNIK SPRAWDZENIE ISTNIEJĄCYCH NIEUDANE] tryb={Tryb}; target={Target}; blad={Blad}. Zapisuję mimo to.",
+                            savePath,
+                            OpiszCelPowiazania(zapisanyCel),
+                            bladOdczytu);
+                    }
+                }
 
                 // BO Sfery żyje do zamknięcia uchwytu. Ręczne Dispose potrafi zamknąć współdzielony ObjectContext.
                 krok = "UtworzBO";
@@ -634,7 +782,8 @@ namespace NexoBridge.Services
                             savedByFreshSession,
                             out zapisany,
                             out blad,
-                            dozwolonyRetryPoDisposed: false);
+                            dozwolonyRetryPoDisposed: false,
+                            viewerUrl: viewerUrl);
                     }
                     catch (Exception retryEx)
                     {
@@ -677,21 +826,19 @@ namespace NexoBridge.Services
             return ZnajdzFizycznaEncje(manager, cel.EntityId ?? cel.DocumentId);
         }
 
+        // Bez rozróżniania wielkości liter: import używa kluczy "KPiR"/"Vat"/"EP", a backfill przekazuje
+        // EntityType z enumeracji ("KPiR"/"VAT"/"EP") - przy porównaniu wrażliwym na wielkość liter każdy
+        // wiersz VAT z backfillu kończył się błędem "Nie znaleziono świeżej encji".
+        private static readonly Dictionary<string, string> InterfejsyMenedzerow = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["KPiR"] = "IZapisyWKPiR",
+            ["Vat"] = "IZapisyWEwidencjiVAT",
+            ["EP"] = "IZapisyWEP"
+        };
+
         private string PobierzInterfejsMenedzera(string managerKey)
         {
-            switch (managerKey)
-            {
-                case "KPiR":
-                    return "IZapisyWKPiR";
-                case "Vat":
-                    return "IZapisyWEwidencjiVAT";
-                case "Dekret":
-                    return "IDekrety";
-                case "EP":
-                    return "IZapisyWEP";
-                default:
-                    return null;
-            }
+            return managerKey != null && InterfejsyMenedzerow.TryGetValue(managerKey, out string nazwa) ? nazwa : null;
         }
 
         private AttachmentTargetRef SkopiujCelZEncja(AttachmentTargetRef cel, object encja)
@@ -747,12 +894,14 @@ namespace NexoBridge.Services
 
                 var auditSfera = auditEngine.Sfera;
                 object komentarzeManager = PobierzMenedzera("IKomentarzeNexo", auditSfera);
-                var menedzerowie = new Dictionary<string, dynamic> {
-                    { "KPiR", PobierzMenedzera("IZapisyWKPiR", auditSfera) },
-                    { "Vat", PobierzMenedzera("IZapisyWEwidencjiVAT", auditSfera) },
-                    { "Dekret", PobierzMenedzera("IDekrety", auditSfera) },
-                    { "EP", PobierzMenedzera("IZapisyWEP", auditSfera) }
-                };
+                if (komentarzeManager == null)
+                {
+                    throw new InvalidOperationException("Brak menedżera IKomentarzeNexo w świeżej sesji Sfery.");
+                }
+
+                // Menedżery zapisów są potrzebne tylko kandydatom bez Id zapisanego komentarza (odczyt po encji),
+                // więc pobieramy je leniwie - każde PobierzMenedzera skanuje wszystkie załadowane assembly.
+                var menedzerowie = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
 
                 _logger.LogInformation("[ZAŁĄCZNIK AUDYT START] JobId={JobId}; kandydaci={Count}",
                     job.JobId,
@@ -764,46 +913,71 @@ namespace NexoBridge.Services
                 for (int i = 0; i < kandydaci.Count; i++)
                 {
                     var kandydat = kandydaci[i];
-                    if (!menedzerowie.TryGetValue(kandydat.ManagerKey ?? "", out dynamic manager) || manager == null)
-                    {
-                        kandydat.VerificationStatus = "managerNotAvailable";
-                        kandydat.VerificationDetails = $"Nie udało się pobrać menedżera {kandydat.ManagerKey}.";
-                        _logger.LogDebug("[ZAŁĄCZNIK AUDYT BRAK MENEDŻERA] {Kandydat}; szczegoly={Szczegoly}",
-                            OpiszKandydataAudytu(kandydat),
-                            kandydat.VerificationDetails);
-                        continue;
-                    }
+                    NexoCommentReader.CommentInfo komentarz;
+                    string odczytBlad;
+                    string sciezkaOdczytu;
 
-                    object encja = ZnajdzFizycznaEncje(manager, kandydat.EntityId ?? kandydat.DocumentId);
-                    if (encja == null)
+                    if (kandydat.SavedAttachmentId.HasValue)
                     {
-                        kandydat.VerificationStatus = "entityNotFound";
-                        kandydat.VerificationDetails = $"Nie znaleziono encji {kandydat.ManagerKey} po Id={FormatNullableInt(kandydat.EntityId ?? kandydat.DocumentId)}.";
-                        _logger.LogDebug("[ZAŁĄCZNIK AUDYT BRAK ENCJI] {Kandydat}; szczegoly={Szczegoly}",
-                            OpiszKandydataAudytu(kandydat),
-                            kandydat.VerificationDetails);
-                        continue;
-                    }
+                        // Główna ścieżka: komentarz po Id zwróconym przez Zapisz() - jedno zapytanie,
+                        // a nawigacja komentarza mówi, do którego zapisu faktycznie jest podpięty.
+                        sciezkaOdczytu = "FindById";
+                        komentarz = NexoCommentReader.FindById(komentarzeManager, kandydat.SavedAttachmentId.Value, out odczytBlad);
 
-                    var widoczneKomentarze = PobierzKomentarze(komentarzeManager, encja, out string odczytBlad);
-                    var dopasowany = widoczneKomentarze.FirstOrDefault(k => CzyKomentarzPasujeDoKandydata(k, kandydat));
-
-                    if (dopasowany != null)
-                    {
-                        kandydat.Verified = true;
-                        kandydat.VerificationStatus = "verified";
-                        kandydat.VerificationDetails = $"Potwierdzono komentarz z linkiem {dopasowany.DisplayName}.";
-                        _logger.LogDebug("[ZAŁĄCZNIK AUDYT OK] {Kandydat}; znaleziony={Znaleziony}; wszystkie={Wszystkie}",
-                            OpiszKandydataAudytu(kandydat),
-                            dopasowany.DisplayName,
-                            OpiszDeskryptoryZalacznikow(widoczneKomentarze));
+                        // Pusta nawigacja (nie sprawdzona na żywo dla VAT/EP) - potwierdzamy powiązanie
+                        // odwrotnie: czy ten komentarz jest wśród komentarzy oczekiwanego zapisu.
+                        if (komentarz != null && !komentarz.LinkedEntityId(kandydat.ManagerKey).HasValue)
+                        {
+                            sciezkaOdczytu = "FindById+Wszystkie(encja)";
+                            var komentarzeEncji = PobierzKomentarzeEncjiKandydata(kandydat, komentarzeManager, auditSfera, menedzerowie, out string bladEncji, out _);
+                            if (komentarzeEncji != null && komentarzeEncji.Any(k => k.Id == komentarz.Id))
+                            {
+                                komentarz.ConfirmedEntityId = kandydat.EntityId ?? kandydat.DocumentId;
+                            }
+                            else
+                            {
+                                odczytBlad = bladEncji;
+                            }
+                        }
                     }
                     else
                     {
-                        kandydat.VerificationStatus = "notVisibleAfterSave";
-                        kandydat.VerificationDetails = $"Nie widać oczekiwanego komentarza po świeżym odczycie. odczytBlad={odczytBlad ?? "brak"}, widoczne={OpiszDeskryptoryZalacznikow(widoczneKomentarze)}.";
-                        _logger.LogDebug("[ZAŁĄCZNIK AUDYT BRAK WIDOCZNOŚCI] {Kandydat}; {Szczegoly}",
+                        sciezkaOdczytu = "Wszystkie(encja)";
+                        var komentarzeEncji = PobierzKomentarzeEncjiKandydata(kandydat, komentarzeManager, auditSfera, menedzerowie, out odczytBlad, out string statusBledu);
+                        if (komentarzeEncji == null)
+                        {
+                            kandydat.VerificationStatus = statusBledu;
+                            kandydat.VerificationDetails = odczytBlad;
+                            _logger.LogDebug("[ZAŁĄCZNIK AUDYT BRAK ENCJI] {Kandydat}; status={Status}; szczegoly={Szczegoly}",
+                                OpiszKandydataAudytu(kandydat),
+                                statusBledu,
+                                odczytBlad);
+                            continue;
+                        }
+
+                        komentarz = komentarzeEncji.FirstOrDefault(k => !k.Deleted && k.ContainsUrl(kandydat.ViewerUrl));
+                        if (komentarz != null)
+                        {
+                            komentarz.ConfirmedEntityId = kandydat.EntityId ?? kandydat.DocumentId;
+                        }
+                        else if (odczytBlad == null)
+                        {
+                            odczytBlad = $"brak komentarza z linkiem wśród {komentarzeEncji.Count} komentarzy encji: {ListaDoLogu(komentarzeEncji.Select(k => k.Describe()))}";
+                        }
+                    }
+
+                    OcenKomentarzAudytu(kandydat, komentarz, odczytBlad, sciezkaOdczytu);
+                    if (kandydat.Verified)
+                    {
+                        _logger.LogDebug("[ZAŁĄCZNIK AUDYT OK] {Kandydat}; {Szczegoly}",
                             OpiszKandydataAudytu(kandydat),
+                            kandydat.VerificationDetails);
+                    }
+                    else
+                    {
+                        _logger.LogDebug("[ZAŁĄCZNIK AUDYT PROBLEM] {Kandydat}; status={Status}; {Szczegoly}",
+                            OpiszKandydataAudytu(kandydat),
+                            kandydat.VerificationStatus,
                             kandydat.VerificationDetails);
                     }
 
@@ -836,6 +1010,89 @@ namespace NexoBridge.Services
                 ListaDoLogu(kandydaci.Select(k => $"{OpiszKandydataAudytu(k)} => {k.VerificationStatus}: {k.VerificationDetails}")));
 
             await raportujPostep(95, "Weryfikacja załączników zakończona.");
+        }
+
+        // Komentarze zapisu docelowego kandydata (menedżer pobierany leniwie, encja przez FindById).
+        // Zwraca null, gdy nie da się dojść do encji - wtedy statusBledu mówi dlaczego.
+        private List<NexoCommentReader.CommentInfo> PobierzKomentarzeEncjiKandydata(
+            AttachmentAuditCandidate kandydat,
+            object komentarzeManager,
+            Uchwyt sfera,
+            Dictionary<string, object> menedzerowie,
+            out string blad,
+            out string statusBledu)
+        {
+            blad = null;
+            statusBledu = null;
+            if (!menedzerowie.TryGetValue(kandydat.ManagerKey ?? "", out object manager))
+            {
+                string nazwaInterfejsu = PobierzInterfejsMenedzera(kandydat.ManagerKey);
+                manager = nazwaInterfejsu == null ? null : PobierzMenedzera(nazwaInterfejsu, sfera);
+                menedzerowie[kandydat.ManagerKey ?? ""] = manager;
+            }
+
+            if (manager == null)
+            {
+                statusBledu = "managerNotAvailable";
+                blad = $"Nie udało się pobrać menedżera {kandydat.ManagerKey}.";
+                return null;
+            }
+
+            object encja = ZnajdzFizycznaEncje(manager, kandydat.EntityId ?? kandydat.DocumentId);
+            if (encja == null)
+            {
+                statusBledu = "entityNotFound";
+                blad = $"Nie znaleziono encji {kandydat.ManagerKey} po Id={FormatNullableInt(kandydat.EntityId ?? kandydat.DocumentId)}.";
+                return null;
+            }
+
+            return NexoCommentReader.ForEntity(komentarzeManager, encja, out blad);
+        }
+
+        // Komentarz jest potwierdzony, gdy istnieje w świeżej sesji, nie jest usunięty, jest podpięty do
+        // oczekiwanego zapisu (ZapisKsiegowy / BazowyZapisWEwidencjiVAT) i zawiera link do podglądu.
+        private void OcenKomentarzAudytu(AttachmentAuditCandidate kandydat, NexoCommentReader.CommentInfo komentarz, string odczytBlad, string sciezkaOdczytu)
+        {
+            if (komentarz == null)
+            {
+                kandydat.VerificationStatus = "notVisibleAfterSave";
+                kandydat.VerificationDetails = $"Nie widać komentarza po świeżym odczycie ({sciezkaOdczytu}): {odczytBlad ?? "brak szczegółów"}.";
+                return;
+            }
+
+            if (komentarz.Deleted)
+            {
+                kandydat.VerificationStatus = "notVisibleAfterSave";
+                kandydat.VerificationDetails = $"Komentarz {komentarz.Describe()} jest oznaczony jako usunięty.";
+                return;
+            }
+
+            int? oczekiwanaEncja = kandydat.EntityId ?? kandydat.DocumentId;
+            int? powiazanaEncja = komentarz.LinkedEntityId(kandydat.ManagerKey);
+            if (!powiazanaEncja.HasValue)
+            {
+                kandydat.VerificationStatus = "notVisibleAfterSave";
+                kandydat.VerificationDetails = $"Komentarz {komentarz.Describe()} nie wskazuje zapisu {kandydat.ManagerKey} (oczekiwano Id={FormatNullableInt(oczekiwanaEncja)}).";
+                return;
+            }
+
+            if (oczekiwanaEncja.HasValue && powiazanaEncja.Value != oczekiwanaEncja.Value)
+            {
+                kandydat.VerificationStatus = "attachedToWrongEntity";
+                kandydat.VerificationDetails = $"Komentarz {komentarz.Describe()} jest podpięty do zapisu Id={powiazanaEncja.Value}, a oczekiwano Id={oczekiwanaEncja.Value}.";
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(kandydat.ViewerUrl) && !komentarz.ContainsUrl(kandydat.ViewerUrl))
+            {
+                kandydat.VerificationStatus = "contentMismatch";
+                kandydat.VerificationDetails = $"Komentarz {komentarz.Describe()} nie zawiera oczekiwanego linku {kandydat.ViewerUrl}.";
+                return;
+            }
+
+            kandydat.Verified = true;
+            kandydat.VerificationStatus = "verified";
+            kandydat.VerificationDetails = $"Potwierdzono {komentarz.Describe()} ({sciezkaOdczytu}).";
         }
 
         private void OznaczAudytNieudany(List<AttachmentAuditCandidate> kandydaci, string status, string reason)
@@ -873,6 +1130,13 @@ namespace NexoBridge.Services
                 }
 
                 string problemy = ListaDoLogu(grupa.Where(k => !k.Verified).Select(k => $"{k.ManagerKey}/{FormatNullableInt(k.EntityId ?? k.DocumentId)}: {k.VerificationStatus} - {k.VerificationDetails}"));
+                if (grupa.Any(k => k.VerificationStatus == "attachedToWrongEntity"))
+                {
+                    raport.AttachmentStatus = "attachedToWrongEntity";
+                    ImportManifestService.DodajWarning(raport, $"Link do podglądu został podpięty do innego zapisu niż oczekiwany - sprawdź komentarze w Nexo. Problemy: {problemy}");
+                    continue;
+                }
+
                 if (grupa.Any(k => k.Verified))
                 {
                     raport.AttachmentStatus = "attachedPartial";
@@ -1282,6 +1546,7 @@ namespace NexoBridge.Services
                 status == "attachedPartial" ||
                 status == "attachedUnverified" ||
                 status == "notVisibleAfterSave" ||
+                status == "attachedToWrongEntity" ||
                 status == "verificationFailed";
         }
 
@@ -1334,7 +1599,7 @@ namespace NexoBridge.Services
         {
             if (ZawieraTyp(typWyniku, "VAT")) return "Vat";
             if (ZawieraTyp(typWyniku, "KPiR")) return "KPiR";
-            if (ZawieraTyp(typWyniku, "Dekret")) return "Dekret";
+            if (ZawieraTyp(typWyniku, "Dekret")) return "Nieznany"; // Rachmistrz nie ma dekretów (brak IDekrety)
             if (ZawieraTyp(typWyniku, "EP")) return "EP";
             return "Nieznany";
         }
@@ -1354,95 +1619,6 @@ namespace NexoBridge.Services
         {
             if (kandydat == null) return "brak";
             return $"plik={kandydat.FileName}, komentarzId={FormatNullableInt(kandydat.SavedAttachmentId)}, manager={kandydat.ManagerKey}, resultType={kandydat.ResultType}, documentId={FormatNullableInt(kandydat.DocumentId)}, entityId={FormatNullableInt(kandydat.EntityId)}, invoice={kandydat.InvoiceNumber}, nip={kandydat.VendorNip}, viewerUrl={kandydat.ViewerUrl ?? "brak"}, fallback={kandydat.SavedByFallback}";
-        }
-
-        // Nazwa metody odczytu komentarzy na IKomentarzeNexo nie została jeszcze potwierdzona na
-        // żywym Rachmistrzu (prototyp w NexoBridgeKonsola testował tylko zapis) - próbujemy kilku
-        // prawdopodobnych nazw po kolei, tak jak reszta kodu radzi sobie z niepewną powierzchnią API Sfery.
-        private static readonly string[] KandydaciMetodOdczytuKomentarzy = { "PodajKomentarze", "PobierzKomentarze", "Komentarze", "ListaKomentarzy" };
-
-        private List<AttachmentDescriptor> PobierzKomentarze(object komentarzeManager, object encja, out string error)
-        {
-            error = null;
-            var wynik = new List<AttachmentDescriptor>();
-            if (komentarzeManager == null || encja == null)
-            {
-                error = "brak menedżera komentarzy lub encji";
-                return wynik;
-            }
-
-            object result = null;
-            var bledyProby = new List<string>();
-            foreach (string nazwaMetody in KandydaciMetodOdczytuKomentarzy)
-            {
-                try
-                {
-                    result = InvokeBestMethod(komentarzeManager, nazwaMetody, encja);
-                    if (result != null) break;
-                }
-                catch (Exception ex)
-                {
-                    bledyProby.Add($"{nazwaMetody}: {ex.GetBaseException().Message}");
-                }
-            }
-
-            if (result is not IEnumerable enumerable)
-            {
-                error = bledyProby.Count == 0 ? "brak metody odczytu komentarzy" : string.Join(" | ", bledyProby);
-                return wynik;
-            }
-
-            foreach (object item in enumerable)
-            {
-                object dane = PobierzWlasciwosc(item, "Dane") ?? item;
-                int? id = PobierzInt(dane, "Id") ?? PobierzInt(item, "Id");
-                string tresc = PobierzString(dane, "Tresc");
-                string zserializowanaTresc = PobierzString(dane, "ZserializowanaTresc");
-
-                wynik.Add(new AttachmentDescriptor
-                {
-                    Id = id,
-                    Tresc = tresc,
-                    ZserializowanaTresc = zserializowanaTresc,
-                    DisplayName = $"komentarz#{FormatNullableInt(id)}"
-                });
-            }
-
-            return wynik;
-        }
-
-        private bool CzyKomentarzPasujeDoKandydata(AttachmentDescriptor komentarz, AttachmentAuditCandidate kandydat)
-        {
-            if (komentarz == null || kandydat == null)
-            {
-                return false;
-            }
-
-            if (kandydat.SavedAttachmentId.HasValue && komentarz.Id == kandydat.SavedAttachmentId)
-            {
-                return true;
-            }
-
-            if (!string.IsNullOrWhiteSpace(kandydat.ViewerUrl))
-            {
-                if ((!string.IsNullOrWhiteSpace(komentarz.ZserializowanaTresc) && komentarz.ZserializowanaTresc.Contains(kandydat.ViewerUrl, StringComparison.OrdinalIgnoreCase)) ||
-                    (!string.IsNullOrWhiteSpace(komentarz.Tresc) && komentarz.Tresc.Contains(kandydat.ViewerUrl, StringComparison.OrdinalIgnoreCase)))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private string OpiszDeskryptoryZalacznikow(IEnumerable<AttachmentDescriptor> komentarze)
-        {
-            return ListaDoLogu((komentarze ?? Enumerable.Empty<AttachmentDescriptor>()).Select(z => z.DisplayName));
-        }
-
-        private string FormatNullableBool(bool? value)
-        {
-            return value.HasValue ? value.Value.ToString() : "brak";
         }
 
         private string FormatNullableInt(int? value)
@@ -1563,7 +1739,7 @@ namespace NexoBridge.Services
             }
 
             if (ZawieraTyp(typ, "KPiR")) mgr = menedzerowie["KPiR"];
-            else if (ZawieraTyp(typ, "Dekret")) mgr = menedzerowie["Dekret"];
+            else if (ZawieraTyp(typ, "Dekret")) mgr = null; // Rachmistrz nie ma dekretów (brak IDekrety)
             else if (ZawieraTyp(typ, "EP")) mgr = menedzerowie["EP"];
 
             return ZnajdzFizycznaEncje(mgr, wynik.DokumentId);
@@ -1607,10 +1783,12 @@ namespace NexoBridge.Services
                 return null;
             }
 
+            // Zapis VAT wskazany relacją samego dokumentu źródłowego należy do niego z definicji, więc gdy
+            // wynik dekretacji nie podał Id, relacja wystarcza; gdy podał - musi się zgadzać.
             try
             {
                 object wynikowyVat = dokumentZrodlowy.WynikowyZapisWEwidencjiVAT;
-                if (wynikowyVat != null && CzyIdPasuje(wynikowyVat, wynikDokumentId))
+                if (wynikowyVat != null && (wynikDokumentId == null || CzyIdPasuje(wynikowyVat, wynikDokumentId)))
                 {
                     return wynikowyVat;
                 }
@@ -1620,7 +1798,7 @@ namespace NexoBridge.Services
             try
             {
                 object zrodlowyVat = dokumentZrodlowy.ZrodlowyZapisWEwidencjiVAT;
-                if (zrodlowyVat != null && CzyIdPasuje(zrodlowyVat, wynikDokumentId))
+                if (zrodlowyVat != null && (wynikDokumentId == null || CzyIdPasuje(zrodlowyVat, wynikDokumentId)))
                 {
                     return zrodlowyVat;
                 }
@@ -1637,26 +1815,17 @@ namespace NexoBridge.Services
                 return null;
             }
 
-            Guid dokumentZrodlowyId = dokumentZrodlowy.Id;
+            // Zapis po Id wyniku sprawdził już ZnajdzFizycznaEncje (FindById) w ZnajdzEncjeVat - tu zostaje
+            // relacja z dokumentem źródłowym, wykonywana zapytaniem zamiast pętli po całej ewidencji VAT.
             try
             {
-                foreach (var encja in ((System.Collections.IEnumerable)mgrVat.Dane.Wszystkie()).Cast<dynamic>())
-                {
-                    object encjaObj = (object)encja;
-                    if (CzyIdPasuje(encjaObj, wynikDokumentId))
-                    {
-                        return encjaObj;
-                    }
-
-                    if (CzyPowiazanyZDdk(encja, dokumentZrodlowyId))
-                    {
-                        return encjaObj;
-                    }
-                }
+                return SferaZapisyVatQueries.PowiazaneZDokumentem((object)mgrVat, dokumentZrodlowy.Id, limit: 1).FirstOrDefault();
             }
-            catch { }
-
-            return null;
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[ZAŁĄCZNIK VAT FALLBACK] Zapytanie o zapis VAT po relacji z dokumentem {Numer} nie powiodło się.", dokumentZrodlowy.NumerDokumentu);
+                return null;
+            }
         }
 
         private bool CzyPowiazanyZDdk(dynamic encja, Guid dokumentDoKsiegowaniaId)
@@ -1682,16 +1851,13 @@ namespace NexoBridge.Services
             return false;
         }
 
+        // Brak Id to "nie wiadomo", a nie "pasuje" - wcześniej id == null zwracało true i skan
+        // ZnajdzVatPoPowiazaniuZDdk oddawał pierwszy zapis VAT w ewidencji (link na cudzej fakturze).
         private bool CzyIdPasuje(object encja, object id)
         {
-            if (encja == null)
+            if (encja == null || id == null)
             {
                 return false;
-            }
-
-            if (id == null)
-            {
-                return true;
             }
 
             try
@@ -1705,6 +1871,37 @@ namespace NexoBridge.Services
             }
         }
 
+        // Czy zapis wynikowy pochodzi z danego dokumentu do księgowania: KPiR/EP przez DokumentDoKsiegowania,
+        // VAT przez Zrodlowy/DocelowyDokumentDoKsiegowania. true = należy, false = należy do innego
+        // dokumentu, null = relacja nieczytelna (np. zapis wprowadzony ręcznie) - wtedy nie blokujemy.
+        private bool? CzyEncjaNalezyDoDokumentu(object encja, string managerKey, DokumentDoKsiegowania dokument)
+        {
+            if (encja == null || dokument == null)
+            {
+                return null;
+            }
+
+            string[] sciezki = string.Equals(managerKey, "Vat", StringComparison.OrdinalIgnoreCase)
+                ? new[] { "ZrodlowyDokumentDoKsiegowania.Id", "DocelowyDokumentDoKsiegowania.Id" }
+                : new[] { "DokumentDoKsiegowania.Id" };
+
+            var powiazaneId = new List<Guid>();
+            foreach (string sciezka in sciezki)
+            {
+                if (SferaReflectionHelpers.TryReadPropertyPath(encja, sciezka, out object wartosc) && wartosc is Guid guid && guid != Guid.Empty)
+                {
+                    powiazaneId.Add(guid);
+                }
+            }
+
+            if (powiazaneId.Count == 0)
+            {
+                return null;
+            }
+
+            return powiazaneId.Contains(dokument.Id);
+        }
+
         private bool ZawieraTyp(string typ, string fragment)
         {
             return typ?.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0;
@@ -1714,6 +1911,16 @@ namespace NexoBridge.Services
         {
             if (mgr == null || id == null) return null;
             int targetId = Convert.ToInt32(id);
+            // Dane menedżerów zapisów (ZapisyWKPiRDane, ZapisyWEwidencjiVATDane, ZapisyWEPDane) mają FindById(int)
+            // - jedno zapytanie; Znajdz(int) nie istnieje, a Wszystkie() oznacza skan całej tabeli
+            // (potwierdzone w NexoBridgeKonsola --comment-read-test).
+            try
+            {
+                object dane = mgr.Dane;
+                object znaleziona = dane?.GetType().GetMethod("FindById", new[] { typeof(int) })?.Invoke(dane, new object[] { targetId });
+                if (znaleziona != null) return znaleziona;
+            }
+            catch { }
             try { return mgr.Dane.Znajdz(targetId); } catch { }
             try { return ((IEnumerable<dynamic>)mgr.Dane.Wszystkie()).FirstOrDefault(e => e.Id == targetId); } catch { }
             return null;
@@ -1731,7 +1938,13 @@ namespace NexoBridge.Services
             return null;
         }
 
+        // Wynik skanu assembly zapamiętywany w SferaInterfaceTypeCache (patrz tam).
         private Type ZnajdzTypInterfejsu(string nazwa)
+        {
+            return SferaInterfaceTypeCache.Get("AttachmentService", nazwa, ZnajdzTypInterfejsuBezCache);
+        }
+
+        private Type ZnajdzTypInterfejsuBezCache(string nazwa)
         {
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -1774,6 +1987,7 @@ namespace NexoBridge.Services
             public int? AttachmentId { get; set; }
             public string SavePath { get; set; }
             public bool SavedByFreshSession { get; set; }
+            public bool AlreadyLinked { get; set; }
         }
 
         private sealed class AttachmentAuditCandidate
@@ -1841,14 +2055,6 @@ namespace NexoBridge.Services
             public string FinalStatus { get; set; }
             public string FailureReason { get; set; }
             public DocumentProcessingReport Report { get; set; }
-        }
-
-        private sealed class AttachmentDescriptor
-        {
-            public int? Id { get; set; }
-            public string Tresc { get; set; }
-            public string ZserializowanaTresc { get; set; }
-            public string DisplayName { get; set; }
         }
     }
 }

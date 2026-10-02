@@ -298,7 +298,7 @@ namespace NexoBridge.Services
                 }
 
                 // =========================================================
-                // ETAP 6: ZAŁĄCZNIKI PDF (po podatkach, żeby nie wpływały na PIT/VAT)
+                // ETAP 6: LINKI DO PODGLĄDU FAKTUR W KOMENTARZACH (po podatkach, żeby nie wpływały na PIT/VAT)
                 // =========================================================
                 if (maImportFaktur)
                 {
@@ -307,25 +307,25 @@ namespace NexoBridge.Services
                     {
                         try
                         {
-                            await attachmentsProgress.ReportAsync(5, "Podpinanie załączników PDF...");
+                            await attachmentsProgress.ReportAsync(5, "Dopisywanie linków do podglądu faktur...");
                             await _attachmentService.DodajLinkiKomentarzyAsync(job, rezultatDekretacji, zatwierdzoneDekretacji, finalReport.Documents, attachmentsProgress.ReportAsync);
-                            await attachmentsProgress.CompleteAsync("Obsługa załączników PDF zakończona.");
+                            await attachmentsProgress.CompleteAsync("Linki do podglądu faktur dopisane.");
                         }
                         catch (Exception ex)
                         {
-                            string warning = $"Nie udało się zakończyć obsługi załączników PDF: {ex.GetBaseException().Message}";
+                            string warning = $"Nie udało się zakończyć dopisywania linków do podglądu faktur: {ex.GetBaseException().Message}";
                             OznaczBladEtapuZalacznikow(finalReport.Documents, warning);
                             _logger.LogError(ex, "[ZAŁĄCZNIKI ETAP BŁĄD] JobId={JobId}; baza={Database}; zadekretowane={Count}; {Warning}",
                                 job.JobId,
                                 job.DatabaseName,
                                 zatwierdzoneCount,
                                 warning);
-                            await attachmentsProgress.CompleteAsync("Obsługa załączników PDF zakończona z błędem.");
+                            await attachmentsProgress.CompleteAsync("Dopisywanie linków do podglądu faktur zakończone z błędem.");
                         }
                     }
                     else
                     {
-                        await attachmentsProgress.CompleteAsync("Brak zadekretowanych dokumentów. Pomijam załączniki PDF.");
+                        await attachmentsProgress.CompleteAsync("Brak zadekretowanych dokumentów. Pomijam linki do podglądu faktur.");
                     }
                 }
 
@@ -559,6 +559,7 @@ namespace NexoBridge.Services
                 d.AttachmentStatus == "attachedPendingVerification" ||
                 d.AttachmentStatus == "attachedUnverified" ||
                 d.AttachmentStatus == "notVisibleAfterSave" ||
+                d.AttachmentStatus == "attachedToWrongEntity" ||
                 d.AttachmentStatus == "verificationFailed" ||
                 d.DecreeStatus == "noSchema" ||
                 d.DecreeStatus == "schemaError" ||

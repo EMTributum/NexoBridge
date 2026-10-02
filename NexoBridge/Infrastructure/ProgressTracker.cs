@@ -10,6 +10,17 @@ namespace NexoBridge.Infrastructure
         private readonly int _progressLimit;
         private int _progress;
         private int _lastPercent;
+        private string _lastMessage;
+
+        public int LastPercent
+        {
+            get { lock (_sync) { return _lastPercent; } }
+        }
+
+        public string LastMessage
+        {
+            get { lock (_sync) { return _lastMessage; } }
+        }
 
         public ProgressTracker(Func<int, string, Task> sendAsync, int progressLimit)
         {
@@ -50,6 +61,10 @@ namespace NexoBridge.Infrastructure
                 percent = (int)Math.Round(_progress * 100m / _progressLimit, MidpointRounding.AwayFromZero);
                 percent = Math.Max(_lastPercent, Math.Min(100, percent));
                 _lastPercent = percent;
+                if (!string.IsNullOrEmpty(message))
+                {
+                    _lastMessage = message;
+                }
             }
 
             return _sendAsync(percent, message);

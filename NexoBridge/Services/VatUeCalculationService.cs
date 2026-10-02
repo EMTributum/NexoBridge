@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using NexoBridge.Infrastructure;
 
 namespace NexoBridge.Services
 {
@@ -403,7 +404,13 @@ namespace NexoBridge.Services
             return null;
         }
 
+        // Wynik skanu assembly zapamiętywany w SferaInterfaceTypeCache (patrz tam).
         private Type ZnajdzTypInterfejsu(string nazwa)
+        {
+            return SferaInterfaceTypeCache.Get("VatUeCalculationService", nazwa, ZnajdzTypInterfejsuBezCache);
+        }
+
+        private Type ZnajdzTypInterfejsuBezCache(string nazwa)
         {
             ZaladujZnaneAssemblySfery();
             foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())

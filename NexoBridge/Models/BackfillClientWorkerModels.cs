@@ -25,6 +25,7 @@ namespace NexoBridge.Models
         public string Status { get; set; } // SUCCESS / FAILED
         public string Error { get; set; }
         public List<BackfillManifestRow> Rows { get; set; } = new List<BackfillManifestRow>();
+        public int SkippedAlreadyLinked { get; set; }
     }
 
     /// <summary>Analogiczny kontrakt dla "--backfill-write-comments-worker" - dopisuje komentarze z

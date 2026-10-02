@@ -8,6 +8,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using NexoBridge.Infrastructure;
 
 namespace NexoBridge.Services
 {
@@ -335,7 +336,13 @@ namespace NexoBridge.Services
         }
 
         // --- PRYWATNE METODY REFLEKSYJNE ---
+        // Wynik skanu assembly zapamiętywany w SferaInterfaceTypeCache (patrz tam).
         private Type ZnajdzTypInterfejsu(string nazwa)
+        {
+            return SferaInterfaceTypeCache.Get("AmortizationService", nazwa, ZnajdzTypInterfejsuBezCache);
+        }
+
+        private Type ZnajdzTypInterfejsuBezCache(string nazwa)
         {
             var assemblies = AppDomain.CurrentDomain.GetAssemblies();
             Type bestMatch = null;

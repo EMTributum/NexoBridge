@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
@@ -8,6 +9,7 @@ using InsERT.Moria.Kasa;
 using InsERT.Moria.Klienci;
 using InsERT.Moria.ModelDanych;
 using InsERT.Moria.Sfera;
+using InsERT.Moria.Slowniki;
 using Microsoft.Extensions.Logging;
 using NexoBridge.Models;
 using PodmiotyDane = InsERT.Moria.Klienci.IPodmiotyDane;
@@ -92,9 +94,12 @@ namespace NexoBridge.Services
                 ConfigureInvoiceForKsef(invoice);
 
                 await raportujPostep(65, "Dodawanie pozycji faktury...");
+                Dictionary<int, StawkaVat> vatRatesByPercent = job.Lines.Any(line => line.VatRate.HasValue)
+                    ? LoadVatRatesByPercent()
+                    : new Dictionary<int, StawkaVat>();
                 foreach (InvoiceLineRequest line in job.Lines)
                 {
-                    AddInvoiceLine(invoice, line);
+                    AddInvoiceLine(invoice, line, vatRatesByPercent, report.Warnings);
                 }
 
                 PaymentConfiguration payment = ResolvePaymentConfigurationForMethod(job.PaymentMethod);
@@ -102,9 +107,15 @@ namespace NexoBridge.Services
 
                 await raportujPostep(85, "Zapis dokumentu...");
                 SaveBusinessObject(invoice);
+                report.InvoiceSaved = true;
 
-                report.InvoiceNumber = ReadStringCandidate(invoice, "Dane.NumerPelny", "Dane.Numer", "NumerPelny", "Numer");
+                // Pełny numer (np. "FS 12/10/2026") to Sygnatura.PelnaSygnatura na DokumentDS - zweryfikowane refleksją
+                // na ModelDanych; wcześniejsze "Dane.NumerPelny"/"Dane.Numer" nie istnieją i zwracały null.
+                report.InvoiceNumber = ReadStringCandidate(invoice, "Dane.NumerWewnetrzny.PelnaSygnatura", "Dane.NumerPelny", "Dane.Numer", "NumerPelny", "Numer");
                 report.InvoiceId = ReadIntCandidate(invoice, "Dane.Id", "Id");
+                // Kwota, jaką Subiekt faktycznie policzył na zapisanym dokumencie - wywołujący porównuje ją z kwotą
+                // pobraną z karty (bezpiecznik na każdą rozbieżność: stawka VAT, zaokrąglenia, brak brutto).
+                report.InvoiceGross = ReadDecimalCandidate(invoice, "Dane.Wartosc.BruttoPoRabacie", "Wartosc.BruttoPoRabacie");
                 report.Message = $"Utworzono fakturę {report.InvoiceNumber ?? report.InvoiceId?.ToString() ?? "(brak numeru)"} - zapisana lokalnie w nexo, bez wysyłki do KSeF.";
 
                 await raportujPostep(100, report.Message);
@@ -144,6 +155,13 @@ namespace NexoBridge.Services
             TrySetFirstPropertyPath(invoice, saleDate, "Dane.DataSprzedazy", "DataSprzedazy");
         }
 
+        /// <summary>
+        /// Ustawia wyłącznie FORMĘ faktury (KSeF), żeby dało się ją potem wysłać z Subiekta. Celowo NIE
+        /// wołamy invoice.ObslugaKSeF.WygenerujEFakture()/PrzekazDoWysylki() - faktura z billingu ma trafić
+        /// do KSeF dopiero po ręcznym sprawdzeniu w Subiekcie. Uwaga: Subiekt może sam wysłać dokument, jeśli
+        /// w Konfiguracji -> Parametry KSeF włączono generowanie e-Faktur "automatycznie przy zapisie" albo
+        /// automatyczną (cykliczną) wysyłkę - to jest ustawienie nexo, nie tego kodu.
+        /// </summary>
         private static void ConfigureInvoiceForKsef(IDokumentSprzedazy invoice)
         {
             if (!TrySetFirstPropertyPath(invoice, FormaFaktury.KSEF, "Dane.FormaFaktury", "FormaFaktury"))
@@ -228,7 +246,43 @@ namespace NexoBridge.Services
             return null;
         }
 
-        private static void AddInvoiceLine(IDokumentSprzedazy invoice, InvoiceLineRequest line)
+        /// <summary>
+        /// Polskie stawki VAT ze słownika nexo, kluczem procent (23 -> symbol "23", Stawka 0.23). Celowo pomija
+        /// "zw"/"nieop."/"npo" - mają Stawka=0 tak jak "0", więc po samej wartości byłyby nieodróżnialne;
+        /// procent 0 oznacza wyłącznie stawkę "0" (Stawka VAT 0%). Słownik zweryfikowany na bazie biura
+        /// (NexoBillingKonsola --dump-vat-rates): symbole unikalne, brak stawek innych państw.
+        /// </summary>
+        private Dictionary<int, StawkaVat> LoadVatRatesByPercent()
+        {
+            IStawkiVat manager = GetRequiredService<IStawkiVat>(_sfera, DateTime.Today);
+            IStawkiVatDane dane = GetManagerDataOrContainer<IStawkiVatDane>(_sfera, manager, "IStawkiVat.Dane");
+
+            var result = new Dictionary<int, StawkaVat>();
+            foreach (StawkaVat rate in dane.Wszystkie(Array.Empty<string>()).ToList())
+            {
+                if (rate.Zwolniona || rate.NiePodlegaOpodatkowaniu || rate.IsInRecycleBin)
+                {
+                    continue;
+                }
+
+                decimal percent = rate.Stawka * 100m;
+                if (percent != decimal.Truncate(percent)
+                    || !string.Equals(rate.Symbol?.Trim(), ((int)percent).ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                // Dwie stawki o tym samym procencie i symbolu - nie zgadujemy, pozycja dostanie ostrzeżenie.
+                if (!result.TryAdd((int)percent, rate))
+                {
+                    result[(int)percent] = null;
+                }
+            }
+
+            return result;
+        }
+
+        private static void AddInvoiceLine(IDokumentSprzedazy invoice, InvoiceLineRequest line, Dictionary<int, StawkaVat> vatRatesByPercent, List<string> warnings)
         {
             if (!line.NetAmount.HasValue && !line.GrossAmount.HasValue)
             {
@@ -239,6 +293,26 @@ namespace NexoBridge.Services
 
             TrySetFirstPropertyPath(position, line.Description, "Opis");
             TrySetFirstPropertyPath(position, true, "CenaRecznieEdytowana");
+
+            if (line.VatRate.HasValue && line.NetAmount.HasValue)
+            {
+                // Najpierw nawigacja (Sfera od razu przelicza cenę), a gdyby encja słownika była z innego kontekstu
+                // niż dokument i przypisanie się nie udało - klucz obcy. Skutek i tak weryfikuje porównanie
+                // InvoiceGross z kwotą pobraną z karty po stronie wywołującego.
+                if (vatRatesByPercent.TryGetValue(line.VatRate.Value, out StawkaVat rate)
+                    && rate != null
+                    && (TrySetFirstPropertyPath(position, rate, "StawkaVat") || TrySetFirstPropertyPath(position, rate.Id, "StawkaVatId")))
+                {
+                    // Stawka ustawiona jawnie - podajemy TYLKO netto, brutto liczy Subiekt z tej stawki. Ustawienie
+                    // obu cen nadpisywałoby jedną drugą przy domyślnej stawce Subiekta.
+                    TrySetFirstPropertyPath(position, line.NetAmount.Value, "Cena.NettoPrzedRabatem", "Cena.NettoPoRabacie");
+                    return;
+                }
+
+                warnings.Add(
+                    $"Pozycja `{line.Description}`: nie udało się ustawić stawki VAT {line.VatRate.Value}% ze słownika nexo - " +
+                    "użyto domyślnej stawki Subiekta, sprawdź fakturę.");
+            }
 
             if (line.NetAmount.HasValue)
             {
@@ -330,7 +404,7 @@ namespace NexoBridge.Services
 
             bool isCard = string.Equals(paymentMethod, "Card", StringComparison.OrdinalIgnoreCase);
             FormaPlatnosci form = isCard
-                ? FindPaymentFormByNameContains(allForms, "KARTA")
+                ? FindPaymentFormByNameContains(allForms, "KARTA", preferredExactName: "Karta płatnicza")
                 : FindPaymentFormByNameContains(allForms, "ODROCZONY") ?? FindPaymentFormByNameContains(allForms, "PRZELEW");
 
             if (form == null)
@@ -351,50 +425,46 @@ namespace NexoBridge.Services
                 Active: ReadBoolCandidate(form, "Aktywna"));
         }
 
+        /// <summary>
+        /// IFormyPlatnosciDane dziedziczy wyłącznie IDane&lt;FormaPlatnosci&gt;.Wszystkie(string[] razemZ)
+        /// (zweryfikowane refleksją na DLL-ach Sfery) - nie ma bezparametrowych WszystkieDostepne()/Wszystkie(),
+        /// których szukała wcześniejsza wersja przez refleksję na typie konkretnym. To kończyło się błędem
+        /// tworzenia KAŻDEJ faktury (także już po pobraniu płatności kartą).
+        /// </summary>
         private static List<FormaPlatnosci> LoadAllPaymentForms(IFormyPlatnosciDane dane)
         {
-            string[] candidateMethodNames = { "WszystkieDostepne", "Wszystkie" };
-            foreach (string methodName in candidateMethodNames)
+            try
             {
-                MethodInfo method = dane.GetType().GetMethod(
-                    methodName,
-                    BindingFlags.Instance | BindingFlags.Public,
-                    binder: null,
-                    types: Type.EmptyTypes,
-                    modifiers: null);
+                return dane.Wszystkie(new[] { "TypPlatnosci" }).ToList();
+            }
+            catch
+            {
+                return dane.Wszystkie(Array.Empty<string>()).ToList();
+            }
+        }
 
-                if (method == null)
-                {
-                    continue;
-                }
+        /// <summary>
+        /// Najpierw forma o nazwie dokładnie równej `preferredExactName` (np. "Karta płatnicza" - ta sama, którą
+        /// klienci mają ustawioną jako domyślną), potem dowolna zawierająca `nameFragment`. W obu krokach
+        /// aktywne formy mają pierwszeństwo przed nieaktywnymi.
+        /// </summary>
+        private static FormaPlatnosci FindPaymentFormByNameContains(List<FormaPlatnosci> allForms, string nameFragment, string preferredExactName = null)
+        {
+            List<FormaPlatnosci> activeFirst = allForms.OrderByDescending(form => form.Aktywna).ToList();
 
-                try
+            if (!string.IsNullOrWhiteSpace(preferredExactName))
+            {
+                string normalizedExact = NormalizeText(preferredExactName);
+                FormaPlatnosci exact = activeFirst.FirstOrDefault(form =>
+                    NormalizeText(ReadStringCandidate(form, "Nazwa") ?? string.Empty) == normalizedExact);
+                if (exact != null)
                 {
-                    object result = method.Invoke(dane, null);
-                    if (result is IEnumerable<FormaPlatnosci> typedResult)
-                    {
-                        return typedResult.ToList();
-                    }
-
-                    if (result is System.Collections.IEnumerable rawResult)
-                    {
-                        return rawResult.Cast<FormaPlatnosci>().ToList();
-                    }
-                }
-                catch
-                {
+                    return exact;
                 }
             }
 
-            throw new MissingMethodException(
-                "Nie udało się odnaleźć metody do pobrania wszystkich form płatności na IFormyPlatnosciDane (próbowano: "
-                + string.Join(", ", candidateMethodNames) + ").");
-        }
-
-        private static FormaPlatnosci FindPaymentFormByNameContains(List<FormaPlatnosci> allForms, string nameFragment)
-        {
             string normalizedFragment = NormalizeText(nameFragment);
-            return allForms.FirstOrDefault(form =>
+            return activeFirst.FirstOrDefault(form =>
                 NormalizeText(ReadStringCandidate(form, "Nazwa") ?? string.Empty).Contains(normalizedFragment));
         }
 

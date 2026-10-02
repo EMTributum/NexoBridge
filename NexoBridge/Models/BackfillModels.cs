@@ -26,6 +26,10 @@ namespace NexoBridge.Models
         public int RachmistrzId { get; set; }
         public string VendorNip { get; set; }
         public string NumerDokumentu { get; set; }
+        // Warianty numeru do wyszukania w Scanye, od najbardziej prawdopodobnego (Klasyfikator sprawdza je
+        // po kolei). Numer bywa zapisany jako czysty numer na zapisie albo jako etykieta "FZ 2 16446"
+        // na dokumencie do księgowania - zależy od tego, jak dokument trafił do Rachmistrza.
+        public List<string> NumerKandydaci { get; set; } = new List<string>();
         public int? RecordYear { get; set; }
         public bool HasPdf { get; set; }
         public string PdfBase64 { get; set; }
@@ -40,6 +44,8 @@ namespace NexoBridge.Models
         public List<string> ClientErrors { get; set; } = new List<string>();
         public int ClientsOk { get; set; }
         public int ClientsFailed { get; set; }
+        // Zapisy pominięte przy enumeracji, bo mają już komentarz z linkiem do podglądu.
+        public int SkippedAlreadyLinked { get; set; }
     }
 
     public class BackfillCommentRow

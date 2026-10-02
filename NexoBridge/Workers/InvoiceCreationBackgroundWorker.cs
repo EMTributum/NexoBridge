@@ -44,6 +44,7 @@ namespace NexoBridge.Workers
                 _workerLogger.LogInformation("Rozpoczynam tworzenie faktury: {JobId} (Baza: {Database}, NIP: {Nip}, Okres: {Year}-{Month})",
                     job.JobId, job.DatabaseName, job.Nip, job.ServiceYear, job.ServiceMonth);
 
+                InvoiceCreationReport serviceReport = null;
                 try
                 {
                     await WyslijPostep(job.JobId, 5, "Budzenie Sfery...");
@@ -55,19 +56,32 @@ namespace NexoBridge.Workers
 
                         var serviceLogger = _loggerFactory.CreateLogger<InvoiceCreationService>();
                         var service = new InvoiceCreationService(silnik.Sfera, serviceLogger);
-                        var report = await service.UtworzFaktureAsync(job, async (procent, wiadomosc) =>
+                        serviceReport = await service.UtworzFaktureAsync(job, async (procent, wiadomosc) =>
                         {
                             await WyslijPostep(job.JobId, procent, wiadomosc);
                         });
 
-                        _resultStore.Store(report);
-                        await WyslijRaport(job.JobId, report);
+                        _resultStore.Store(serviceReport);
+                        if (serviceReport.Status != "SUCCESS" && !serviceReport.InvoiceSaved)
+                        {
+                            _resultStore.ReleaseIdempotencyKey(job.IdempotencyKey, job.JobId);
+                        }
+
+                        await WyslijRaport(job.JobId, serviceReport);
                     }
                 }
                 catch (Exception ex)
                 {
                     string message = ex.GetBaseException().Message;
                     _workerLogger.LogError(ex, "[INVOICE CREATION WORKER BŁĄD] Wystąpił błąd podczas tworzenia faktury {JobId}", job.JobId);
+
+                    if (serviceReport != null)
+                    {
+                        // Serwis już skończył i jego wynik jest zapisany (np. padło dopiero powiadomienie SignalR) -
+                        // nie nadpisujemy go FAILED-em: przy zapisanej fakturze wywołujący uznałby, że jej nie ma,
+                        // i ponowienie wystawiłoby drugą.
+                        continue;
+                    }
 
                     var report = new InvoiceCreationReport
                     {
@@ -80,6 +94,8 @@ namespace NexoBridge.Workers
 
                     report.Warnings.Add(message);
                     _resultStore.Store(report);
+                    // Wyjątek zanim serwis zwrócił wynik (np. start Sfery) - dokument nie został zapisany.
+                    _resultStore.ReleaseIdempotencyKey(job.IdempotencyKey, job.JobId);
 
                     await WyslijPostep(job.JobId, 100, $"BŁĄD: {message}");
                     await WyslijRaport(job.JobId, report);

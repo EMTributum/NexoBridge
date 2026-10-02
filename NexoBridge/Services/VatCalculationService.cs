@@ -12,6 +12,7 @@ using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using NexoBridge.Infrastructure;
 
 namespace NexoBridge.Services
 {
@@ -1297,7 +1298,13 @@ namespace NexoBridge.Services
             catch { }
         }
 
+        // Wynik skanu assembly zapamiętywany w SferaInterfaceTypeCache (patrz tam).
         private Type ZnajdzTypInterfejsu(string nazwa)
+        {
+            return SferaInterfaceTypeCache.Get("VatCalculationService", nazwa, ZnajdzTypInterfejsuBezCache);
+        }
+
+        private Type ZnajdzTypInterfejsuBezCache(string nazwa)
         {
             ZaladujZnaneAssemblySfery();
 

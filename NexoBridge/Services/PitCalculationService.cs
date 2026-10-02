@@ -8,6 +8,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using NexoBridge.Infrastructure;
 
 namespace NexoBridge.Services
 {
@@ -979,7 +980,13 @@ namespace NexoBridge.Services
             return null;
         }
 
+        // Wynik skanu assembly zapamiętywany w SferaInterfaceTypeCache (patrz tam).
         private Type ZnajdzTypBezpiecznie(string nazwa)
+        {
+            return SferaInterfaceTypeCache.Get("PitCalculationService", nazwa, ZnajdzTypBezpiecznieBezCache);
+        }
+
+        private Type ZnajdzTypBezpiecznieBezCache(string nazwa)
         {
             var assemblies = AppDomain.CurrentDomain.GetAssemblies();
             foreach (var assembly in assemblies)

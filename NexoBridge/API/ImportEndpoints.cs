@@ -24,6 +24,12 @@ namespace NexoBridge.API
                     return Results.BadRequest("Brak danych logowania lub nazwy bazy.");
                 }
 
+                if (job.BillingMonth < 1 || job.BillingMonth > 12 || job.BillingYear < 2000 || job.BillingYear > 2100)
+                {
+                    Log.Warning("Odrzucono żądanie JSON - nieprawidłowy okres rozliczeniowy {Year}-{Month}.", job.BillingYear, job.BillingMonth);
+                    return Results.BadRequest("Nieprawidłowy okres rozliczeniowy (miesiąc 1-12, rok 2000-2100).");
+                }
+
                 if (job.ImportInvoices && (job.Files == null || job.Files.Count == 0))
                 {
                     Log.Warning("Odrzucono żądanie JSON - brak plików EPP przy aktywnej fladze importu.");

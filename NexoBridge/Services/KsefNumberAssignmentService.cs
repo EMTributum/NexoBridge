@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using NexoBridge.Infrastructure;
 
 namespace NexoBridge.Services
 {
@@ -22,6 +23,8 @@ namespace NexoBridge.Services
 
         private readonly Uchwyt _sfera;
         private readonly ILogger<KsefNumberAssignmentService> _logger;
+        // Ewidencja VAT do dopasowania po NIP + numerze (ścieżka zapasowa) - materializowana raz na zadanie.
+        private List<ZapisWEwidencjiVAT> _ewidencjaVatCache;
 
         public KsefNumberAssignmentService(Uchwyt sfera, ILogger<KsefNumberAssignmentService> logger)
         {
@@ -41,8 +44,8 @@ namespace NexoBridge.Services
             await raportujPostep(65, "Audyt numerów KSeF w Poczekalni...");
 
             var menedzerDokumentow = _sfera.PodajObiektTypu<IDokumentyDoKsiegowania>();
-            var oczekujace = ((IEnumerable)menedzerDokumentow.Dane.Wszystkie())
-                .Cast<DokumentDoKsiegowania>()
+            // Typowane zapytanie (filtr po stronie Sfery), jak w ImportManifestService.PobierzWszystkieOczekujace.
+            var oczekujace = menedzerDokumentow.Dane.Wszystkie()
                 .Where(d => (int)d.StatusKsiegowy == 2)
                 .ToList();
 
@@ -161,7 +164,6 @@ namespace NexoBridge.Services
             {
                 { "KPiR", PobierzMenedzera("IZapisyWKPiR") },
                 { "Vat", PobierzMenedzera("IZapisyWEwidencjiVAT") },
-                { "Dekret", PobierzMenedzera("IDekrety") },
                 { "EP", PobierzMenedzera("IZapisyWEP") }
             };
 
@@ -752,12 +754,26 @@ namespace NexoBridge.Services
             var kandydaci = new List<object>();
             try
             {
-                foreach (var encja in ((System.Collections.IEnumerable)((dynamic)mgrVat).Dane.Wszystkie()).Cast<dynamic>())
+                // Najpierw relacja z dokumentem źródłowym - zapytaniem po stronie Sfery. Dopiero gdy jej brak,
+                // dopasowanie po NIP + numerze, które wymaga przejrzenia ewidencji w pamięci; tę materializujemy
+                // raz na zadanie (wcześniej pełny skan ewidencji VAT dla każdego wiersza metadanych).
+                if (dokumentZrodlowy != null)
                 {
-                    object encjaObj = (object)encja;
-                    if (CzyVatPasujeDoDokumentuLubMetadanych(encjaObj, dokumentZrodlowy, meta))
+                    foreach (var zapis in SferaZapisyVatQueries.PowiazaneZDokumentem(mgrVat, dokumentZrodlowy.Id))
                     {
-                        DodajUnikalny(kandydaci, encjaObj);
+                        DodajUnikalny(kandydaci, zapis);
+                    }
+                }
+
+                if (kandydaci.Count == 0)
+                {
+                    _ewidencjaVatCache ??= SferaZapisyVatQueries.Wszystkie(mgrVat);
+                    foreach (var zapis in _ewidencjaVatCache)
+                    {
+                        if (CzyVatPasujeDoDokumentuLubMetadanych(zapis, dokumentZrodlowy, meta))
+                        {
+                            DodajUnikalny(kandydaci, zapis);
+                        }
                     }
                 }
             }
@@ -1082,7 +1098,7 @@ namespace NexoBridge.Services
 
             if (ZawieraTyp(typ, "KPiR")) mgr = menedzerowie["KPiR"];
             else if (ZawieraTyp(typ, "VAT")) mgr = menedzerowie["Vat"];
-            else if (ZawieraTyp(typ, "Dekret")) mgr = menedzerowie["Dekret"];
+            else if (ZawieraTyp(typ, "Dekret")) mgr = null; // Rachmistrz nie ma dekretów (brak IDekrety)
             else if (ZawieraTyp(typ, "EP")) mgr = menedzerowie["EP"];
 
             return ZnajdzFizycznaEncje(mgr, PobierzDokumentId(wynik));
@@ -1098,6 +1114,14 @@ namespace NexoBridge.Services
             if (mgr == null || id == null) return null;
             int targetId = Convert.ToInt32(id);
 
+            // FindById(int) - jedno zapytanie (Znajdz(int) na Dane zapisów nie istnieje, patrz AttachmentService).
+            try
+            {
+                object dane = mgr.Dane;
+                object znaleziona = dane?.GetType().GetMethod("FindById", new[] { typeof(int) })?.Invoke(dane, new object[] { targetId });
+                if (znaleziona != null) return znaleziona;
+            }
+            catch { }
             try { return mgr.Dane.Znajdz(targetId); } catch { }
             try { return ((IEnumerable<dynamic>)mgr.Dane.Wszystkie()).FirstOrDefault(e => e.Id == targetId); } catch { }
 
@@ -1113,7 +1137,13 @@ namespace NexoBridge.Services
             return metoda?.MakeGenericMethod(typSzukany).Invoke(_sfera, null);
         }
 
+        // Wynik skanu assembly zapamiętywany w SferaInterfaceTypeCache (patrz tam).
         private Type ZnajdzTypInterfejsu(string nazwa)
+        {
+            return SferaInterfaceTypeCache.Get("KsefNumberAssignmentService", nazwa, ZnajdzTypInterfejsuBezCache);
+        }
+
+        private Type ZnajdzTypInterfejsuBezCache(string nazwa)
         {
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {

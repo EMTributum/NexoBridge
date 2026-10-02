@@ -9,6 +9,8 @@ namespace NexoBridge.Services
 {
     public static class InvoiceDocumentMatcher
     {
+        private static readonly Regex RachmistrzLabelPrefix = new Regex(@"^(?:\p{L}{1,4}\s+){1,2}\d+\s+", RegexOptions.CultureInvariant);
+
         private static readonly HashSet<string> CommonTrailingMarkers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "fv", "fvs", "fa", "fs", "faktura", "vat"
@@ -262,7 +264,12 @@ namespace NexoBridge.Services
             string normalizedRaw = Normalize(raw);
             if (!string.IsNullOrWhiteSpace(normalizedRaw)) yield return normalizedRaw;
 
-            string withoutSystemPrefix = Regex.Replace(raw, @"^(FZ|FS|FZK|FSK|PA)\s+\d+\s+", string.Empty, RegexOptions.IgnoreCase);
+            // Etykieta Rachmistrza "<typ> [<typ>] <lp> <numer>" (np. "FZ 2 16446", "KFZ 3 FV/1/2026",
+            // "FZ FZ 1 FV/GD/24/01-00869") - dowolny skrót typu, a nie tylko zamknięta lista FZ/FS/FZK/FSK/PA.
+            // Faktury bez NIP (zagraniczni dostawcy, raporty fiskalne) dopasowują się tylko dokładnie, więc
+            // nieznany prefiks oznaczał brak dopasowania. Numery, w których prefiks jest częścią numeru
+            // ("FS 1/2026", "RF 3/05/2026"), nie pasują do wzorca (po skrócie nie ma "<lp> ") i zostają.
+            string withoutSystemPrefix = RachmistrzLabelPrefix.Replace(raw, string.Empty);
             string normalizedWithoutPrefix = Normalize(withoutSystemPrefix);
             if (!string.IsNullOrWhiteSpace(normalizedWithoutPrefix) &&
                 !string.Equals(normalizedWithoutPrefix, normalizedRaw, StringComparison.OrdinalIgnoreCase))

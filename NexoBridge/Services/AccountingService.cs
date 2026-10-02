@@ -117,8 +117,10 @@ namespace NexoBridge.Services
 
         private List<DokumentDoKsiegowania> PobierzOczekujace(IDokumentyDoKsiegowania menedzerDokumentow)
         {
-            return ((IEnumerable)menedzerDokumentow.Dane.Wszystkie())
-                .Cast<DokumentDoKsiegowania>()
+            // Bez rzutowania na IEnumerable - filtr idzie na typowanym zapytaniu Sfery (jak w
+            // ImportManifestService.PobierzWszystkieOczekujace), a nie w pamięci na wszystkich
+            // dokumentach do księgowania z całej historii bazy.
+            return menedzerDokumentow.Dane.Wszystkie()
                 .Where(d => (int)d.StatusKsiegowy == 2)
                 .ToList();
         }

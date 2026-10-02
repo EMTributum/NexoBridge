@@ -1,5 +1,6 @@
 using NexoBridge.Models;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 
 namespace NexoBridge.Services
 {
@@ -28,6 +29,21 @@ namespace NexoBridge.Services
 
             existingJobId = _idempotencyKeys.GetOrAdd(idempotencyKey, jobId);
             return existingJobId == jobId;
+        }
+
+        /// <summary>
+        /// Zwalnia klucz po nieudanym zleceniu, które NIE zapisało dokumentu - bez tego ponowienie (np. po
+        /// poprawce albo przejściowym błędzie Sfery) dostawało w kółko ten sam zapamiętany błąd aż do restartu
+        /// NexoBridge. Usuwa tylko wpis należący do tego zlecenia, nie cudzy.
+        /// </summary>
+        public void ReleaseIdempotencyKey(string idempotencyKey, string jobId)
+        {
+            if (string.IsNullOrWhiteSpace(idempotencyKey))
+            {
+                return;
+            }
+
+            _idempotencyKeys.TryRemove(new KeyValuePair<string, string>(idempotencyKey, jobId));
         }
 
         public void Store(InvoiceCreationReport report)

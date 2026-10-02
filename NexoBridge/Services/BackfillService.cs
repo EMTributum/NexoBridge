@@ -37,15 +37,26 @@ namespace NexoBridge.Services
     public class BackfillService
     {
         private const int EnumerateClientTimeoutMinutes = 8;
+        // Limit procesu zapisującego komentarze rośnie z liczbą wierszy bazy: stałe 5 minut przy kilku tysiącach
+        // wierszy (odszukanie zapisu + odczyt komentarzy + zapis na wiersz) kończyło się zabiciem procesu i
+        // policzeniem WSZYSTKICH wierszy bazy jako błędnych, mimo że część komentarzy była już zapisana.
         private const int WriteCommentsClientTimeoutMinutes = 5;
+        private const double WriteCommentsSecondsPerRow = 1.0;
+        private const int WriteCommentsMaxTimeoutMinutes = 180;
 
-        private static readonly string[] ManagerInterfaces = { "IZapisyWKPiR", "IZapisyWEwidencjiVAT", "IDekrety", "IZapisyWEP" };
+        private static TimeSpan WriteCommentsTimeout(int rowCount)
+        {
+            double minutes = WriteCommentsClientTimeoutMinutes + Math.Max(0, rowCount) * WriteCommentsSecondsPerRow / 60.0;
+            return TimeSpan.FromMinutes(Math.Min(WriteCommentsMaxTimeoutMinutes, minutes));
+        }
+
+        // Rachmistrz nie ma dekretów - interfejs IDekrety nie istnieje w DLL-ach nexo, więc go nie szukamy.
+        private static readonly string[] ManagerInterfaces = { "IZapisyWKPiR", "IZapisyWEwidencjiVAT", "IZapisyWEP" };
 
         private static readonly Dictionary<string, string> EntityTypeByInterface = new(StringComparer.OrdinalIgnoreCase)
         {
             ["IZapisyWKPiR"] = "KPiR",
             ["IZapisyWEwidencjiVAT"] = "VAT",
-            ["IDekrety"] = "Dekret",
             ["IZapisyWEP"] = "EP"
         };
 
@@ -53,7 +64,6 @@ namespace NexoBridge.Services
         {
             ["KPiR"] = "IZapisyWKPiR",
             ["VAT"] = "IZapisyWEwidencjiVAT",
-            ["Dekret"] = "IDekrety",
             ["EP"] = "IZapisyWEP"
         };
 
@@ -81,7 +91,10 @@ namespace NexoBridge.Services
 
         private static readonly string[] DatePaths =
         {
-            "Data", "DataZdarzenia", "DataWpisu", "DataOtrzymania", "DataZakupu", "DataSprzedazy", "DataDokumentu"
+            "Data", "DataZdarzenia", "DataWpisu", "DataOtrzymania", "DataZakupu", "DataSprzedazy", "DataDokumentu",
+            // Zapisy VAT nie mają żadnej z powyższych - bez tych pól filtr roku ich nie obejmował
+            // i backfill brał zapisy VAT ze wszystkich lat.
+            "DataWystawienia", "DataSprzedazyOtrzymania"
         };
 
         private readonly ILoggerFactory _loggerFactory;
@@ -112,7 +125,7 @@ namespace NexoBridge.Services
                     continue;
                 }
 
-                (List<BackfillManifestRow> rows, string error) = await EnumerateOneClientInChildProcessAsync(
+                (List<BackfillManifestRow> rows, int skippedAlreadyLinked, string error) = await EnumerateOneClientInChildProcessAsync(
                     job.Username, job.Password, client, job.Year, cancellationToken);
 
                 if (error != null)
@@ -124,12 +137,13 @@ namespace NexoBridge.Services
                 }
 
                 report.Rows.AddRange(rows);
+                report.SkippedAlreadyLinked += skippedAlreadyLinked;
                 report.ClientsOk++;
             }
 
             raportujPostep?.Invoke(100, $"Zakończono. Klienci OK={report.ClientsOk}, błąd={report.ClientsFailed}, wierszy={report.Rows.Count}.");
             report.Status = report.ClientsFailed > 0 && report.ClientsOk == 0 ? "FAILED" : report.ClientsFailed > 0 ? "PARTIAL_SUCCESS" : "SUCCESS";
-            report.Message = $"Klienci OK={report.ClientsOk}, błąd={report.ClientsFailed}, wierszy manifestu={report.Rows.Count}, z PDF={report.Rows.Count(r => r.HasPdf)}.";
+            report.Message = $"Klienci OK={report.ClientsOk}, błąd={report.ClientsFailed}, wierszy manifestu={report.Rows.Count}, pominięte (już miały link)={report.SkippedAlreadyLinked}, z PDF={report.Rows.Count(r => r.HasPdf)}.";
             return report;
         }
 
@@ -177,10 +191,31 @@ namespace NexoBridge.Services
 
         // ================== PRACA W IZOLOWANYM PROCESIE POTOMNYM (wołane z Program.cs) ==================
 
+        // Fragment ścieżki linku do podglądu (KLASYFIKATOR_PUBLIC_BASE_URL/faktury/{id}) - niezależny od hosta,
+        // więc komentarze zapisane przy innym adresie bazowym też liczą się jako "już podpięte".
+        private const string ViewerUrlMarker = "/faktury/";
+
         public List<BackfillManifestRow> EnumerateOneClient(Uchwyt sfera, BackfillClientRef client, int year)
         {
+            return EnumerateOneClient(sfera, client, year, out _);
+        }
+
+        public List<BackfillManifestRow> EnumerateOneClient(Uchwyt sfera, BackfillClientRef client, int year, out int skippedAlreadyLinked)
+        {
+            skippedAlreadyLinked = 0;
             var rows = new List<BackfillManifestRow>();
             object biblioteka = SferaReflectionHelpers.GetManagerByInterfaceName(sfera, "IBibliotekaZalacznikow");
+
+            // Zapisy, które już mają link do podglądu, wypadają tutaj - zanim pójdzie zapytanie do biblioteki
+            // załączników, zanim wiersz trafi do Klasyfikatora (dopasowanie w Scanye) i z powrotem do zapisu
+            // komentarzy. Jedno zapytanie na bazę. Gdy się nie uda, enumerujemy wszystko jak wcześniej -
+            // zapis i tak pominie duplikaty (JuzMaLinkKomentarz).
+            object komentarzeManager = SferaReflectionHelpers.GetManagerByInterfaceName(sfera, "IKomentarzeNexo");
+            var (podpieteKsiegowe, podpieteVat) = NexoCommentReader.EntityIdsWithLink(komentarzeManager, ViewerUrlMarker, out string bladOdczytu);
+            if (bladOdczytu != null)
+            {
+                _logger.LogWarning("[BACKFILL ENUMERATE] {Database}: nie udało się ustalić zapisów z linkiem ({Blad}) - enumeruję wszystkie.", client.DatabaseName, bladOdczytu);
+            }
 
             foreach (string interfaceName in ManagerInterfaces)
             {
@@ -191,8 +226,19 @@ namespace NexoBridge.Services
                 }
 
                 string entityType = EntityTypeByInterface[interfaceName];
+                HashSet<int> podpiete = string.Equals(entityType, "VAT", StringComparison.OrdinalIgnoreCase) ? podpieteVat : podpieteKsiegowe;
                 foreach (object entity in ReadAllRecords(manager, year))
                 {
+                    int? id = SferaReflectionHelpers.ReadIntCandidate(entity, "Id");
+                    if (podpiete != null && id.HasValue && podpiete.Contains(id.Value))
+                    {
+                        if (CzyZRoku(entity, year))
+                        {
+                            skippedAlreadyLinked++;
+                        }
+                        continue;
+                    }
+
                     BackfillManifestRow row = BuildRow(client, entityType, entity, biblioteka, year);
                     if (row != null)
                     {
@@ -202,6 +248,13 @@ namespace NexoBridge.Services
             }
 
             return rows;
+        }
+
+        // Ten sam filtr roku co w BuildRow - żeby licznik pominiętych obejmował tylko zapisy z backfillowanego roku.
+        private static bool CzyZRoku(object entity, int year)
+        {
+            int? recordYear = ResolveYear(entity);
+            return !recordYear.HasValue || recordYear.Value == year;
         }
 
         public sealed class WriteCommentsResult
@@ -258,10 +311,15 @@ namespace NexoBridge.Services
 
                 // Idempotencja przy ponownym uruchomieniu backfillu dla tych samych klientów: jeśli
                 // ten sam link już jest w komentarzach tego dokumentu, nie dopisuj drugiego.
-                if (JuzMaLinkKomentarz(komentarzeManager, entity, row.ViewerUrl))
+                if (JuzMaLinkKomentarz(komentarzeManager, entity, row.ViewerUrl, out string bladOdczytu))
                 {
                     result.SkippedAlreadyLinked++;
                     continue;
+                }
+
+                if (bladOdczytu != null)
+                {
+                    result.Errors.Add($"{dbLabel}/{row.EntityType}#{row.RachmistrzId} (numer={row.NumerDokumentu}): ostrzeżenie - nie udało się sprawdzić istniejących komentarzy ({bladOdczytu}), zapisuję link mimo to.");
                 }
 
                 var cel = new AttachmentService.AttachmentTargetRef
@@ -297,7 +355,7 @@ namespace NexoBridge.Services
 
         // ================== SPAWNOWANIE PROCESÓW POTOMNYCH (analogiczne do PayrollCountsService) ==================
 
-        private async Task<(List<BackfillManifestRow> Rows, string Error)> EnumerateOneClientInChildProcessAsync(
+        private async Task<(List<BackfillManifestRow> Rows, int SkippedAlreadyLinked, string Error)> EnumerateOneClientInChildProcessAsync(
             string username, string password, BackfillClientRef client, int year, CancellationToken cancellationToken)
         {
             var request = new BackfillEnumerateClientWorkerRequest
@@ -315,7 +373,7 @@ namespace NexoBridge.Services
 
             if (spawnError != null)
             {
-                return (new List<BackfillManifestRow>(), spawnError);
+                return (new List<BackfillManifestRow>(), 0, spawnError);
             }
 
             if (exitCode != 0 || string.IsNullOrWhiteSpace(stdout))
@@ -324,7 +382,7 @@ namespace NexoBridge.Services
                 _logger.LogWarning(
                     "Proces enumerujący klienta {Nip} (baza {Database}) zakończył się bez wyniku: {Error}",
                     client.Nip, client.DatabaseName, error);
-                return (new List<BackfillManifestRow>(), error);
+                return (new List<BackfillManifestRow>(), 0, error);
             }
 
             string resultJson = ExtractBetweenMarkers(stdout, global::NexoBridge.Program.BackfillWorkerResultStartMarker, global::NexoBridge.Program.BackfillWorkerResultEndMarker);
@@ -333,7 +391,7 @@ namespace NexoBridge.Services
                 _logger.LogWarning(
                     "Proces enumerujący klienta {Nip} (baza {Database}): brak znaczników wyniku w stdout. stdout={Stdout} stderr={Stderr}",
                     client.Nip, client.DatabaseName, Truncate(stdout, 2000), Truncate(stderr, 2000));
-                return (new List<BackfillManifestRow>(), "Proces potomny nie zwrócił rozpoznawalnego wyniku (brak znaczników w stdout).");
+                return (new List<BackfillManifestRow>(), 0, "Proces potomny nie zwrócił rozpoznawalnego wyniku (brak znaczników w stdout).");
             }
 
             BackfillEnumerateClientWorkerResponse response;
@@ -345,7 +403,7 @@ namespace NexoBridge.Services
             {
                 _logger.LogWarning(ex, "Proces enumerujący klienta {Nip} (baza {Database}): niepoprawny JSON wyniku: {ResultJson}",
                     client.Nip, client.DatabaseName, Truncate(resultJson, 2000));
-                return (new List<BackfillManifestRow>(), $"Nie udało się rozebrać wyniku procesu potomnego: {ex.Message}");
+                return (new List<BackfillManifestRow>(), 0, $"Nie udało się rozebrać wyniku procesu potomnego: {ex.Message}");
             }
 
             if (!string.IsNullOrWhiteSpace(stderr))
@@ -356,10 +414,10 @@ namespace NexoBridge.Services
 
             if (!string.Equals(response.Status, "SUCCESS", StringComparison.OrdinalIgnoreCase))
             {
-                return (new List<BackfillManifestRow>(), response.Error ?? "Nieznany błąd procesu potomnego.");
+                return (new List<BackfillManifestRow>(), 0, response.Error ?? "Nieznany błąd procesu potomnego.");
             }
 
-            return (response.Rows ?? new List<BackfillManifestRow>(), null);
+            return (response.Rows ?? new List<BackfillManifestRow>(), response.SkippedAlreadyLinked, null);
         }
 
         private async Task<(WriteCommentsResult Result, string Error)> WriteCommentsInChildProcessAsync(
@@ -374,7 +432,7 @@ namespace NexoBridge.Services
             };
 
             (string stdout, string stderr, int exitCode, string spawnError) = await RunChildWorkerAsync(
-                "--backfill-write-comments-worker", request, TimeSpan.FromMinutes(WriteCommentsClientTimeoutMinutes), cancellationToken);
+                "--backfill-write-comments-worker", request, WriteCommentsTimeout(rows.Count), cancellationToken);
 
             if (spawnError != null)
             {
@@ -557,60 +615,27 @@ namespace NexoBridge.Services
 
         // ================== POMOCNICZE (odczyt/refleksja Sfery) ==================
 
-        // Odczytuje istniejące komentarze na encji i sprawdza, czy któryś już zawiera ten sam link -
-        // zabezpieczenie przed duplikatami przy ponownym uruchomieniu backfillu dla tych samych
-        // klientów/dokumentów. Nazwa metody odczytu na IKomentarzeNexo nie jest potwierdzona (ten sam
-        // niepewny obszar API co audyt w AttachmentService) - próbuje kilku kandydatów; jeśli żaden nie
-        // zadziała, celowo NIE blokuje zapisu (lepszy możliwy duplikat niż cichy brak linku).
-        private static readonly string[] KandydaciMetodOdczytuKomentarzy = { "PodajKomentarze", "PobierzKomentarze", "Komentarze", "ListaKomentarzy" };
-
-        private static bool JuzMaLinkKomentarz(object komentarzeManager, object entity, string viewerUrl)
+        // Odczytuje istniejące komentarze na encji (IKomentarzeNexo.Dane.Wszystkie(encja) - patrz
+        // NexoCommentReader) i sprawdza, czy któryś aktywny już zawiera ten sam link - zabezpieczenie przed
+        // duplikatami przy ponownym uruchomieniu backfillu albo backfillu dokumentów, które dostały link przy
+        // imporcie. Jeśli odczyt się nie uda, celowo NIE blokuje zapisu (lepszy możliwy duplikat niż cichy
+        // brak linku), ale błąd odczytu trafia do wyniku.
+        private static bool JuzMaLinkKomentarz(object komentarzeManager, object entity, string viewerUrl, out string bladOdczytu)
         {
+            bladOdczytu = null;
             if (komentarzeManager == null || entity == null || string.IsNullOrWhiteSpace(viewerUrl))
             {
                 return false;
             }
 
-            try
-            {
-                object result = null;
-                foreach (string nazwaMetody in KandydaciMetodOdczytuKomentarzy)
-                {
-                    result = InvokeBestMethod(komentarzeManager, nazwaMetody, entity);
-                    if (result != null)
-                    {
-                        break;
-                    }
-                }
-
-                if (result is not IEnumerable enumerable)
-                {
-                    return false;
-                }
-
-                foreach (object item in enumerable)
-                {
-                    object dane = SferaReflectionHelpers.TryReadPropertyPath(item, "Dane", out object d) ? d : item;
-                    string zserializowana = SferaReflectionHelpers.ReadStringCandidate(dane, "ZserializowanaTresc") ?? "";
-                    string tresc = SferaReflectionHelpers.ReadStringCandidate(dane, "Tresc") ?? "";
-                    if (zserializowana.Contains(viewerUrl, StringComparison.OrdinalIgnoreCase) ||
-                        tresc.Contains(viewerUrl, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return true;
-                    }
-                }
-            }
-            catch
-            {
-                // Nie udało się odczytać istniejących komentarzy - traktujemy jak "nie znaleziono".
-            }
-
-            return false;
+            var komentarze = NexoCommentReader.ForEntity(komentarzeManager, entity, out bladOdczytu);
+            return komentarze.Any(k => !k.Deleted && k.ContainsUrl(viewerUrl));
         }
 
         private static BackfillManifestRow BuildRow(BackfillClientRef client, string entityType, object entity, object biblioteka, int year)
         {
-            string numer = StripKnownDocumentTypePrefix(SferaReflectionHelpers.ReadStringCandidate(entity, NumberPaths));
+            List<string> kandydaci = ZbudujKandydatowNumeru(entity, entityType);
+            string numer = kandydaci.FirstOrDefault();
             if (string.IsNullOrWhiteSpace(numer))
             {
                 return null;
@@ -657,10 +682,63 @@ namespace NexoBridge.Services
                 RachmistrzId = rachmistrzId,
                 VendorNip = vendorNip,
                 NumerDokumentu = numer,
+                NumerKandydaci = kandydaci,
                 RecordYear = recordYear,
                 HasPdf = hasPdf,
                 PdfBase64 = pdfBase64
             };
+        }
+
+        // Numer dokumentu bywa zapisany w Rachmistrzu na dwa sposoby, zależnie od tego, jak dokument trafił do
+        // poczekalni (sprawdzone na żywych bazach w NexoBridgeKonsola --backfill-number-dump):
+        // - czysty numer na samym zapisie: KPiR/EP NumerDowoduKsiegowego ("16446"), VAT NumerDokumentu
+        //   ("FV/GD/24/01-00869") - to jest numer widoczny w kolumnie "Numer" i numer faktury w Scanye;
+        // - etykieta na dokumencie do księgowania: "<typ> [<typ>] <lp> <numer>", np. "FZ 2 16446",
+        //   "FZ FZ 1 FV/GD/24/01-00869", "FZ 7 FS 113/2026"; w innych bazach to bywa czysty numer.
+        // Dlatego do Klasyfikatora idą wszystkie warianty (od najbardziej prawdopodobnego), a on sprawdza je
+        // po kolei w indeksie faktur Scanye. Samo StripKnownDocumentTypePrefix nie wystarczało: nie ruszało
+        // numerów bez "/" (paragony "FZ 2 16446") i odcinało prefiksy będące częścią numeru ("FS 113/2026").
+        private static readonly System.Text.RegularExpressions.Regex EtykietaNumeruRegex = new(
+            @"^(?:\p{L}{1,4}\s+){1,2}\d+\s+(?<numer>.+)$",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        private static List<string> ZbudujKandydatowNumeru(object entity, string entityType)
+        {
+            var surowe = new List<string>();
+            bool vat = string.Equals(entityType, "VAT", StringComparison.OrdinalIgnoreCase);
+            surowe.Add(SferaReflectionHelpers.ReadStringCandidate(entity, vat ? "NumerDokumentu" : "NumerDowoduKsiegowego"));
+
+            foreach (string sciezka in NumberPaths)
+            {
+                string wartosc = SferaReflectionHelpers.ReadStringCandidate(entity, sciezka);
+                if (string.IsNullOrWhiteSpace(wartosc))
+                {
+                    continue;
+                }
+
+                surowe.Add(wartosc);
+                var etykieta = EtykietaNumeruRegex.Match(wartosc.Trim());
+                if (etykieta.Success)
+                {
+                    surowe.Add(etykieta.Groups["numer"].Value);
+                }
+            }
+
+            // Dotychczasowa reguła (pierwsza niepusta ścieżka + obcięcie prefiksu) jako ostatni wariant.
+            surowe.Add(StripKnownDocumentTypePrefix(SferaReflectionHelpers.ReadStringCandidate(entity, NumberPaths)));
+
+            var widziane = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var kandydaci = new List<string>();
+            foreach (string wariant in surowe)
+            {
+                string czysty = wariant?.Trim();
+                if (!string.IsNullOrWhiteSpace(czysty) && widziane.Add(string.Concat(czysty.Where(c => !char.IsWhiteSpace(c)))))
+                {
+                    kandydaci.Add(czysty);
+                }
+            }
+
+            return kandydaci;
         }
 
         // Zabezpieczenie na wypadek gdyby żadna ze ścieżek DokumentDoKsiegowania nie była wypełniona
@@ -685,11 +763,22 @@ namespace NexoBridge.Services
             string tail = parts[^1];
             if (tail.Contains('/') && parts.Take(parts.Length - 1).All(p => p.Length <= 4))
             {
+                // "RF" nie jest etykietą typu dokumentu, tylko częścią numeru raportu fiskalnego nadawanego
+                // przez Klasyfikator ("RF 3/05/2026") - odcięcie zostawiało "3/05/2026", którego nie ma
+                // w Scanye, więc żaden raport fiskalny nie dostawał linku w backfillu.
+                string ostatniPrefiks = parts[^2];
+                if (NumberPrefixesKeptWithNumber.Contains(ostatniPrefiks))
+                {
+                    return $"{ostatniPrefiks} {tail}";
+                }
+
                 return tail;
             }
 
             return numer;
         }
+
+        private static readonly HashSet<string> NumberPrefixesKeptWithNumber = new(StringComparer.OrdinalIgnoreCase) { "RF" };
 
         private static int? ResolveYear(object entity)
         {
@@ -726,6 +815,15 @@ namespace NexoBridge.Services
             }
 
             object dane = SferaReflectionHelpers.TryReadPropertyPath(manager, "Dane", out object d) ? d : manager;
+
+            // Dane menedżerów zapisów (ZapisyWKPiRDane, ZapisyWEwidencjiVATDane, ZapisyWEPDane) mają
+            // FindById(int) - jedno zapytanie zamiast skanu całej tabeli (potwierdzone w NexoBridgeKonsola
+            // --comment-read-test). Znajdz(int) i bezparametrowego Wszystkie() te klasy nie mają.
+            object znalezionaPoId = TryInvoke(() => dane.GetType().GetMethod("FindById", new[] { typeof(int) })?.Invoke(dane, new object[] { id }));
+            if (znalezionaPoId != null)
+            {
+                return znalezionaPoId;
+            }
 
             try
             {

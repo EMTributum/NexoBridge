@@ -86,6 +86,17 @@ namespace NexoBridge
                 return;
             }
 
+            // Tryb procesu potomnego dla POJEDYNCZEGO klienta w odczycie ZUS-u właściciela - patrz
+            // ZusOwnerContributionService.PoliczDlaKlientaWProcesie. Ten sam powód wczesnej, samotnej
+            // gałęzi w Main co --payroll-client-worker/--raw-payroll-client-worker powyżej.
+            if (args.Length > 0 && string.Equals(args[0], "--zus-owner-client-worker", StringComparison.Ordinal))
+            {
+                LoadEnvironment();
+                RegisterNexoRuntimeResolvers();
+                Environment.Exit(RunZusOwnerClientWorker());
+                return;
+            }
+
             // Tryb procesu potomnego dla POJEDYNCZEGO klienta w backfillu linków do podglądu faktur -
             // patrz BackfillService (EnumerateOneClientInChildProcessAsync) i to samo uzasadnienie co
             // przy --payroll-client-worker powyżej (JIT + świeży, nieskażony stan statyczny Sfery).
@@ -236,6 +247,8 @@ namespace NexoBridge
                 builder.Services.AddSingleton<PayrollCountsResultStore>();
                 builder.Services.AddSingleton<RawPayrollCountsJobQueue>();
                 builder.Services.AddSingleton<RawPayrollCountsResultStore>();
+                builder.Services.AddSingleton<ZusOwnerContributionJobQueue>();
+                builder.Services.AddSingleton<ZusOwnerContributionResultStore>();
                 builder.Services.AddSingleton<DuplicateScanJobQueue>();
                 builder.Services.AddSingleton<DuplicateScanResultStore>();
                 builder.Services.AddSingleton<BackfillEnumerateJobQueue>();
@@ -253,6 +266,7 @@ namespace NexoBridge
                 builder.Services.AddHostedService<BillingClientsBackgroundWorker>();
                 builder.Services.AddHostedService<PayrollCountsBackgroundWorker>();
                 builder.Services.AddHostedService<RawPayrollCountsBackgroundWorker>();
+                builder.Services.AddHostedService<ZusOwnerContributionBackgroundWorker>();
                 builder.Services.AddHostedService<DuplicateScanBackgroundWorker>();
                 builder.Services.AddHostedService<BackfillEnumerateBackgroundWorker>();
                 builder.Services.AddHostedService<BackfillWriteCommentsBackgroundWorker>();
@@ -295,6 +309,7 @@ namespace NexoBridge
                 app.MapBillingEndpoints();
                 app.MapPayrollCountsEndpoints();
                 app.MapRawPayrollCountsEndpoints();
+                app.MapZusOwnerContributionEndpoints();
                 app.MapDuplicateScanEndpoints();
                 app.MapBackfillEndpoints();
 
@@ -425,6 +440,49 @@ namespace NexoBridge
             }
         }
 
+        /// <summary>Analogiczne do RunRawPayrollClientWorker, ale odczytuje (BEZ przeliczania) już
+        /// policzone w Nexo naliczenia ZUS właściciela bezpośrednio z bazy klienta
+        /// (ZusOwnerContributionExtractor) - patrz ZusOwnerContributionService i
+        /// ZusOwnerContributionExtractor co do uzasadnienia, dlaczego to WYŁĄCZNIE odczyt.</summary>
+        private static int RunZusOwnerClientWorker()
+        {
+            var response = new ZusOwnerContributionWorkerResponse { Status = "SUCCESS" };
+
+            try
+            {
+                string inputJson = Console.In.ReadToEnd();
+                var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                ZusOwnerContributionWorkerRequest request = JsonSerializer.Deserialize<ZusOwnerContributionWorkerRequest>(inputJson, jsonOptions);
+
+                try
+                {
+                    using (var silnik = new SferaEngine())
+                    {
+                        silnik.Uruchom(request.Username, request.Password, request.DatabaseName, ProductId.Gratyfikant);
+
+                        response.Entries = ZusOwnerContributionExtractor.GetOwnerContributionsForPeriod(
+                            silnik.Sfera, request.PeriodYear, request.PeriodMonth);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    response.Status = "FAILED";
+                    response.Error = ex.GetBaseException().Message;
+                }
+
+                string outputJson = JsonSerializer.Serialize(response, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                Console.Out.Write(PayrollWorkerResultStartMarker);
+                Console.Out.Write(outputJson);
+                Console.Out.Write(PayrollWorkerResultEndMarker);
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[zus-owner-client-worker] Krytyczny błąd: {ex}");
+                return 1;
+            }
+        }
+
         /// <summary>
         /// Enumeruje/wyciąga załączniki DOKŁADNIE JEDNEGO klienta backfillu, w kompletnie IZOLOWANYM
         /// procesie systemowym - patrz pełne uzasadnienie w PayrollCountsService (ten sam mechanizm,
@@ -458,7 +516,8 @@ namespace NexoBridge
                             DatabaseName = request.DatabaseName
                         };
 
-                        response.Rows = service.EnumerateOneClient(silnik.Sfera, client, request.Year);
+                        response.Rows = service.EnumerateOneClient(silnik.Sfera, client, request.Year, out int skippedAlreadyLinked);
+                        response.SkippedAlreadyLinked = skippedAlreadyLinked;
                     }
                 }
                 catch (Exception ex)
