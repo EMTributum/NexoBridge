@@ -47,6 +47,10 @@ namespace NexoBridge.Models
     {
         public string PersonName { get; set; }
 
+        /// <summary>Nazwa rodzaju rozliczenia właścicielskiego z Nexo (np. ZUS właściciela / osoby
+        /// współpracującej) - informacyjnie, do weryfikacji filtra w ekstraktorze.</summary>
+        public string Rodzaj { get; set; }
+
         /// <summary>Suma wszystkich składek pomniejszona o składki finansowane z budżetu państwa -
         /// to jest kwota, jaką klient faktycznie ma zapłacić do ZUS.</summary>
         public decimal? DoZaplaty { get; set; }

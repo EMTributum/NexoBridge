@@ -740,37 +740,6 @@ namespace NexoBridge.Services
             return items;
         }
 
-        /// <summary>Woła bezparametrową metodę zwracającą kolekcję (np. WszystkieWgUprawnien() na
-        /// INaliczeniaSkladekZusDane) przez refleksję - analog QueryAllViaWszystkieDostepne, ale dla
-        /// managerów, których metoda "daj mi wszystko" nie przyjmuje ŻADNYCH argumentów (w
-        /// odróżnieniu od WszystkieDostepne(string[]) używanego np. przez IPodmiotyDane).</summary>
-        public static List<object> InvokeParameterlessCollectionMethod(object dane, string methodName)
-        {
-            MethodInfo method = dane.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
-                .FirstOrDefault(m => m.Name == methodName && m.GetParameters().Length == 0);
-
-            if (method == null)
-            {
-                throw new InvalidOperationException($"{dane.GetType().FullName} nie ma bezparametrowej metody {methodName}().");
-            }
-
-            object result = method.Invoke(dane, Array.Empty<object>());
-            if (result is not IEnumerable enumerable)
-            {
-                throw new InvalidOperationException($"{methodName}() na {dane.GetType().FullName} nie zwróciło kolekcji.");
-            }
-
-            List<object> items = new();
-            foreach (object item in enumerable)
-            {
-                if (item != null)
-                {
-                    items.Add(item);
-                }
-            }
-            return items;
-        }
-
         public static List<object> ReadObjectCollection(object target, string propertyPath)
         {
             if (!TryReadPropertyPath(target, propertyPath, out object value) || value == null)

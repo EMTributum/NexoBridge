@@ -458,7 +458,8 @@ namespace NexoBridge
                 {
                     using (var silnik = new SferaEngine())
                     {
-                        silnik.Uruchom(request.Username, request.Password, request.DatabaseName, ProductId.Gratyfikant);
+                        // Rachmistrz, nie Gratyfikant - rozliczenia właścicielskie (ZUS właściciela) to moduł Rachmistrza.
+                        silnik.Uruchom(request.Username, request.Password, request.DatabaseName, ProductId.Rachmistrz);
 
                         response.Entries = ZusOwnerContributionExtractor.GetOwnerContributionsForPeriod(
                             silnik.Sfera, request.PeriodYear, request.PeriodMonth);

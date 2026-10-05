@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using InsERT.Moria.Klienci;
+using InsERT.Moria.ModelDanych;
 using InsERT.Moria.Sfera;
 using NexoBridge.Models;
 using static NexoBridge.Services.SferaReflectionHelpers;
@@ -17,12 +18,18 @@ namespace NexoBridge.Services
     /// Jeśli biuro nie policzyło jeszcze ZUS-u klienta za dany miesiąc w samym Nexo, zwracamy pustą
     /// listę - NIE liczymy niczego na siłę.
     ///
+    /// WszystkieWgUprawnien() zwraca surowe encje ModelDanych.NaliczenieSkladekZus, które NIE mają
+    /// kwot (DoZaplaty, SumaSkladek, ...) - te istnieją dopiero na obiekcie biznesowym
+    /// INaliczenieSkladekZus, dlatego każdą encję otwieramy przez manager.Znajdz(encja) i od razu
+    /// zwalniamy (bez Zapisz() - nic nie trafia do bazy).
+    ///
+    /// Musi być wołany w sesji Sfery połączonej WPROST z bazą KLIENTA jako ProductId.Rachmistrz -
+    /// rozliczenia właścicielskie to moduł Rachmistrza (tak jak import/dekretacja), nie Gratyfikanta -
+    /// patrz ZusOwnerContributionService.PoliczDlaKlientaWProcesie / Program.RunZusOwnerClientWorker.
+    ///
     /// Dotyczy WYŁĄCZNIE ZUS-u właściciela (JDG płacący za siebie / osoba współpracująca) -
     /// zbiorczy ZUS od wynagrodzeń pracowników żyje w zupełnie innej strukturze (elementy
     /// pojedynczych wypłat, patrz RawPayrollExtractor) i nie jest tu liczony.
-    ///
-    /// Musi być wołany w sesji Sfery połączonej WPROST z bazą KLIENTA (ProductId.Gratyfikant) - patrz
-    /// ZusOwnerContributionService.PoliczDlaKlientaWProcesie / Program.RunZusOwnerClientWorker.
     /// </summary>
     internal static class ZusOwnerContributionExtractor
     {
@@ -32,26 +39,47 @@ namespace NexoBridge.Services
             INaliczeniaSkladekZusDane dane = GetManagerDataOrContainer<INaliczeniaSkladekZusDane>(
                 sfera, manager, "INaliczeniaSkladekZus.Dane");
 
-            List<object> naliczenia = InvokeParameterlessCollectionMethod(dane, "WszystkieWgUprawnien");
+            DateTime periodStart = new DateTime(periodYear, periodMonth, 1);
+            DateTime periodEnd = periodStart.AddMonths(1);
 
-            return naliczenia
-                .Where(n => IsWithinPeriod(ReadDateCandidate(n, "MiesiacNaliczenia", "Data"), periodYear, periodMonth))
-                .Select(n => new ZusOwnerContributionEntry
-                {
-                    PersonName = ReadStringCandidate(n,
-                        "OsobaKtorejDotyczy.NazwaPelna", "OsobaKtorejDotyczy.Nazwa",
-                        "Wspolnik.NazwaPelna", "Wspolnik.Nazwa"),
-                    DoZaplaty = ReadDecimalCandidate(n, "DoZaplaty"),
-                    SumaSkladek = ReadDecimalCandidate(n, "SumaSkladek"),
-                    UbezpieczenieSpoleczne = ReadDecimalCandidate(n, "UbezpieczenieSpoleczne"),
-                    UbezpieczenieZdrowotne = ReadDecimalCandidate(n, "UbezpieczenieZdrowotne"),
-                })
+            List<NaliczenieSkladekZus> naliczenia = dane.WszystkieWgUprawnien()
+                .Where(n => n.MiesiacNaliczenia >= periodStart && n.MiesiacNaliczenia < periodEnd)
                 .ToList();
+
+            var entries = new List<ZusOwnerContributionEntry>();
+            foreach (NaliczenieSkladekZus naliczenie in naliczenia.Where(IsOwnerContribution))
+            {
+                using (INaliczenieSkladekZus bo = manager.Znajdz(naliczenie))
+                {
+                    // Kwoty na BO to pola (_doZaplaty itd.) wypełniane WYŁĄCZNIE przez ObliczPolaWyliczane() -
+                    // Znajdz() go nie woła, więc bez tego wszystko byłoby 0. Liczy tylko w pamięci, ze
+                    // składników (Kwota) zapisanych w bazie - ta sama formuła co w Nexo, bez zapisu.
+                    bo.ObliczPolaWyliczane();
+
+                    entries.Add(new ZusOwnerContributionEntry
+                    {
+                        PersonName = naliczenie.OsobaKtorejDotyczy?.Nazwa ?? naliczenie.Wspolnik?.Nazwa,
+                        Rodzaj = naliczenie.Rodzaj?.Nazwa,
+                        DoZaplaty = bo.DoZaplaty,
+                        SumaSkladek = bo.SumaSkladek,
+                        UbezpieczenieSpoleczne = bo.UbezpieczenieSpoleczne,
+                        UbezpieczenieZdrowotne = bo.UbezpieczenieZdrowotne,
+                    });
+                }
+            }
+
+            return entries;
         }
 
-        private static bool IsWithinPeriod(DateTime? date, int periodYear, int periodMonth)
+        /// <summary>Encja NaliczenieSkladekZus ma też pola innych rozliczeń właścicielskich (darowizny,
+        /// ulgi, wynajem) - bierzemy tylko rodzaje oznaczone jako naliczenie ZUS właściciela / osoby
+        /// współpracującej. Brak rodzaju (nie powinno się zdarzyć) traktujemy jako ZUS, żeby nie zgubić kwoty.</summary>
+        private static bool IsOwnerContribution(NaliczenieSkladekZus naliczenie)
         {
-            return date.HasValue && date.Value.Year == periodYear && date.Value.Month == periodMonth;
+            RodzajRozliczeniaWlascicielskiego rodzaj = naliczenie.Rodzaj;
+            return rodzaj == null
+                || rodzaj.NaliczenieSkladekZUSWlasciciela
+                || rodzaj.NaliczenieSkladekZUSOsobyWspolpracujacej;
         }
     }
 }
