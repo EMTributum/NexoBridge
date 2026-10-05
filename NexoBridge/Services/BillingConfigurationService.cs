@@ -52,7 +52,7 @@ namespace NexoBridge.Services
                 if (client == null)
                 {
                     report.Status = "NOT_FOUND";
-                    report.Message = $"Nie znaleziono aktywnego klienta z cechą „Do fakturowania” o NIP {job.Nip}.";
+                    report.Message = $"Nie znaleziono aktywnego klienta biura z cechą „Do fakturowania” o NIP {job.Nip}.";
                     await raportujPostep(100, report.Message);
                     return report;
                 }
@@ -97,8 +97,8 @@ namespace NexoBridge.Services
                 PodmiotyDane podmiotyDane = GetManagerDataOrContainer<PodmiotyDane>(_sfera, podmiotyManager, "IPodmioty.Dane");
                 List<Podmiot> allClients = LoadClients(podmiotyDane);
 
-                await raportujPostep(70, "Filtrowanie aktywnych klientów z cechą „Do fakturowania”...");
-                List<Podmiot> eligibleClients = FindEligibleClients(allClients);
+                await raportujPostep(70, "Filtrowanie aktywnych klientów biura z cechą „Do fakturowania”...");
+                List<Podmiot> eligibleClients = FindBillableClients(allClients);
 
                 report.Items = eligibleClients
                     .Select(client =>
@@ -127,6 +127,7 @@ namespace NexoBridge.Services
                             Name = GetDisplayName(client),
                             Active = ReadBoolCandidate(client, "Aktywny"),
                             DoFakturowania = HasFeature(client, "Do fakturowania"),
+                            KlientBiuraAktywny = ReadOfficeClientActive(client),
                             Payment = new PaymentConfigurationDto
                             {
                                 PaymentMethod = paymentMethod,
@@ -179,6 +180,7 @@ namespace NexoBridge.Services
                 Name = GetDisplayName(client),
                 Active = ReadBoolCandidate(client, "Aktywny"),
                 DoFakturowania = HasFeature(client, "Do fakturowania"),
+                KlientBiuraAktywny = ReadOfficeClientActive(client),
                 Payment = new PaymentConfigurationDto
                 {
                     PaymentMethod = paymentMethod,

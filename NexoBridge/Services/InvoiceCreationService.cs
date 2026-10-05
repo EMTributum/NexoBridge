@@ -75,7 +75,7 @@ namespace NexoBridge.Services
                 if (client == null)
                 {
                     report.Status = "NOT_FOUND";
-                    report.Message = $"Nie znaleziono aktywnego klienta z cechą „Do fakturowania” o NIP {job.Nip}.";
+                    report.Message = $"Nie znaleziono aktywnego klienta biura z cechą „Do fakturowania” o NIP {job.Nip}.";
                     await raportujPostep(100, report.Message);
                     return report;
                 }

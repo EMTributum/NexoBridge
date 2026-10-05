@@ -36,6 +36,10 @@ namespace NexoBridge.Models
         public string Name { get; set; }
         public bool? Active { get; set; }
         public bool? DoFakturowania { get; set; }
+
+        /// <summary>Aktywność karty klienta biura (null = podmiot nie ma tej karty) - warunek panelu billing.</summary>
+        public bool? KlientBiuraAktywny { get; set; }
+
         public PaymentConfigurationDto Payment { get; set; }
 
         /// <summary>Nazwa i kwoty bazowego (księgowego) rozliczenia klienta - stawka stała albo dopasowana pozycja cennika biura.</summary>
@@ -107,6 +111,10 @@ namespace NexoBridge.Models
         public string Name { get; set; }
         public bool? Active { get; set; }
         public bool? DoFakturowania { get; set; }
+
+        /// <summary>Aktywność karty klienta biura (null = podmiot nie ma tej karty) - warunek panelu billing.</summary>
+        public bool? KlientBiuraAktywny { get; set; }
+
         public PaymentConfigurationDto Payment { get; set; }
 
         /// <summary>Nazwa i kwoty bazowego (księgowego) rozliczenia klienta - jak w ClientBillingSnapshotItem.</summary>

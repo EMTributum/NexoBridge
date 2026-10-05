@@ -81,6 +81,8 @@ namespace NexoBridge.Services
         }
 
         /// <summary>
+        /// Używane wyłącznie przez billing (odczyt klienta do rozliczenia + wystawianie faktury), stąd reguła
+        /// IsBillableInBillingPanel - aktywny podmiot, cecha "Do fakturowania" i aktywny klient biura.
         /// Do billingu bierzemy WYŁĄCZNIE klienta aktywnego i oznaczonego cechą "Do fakturowania" -
         /// to jednocześnie jedyna reguła kwalifikacji I sposób rozwiązania duplikatów NIP potwierdzonych
         /// na produkcji (kilku klientów ma po 2-3 rekordy Podmiot pod tym samym NIP - stare/testowe
@@ -98,9 +100,39 @@ namespace NexoBridge.Services
 
             return clients
                 .Where(client => NormalizeDigits(ReadStringCandidate(client, "NIP", "Nip")) == expectedNip)
-                .Where(IsEligibleForBilling)
+                .Where(IsBillableInBillingPanel)
                 .OrderBy(client => ReadIntCandidate(client, "Id") ?? int.MaxValue)
                 .FirstOrDefault();
+        }
+
+        /// <summary>
+        /// Klienci panelu rozliczeń (billing): jak FindEligibleClients, ale dodatkowo wyłącznie z AKTYWNYM klientem
+        /// biura (KlientBiura.Aktywny). Ta reguła dotyczy TYLKO billingu (lista panelu, odczyt klienta do
+        /// rozliczenia, wystawianie faktury) - pozostałe moduły (np. PayrollCountsService) dalej używają
+        /// FindEligibleClients bez tego warunku, celowo. Przy duplikatach NIP warunek działa PRZED wyborem
+        /// najniższego Id, więc stary rekord bez karty klienta biura nie przesłania nowszego, właściwego.
+        /// </summary>
+        public static List<Podmiot> FindBillableClients(IEnumerable<Podmiot> clients)
+        {
+            return clients
+                .Where(IsBillableInBillingPanel)
+                .Where(client => !string.IsNullOrWhiteSpace(ReadStringCandidate(client, "NIP", "Nip")))
+                .GroupBy(client => NormalizeDigits(ReadStringCandidate(client, "NIP", "Nip")))
+                .Select(group => group.OrderBy(client => ReadIntCandidate(client, "Id") ?? int.MaxValue).First())
+                .ToList();
+        }
+
+        /// <summary>Aktywność klienta biura (karta KlientBiura) - null, gdy podmiot w ogóle nie ma tej karty.</summary>
+        public static bool? ReadOfficeClientActive(Podmiot client)
+        {
+            return TryReadPropertyPath(client, "KlientBiura", out object officeClient) && officeClient != null
+                ? ReadBoolCandidate(officeClient, "Aktywny")
+                : null;
+        }
+
+        private static bool IsBillableInBillingPanel(Podmiot client)
+        {
+            return IsEligibleForBilling(client) && ReadOfficeClientActive(client) == true;
         }
 
         /// <summary>
@@ -124,13 +156,29 @@ namespace NexoBridge.Services
 
         public static PodmiotyManager GetPodmiotyManager(Uchwyt sfera, DateTime operationDate)
         {
+            Exception primaryError;
             try
             {
                 return (PodmiotyManager)UchwytRozszerzenia.Podmioty(sfera);
             }
-            catch
+            catch (Exception ex)
+            {
+                primaryError = ex;
+            }
+
+            try
             {
                 return GetRequiredService<PodmiotyManager>(sfera, operationDate);
+            }
+            catch (Exception fallbackError)
+            {
+                // Właściwą przyczyną jest błąd Uchwyt.Podmioty() - fallback z kontenera Unity kończy się wtedy zawsze
+                // mylącym "IObiektyBiznesowe`3[...] is an interface and cannot be constructed", który wcześniej
+                // jako jedyny trafiał do panelu i logu (zgłoszenie z panelu rozliczeń, 2026-10-02). Pierwotny wyjątek
+                // jest teraz InnerException, więc GetBaseException() u wołającego pokazuje prawdziwy powód.
+                throw new InvalidOperationException(
+                    $"Sfera nie udostępniła kartoteki podmiotów (fallback z kontenera też zawiódł: {fallbackError.GetBaseException().Message}).",
+                    primaryError);
             }
         }
 
