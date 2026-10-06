@@ -38,6 +38,12 @@ namespace NexoBridge.Models
         /// Gdy podana - pozycja dostaje tę stawkę ze słownika nexo i tylko cenę netto (brutto liczy Subiekt),
         /// żeby faktura zgadzała się z kwotą pobraną z karty. Brak = stare zachowanie (domyślna stawka Subiekta).</summary>
         public int? VatRate { get; set; }
+
+        /// <summary>Ilość i symbol jednostki miary ze słownika nexo (np. 3 / "szt"). NetAmount/GrossAmount to wtedy
+        /// WARTOŚĆ pozycji, a UnitNetAmount cena za jednostkę. Brak = jedna pozycja z wartością, jak dotąd.</summary>
+        public decimal? Quantity { get; set; }
+        public string Unit { get; set; }
+        public decimal? UnitNetAmount { get; set; }
     }
 
     public class InvoiceCreationReport

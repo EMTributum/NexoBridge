@@ -162,9 +162,9 @@ namespace NexoBridge.Services
                     catch (ArgumentNullException ex) when (string.Equals(ex.ParamName, "okresObrachunkowy", StringComparison.OrdinalIgnoreCase))
                     {
                         _logger.LogError(ex, "[DEKRETACJA BŁĄD OKRESU] JobId={JobId}; baza={Database}; okresRozliczenia={Okres}; " +
-                            "Sfera nie znalazła okresu obrachunkowego dla daty jednego z dokumentów w Poczekalni. " +
-                            "Sprawdź, czy w bazie klienta są skonfigurowane okresy obrachunkowe obejmujące datę zdarzenia tego dokumentu " +
-                            "(np. dokument z datą z innego roku/miesiąca niż otwarte okresy).",
+                            "Sfera dostała pusty okres obrachunkowy podczas dekretacji jednego z dokumentów (który - patrz [DEKRETACJA BŁĄD OKRESU SZCZEGÓŁY]). " +
+                            "Znana przyczyna: zapis EP rodzaju 'Wynajem' (8,5%/12,5%) bez okresu w kontekście sesji - sprawdź wpis [KONTEKST OKRESU]. " +
+                            "Inna możliwa: dokument z datą spoza skonfigurowanych okresów obrachunkowych.",
                             job.JobId,
                             job.DatabaseName,
                             dataRozliczenia);

@@ -39,34 +39,36 @@ namespace NexoBridge.Services
             string name = BillingConfigurationService.GetDisplayName(client);
             var lineSpecs = new List<PendingPayrollLineSpec>();
 
+            // Liczymy KAŻDĄ pozycję cennika z podpiętym licznikiem, niezależnie od nazwy cennika. Wcześniej
+            // wymagaliśmy, żeby nazwa cennika zawierała "kadry/płace" - cenniki nazwane od klienta ("WWS",
+            // "Nomex_MB") z identycznymi pozycjami kadrowymi były przez to po cichu pomijane (zgłoszenie
+            // 2026-10-05). Przegląd wszystkich 135 klientów biura (NexoBillingKonsola --dump-pricing-overview)
+            // pokazał, że liczniki są podpięte wyłącznie do "Rachunek do umowy pracowniczej" i "Wypłata wg
+            // miesiąca rozliczenia" - to sam licznik mówi, co policzyć, nazwa cennika nic nie wnosi.
             if (TryReadPropertyPath(client, "KlientBiura", out object biuroClient) && biuroClient != null
                 && TryReadPropertyPath(biuroClient, "CennikUslug", out object pricing) && pricing != null)
             {
-                string pricingName = ReadStringCandidate(pricing, "Nazwa");
-                if (BillingConfigurationService.MatchesMonthlyServiceKind(pricingName, BillingConfigurationService.MonthlyServiceKind.Payroll))
+                foreach (object position in ReadObjectCollection(pricing, "PozycjeCennikaUslug"))
                 {
-                    foreach (object position in ReadObjectCollection(pricing, "PozycjeCennikaUslug"))
+                    string counterGuidText = ReadStringCandidate(position, "ObiektPozycjiCennikaUslug.FunkcjaZliczajaca");
+                    if (string.IsNullOrWhiteSpace(counterGuidText) || !Guid.TryParse(counterGuidText, out Guid counterGuid) || counterGuid == Guid.Empty)
                     {
-                        string counterGuidText = ReadStringCandidate(position, "ObiektPozycjiCennikaUslug.FunkcjaZliczajaca");
-                        if (string.IsNullOrWhiteSpace(counterGuidText) || !Guid.TryParse(counterGuidText, out Guid counterGuid) || counterGuid == Guid.Empty)
-                        {
-                            continue;
-                        }
-
-                        List<PayrollTierSpec> tiers = ReadObjectCollection(position, "WartosciPozycjiCennikaUslug")
-                            .Select(tier => new PayrollTierSpec(
-                                ReadIntCandidate(tier, "Od") ?? 1,
-                                ReadIntCandidate(tier, "Do") ?? int.MaxValue,
-                                ReadDecimalCandidate(tier, "CenaJednostkowaNetto"),
-                                ReadDecimalCandidate(tier, "CenaJednostkowaBrutto"),
-                                ReadDecimalCandidate(tier, "CenaZbiorczaWPrzedzialeNetto", "CenaZbiorczaNetto"),
-                                ReadDecimalCandidate(tier, "CenaZbiorczaWPrzedzialeBrutto", "CenaZbiorczaBrutto")))
-                            .ToList();
-
-                        string label = BillingConfigurationService.GetPositionLabel(position)
-                            ?? BillingConfigurationService.GetDefaultServiceName(BillingConfigurationService.MonthlyServiceKind.Payroll);
-                        lineSpecs.Add(new PendingPayrollLineSpec(label, counterGuid, tiers));
+                        continue;
                     }
+
+                    List<PayrollTierSpec> tiers = ReadObjectCollection(position, "WartosciPozycjiCennikaUslug")
+                        .Select(tier => new PayrollTierSpec(
+                            ReadIntCandidate(tier, "Od") ?? 1,
+                            ReadIntCandidate(tier, "Do") ?? int.MaxValue,
+                            ReadDecimalCandidate(tier, "CenaJednostkowaNetto"),
+                            ReadDecimalCandidate(tier, "CenaJednostkowaBrutto"),
+                            ReadDecimalCandidate(tier, "CenaZbiorczaWPrzedzialeNetto", "CenaZbiorczaNetto"),
+                            ReadDecimalCandidate(tier, "CenaZbiorczaWPrzedzialeBrutto", "CenaZbiorczaBrutto")))
+                        .ToList();
+
+                    string label = BillingConfigurationService.GetPositionLabel(position)
+                        ?? BillingConfigurationService.GetDefaultServiceName(BillingConfigurationService.MonthlyServiceKind.Payroll);
+                    lineSpecs.Add(new PendingPayrollLineSpec(label, counterGuid, tiers));
                 }
             }
 
@@ -100,11 +102,16 @@ namespace NexoBridge.Services
 
                 if (tier.UnitNet.HasValue || tier.UnitGross.HasValue)
                 {
+                    // Cena za sztukę - na fakturze ilość x cena jednostkowa (np. 6 szt x 70 zł), nazwa bez "za N".
                     return new PayrollFeeLineDto
                     {
-                        Name = $"{spec.Label} za {quantity}",
+                        Name = spec.Label,
                         Net = tier.UnitNet.HasValue ? tier.UnitNet.Value * quantity : (decimal?)null,
-                        Gross = tier.UnitGross.HasValue ? tier.UnitGross.Value * quantity : (decimal?)null
+                        Gross = tier.UnitGross.HasValue ? tier.UnitGross.Value * quantity : (decimal?)null,
+                        Quantity = quantity,
+                        Unit = "szt",
+                        UnitNet = tier.UnitNet,
+                        UnitGross = tier.UnitGross
                     };
                 }
 

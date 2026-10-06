@@ -116,6 +116,16 @@ namespace NexoBridge
                 return;
             }
 
+            // Ręczny test kontekstu okresu obrachunkowego (patrz KontekstOkresuDiagnostyka) - niczego nie
+            // zapisuje w bazie. Ta sama zasada wczesnej gałęzi co przy trybach procesów potomnych powyżej.
+            if (args.Length > 0 && string.Equals(args[0], "--diag-kontekst-okresu", StringComparison.Ordinal))
+            {
+                LoadEnvironment();
+                RegisterNexoRuntimeResolvers();
+                Environment.Exit(KontekstOkresuDiagnostyka.Run(args));
+                return;
+            }
+
             LoadEnvironment();
             RegisterNexoRuntimeResolvers();
 

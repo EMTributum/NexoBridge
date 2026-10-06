@@ -65,8 +65,18 @@ namespace NexoBridge.Models
     public class PayrollFeeLineDto
     {
         public string Name { get; set; }
+
+        /// <summary>Wartość pozycji (cena jednostkowa x ilość, albo cena zbiorcza przedziału).</summary>
         public decimal? Net { get; set; }
         public decimal? Gross { get; set; }
+
+        /// <summary>Przy cenie jednostkowej z cennika: ilość policzona licznikiem, jednostka ("szt") i cena za
+        /// jednostkę - na fakturze pozycja idzie jako np. 6 szt x 70 zł. Null przy cenie zbiorczej przedziału
+        /// (kwota nie zależy wtedy od ilości) - pozycja zostaje jedną kwotą z liczbą w nazwie.</summary>
+        public decimal? Quantity { get; set; }
+        public string Unit { get; set; }
+        public decimal? UnitNet { get; set; }
+        public decimal? UnitGross { get; set; }
     }
 
     public class PaymentConfigurationDto

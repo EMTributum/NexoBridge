@@ -133,6 +133,11 @@ namespace NexoBridge.Services
             }
         }
 
+        /// <summary>
+        /// Data dostawy/wykonania usługi = data wystawienia, także przy rozliczaniu poprzedniego miesiąca (decyzja
+        /// biura, 2026-10-05: "data wystawienia i dostawy = dniu wystawienia"). Wcześniej dla poprzedniego miesiąca
+        /// była to ostatnia data tego miesiąca. Miesiąc usługi z przyszłości nadal jest odrzucany.
+        /// </summary>
         private static DateTime GetSaleDate(DateTime serviceMonthStart, DateTime issueDate)
         {
             DateTime issueMonthStart = new(issueDate.Year, issueDate.Month, 1);
@@ -141,17 +146,14 @@ namespace NexoBridge.Services
                 throw new InvalidOperationException($"Miesiąc usługi {serviceMonthStart:yyyy-MM} jest w przyszłości względem daty wystawienia {issueDate:yyyy-MM-dd}.");
             }
 
-            if (serviceMonthStart == issueMonthStart)
-            {
-                return issueDate;
-            }
-
-            return serviceMonthStart.AddMonths(1).AddDays(-1);
+            return issueDate;
         }
 
         private static void ConfigureInvoiceDates(IDokumentSprzedazy invoice, DateTime issueDate, DateTime saleDate)
         {
-            TrySetFirstPropertyPath(invoice, issueDate, "Dane.DataWystawienia", "Dane.DataDokumentu", "DataWystawienia", "DataDokumentu");
+            // DokumentDS nie ma pola DataWystawienia/DataDokumentu (zweryfikowane refleksją na ModelDanych) - data
+            // wystawienia faktury to DataWydaniaWystawienia; stare nazwy zostają jako zapas na inną wersję Sfery.
+            TrySetFirstPropertyPath(invoice, issueDate, "Dane.DataWydaniaWystawienia", "Dane.DataWystawienia", "Dane.DataDokumentu", "DataWystawienia", "DataDokumentu");
             TrySetFirstPropertyPath(invoice, saleDate, "Dane.DataSprzedazy", "DataSprzedazy");
         }
 
@@ -289,12 +291,18 @@ namespace NexoBridge.Services
                 throw new InvalidOperationException($"Pozycja `{line.Description}` nie ma żadnej kwoty netto ani brutto.");
             }
 
-            object position = CreateOneOffServicePosition(invoice.Pozycje, line.Description);
+            // Ilość i jednostka (np. 3 "szt") - cena na pozycji to wtedy cena ZA JEDNOSTKĘ, a wartość (cena x ilość)
+            // liczy Subiekt. Bez ilości/jednostki: 1 x wartość pozycji i jednostka domyślna Subiekta, jak dotąd.
+            decimal quantity = line.Quantity is > 0 ? line.Quantity.Value : 1m;
+            decimal? unitNet = line.UnitNetAmount ?? (line.NetAmount.HasValue ? line.NetAmount.Value / quantity : null);
+            decimal? unitGross = line.GrossAmount.HasValue ? line.GrossAmount.Value / quantity : null;
+
+            object position = CreateOneOffServicePosition(invoice.Pozycje, line.Description, quantity, line.Unit);
 
             TrySetFirstPropertyPath(position, line.Description, "Opis");
             TrySetFirstPropertyPath(position, true, "CenaRecznieEdytowana");
 
-            if (line.VatRate.HasValue && line.NetAmount.HasValue)
+            if (line.VatRate.HasValue && unitNet.HasValue)
             {
                 // Najpierw nawigacja (Sfera od razu przelicza cenę), a gdyby encja słownika była z innego kontekstu
                 // niż dokument i przypisanie się nie udało - klucz obcy. Skutek i tak weryfikuje porównanie
@@ -303,9 +311,9 @@ namespace NexoBridge.Services
                     && rate != null
                     && (TrySetFirstPropertyPath(position, rate, "StawkaVat") || TrySetFirstPropertyPath(position, rate.Id, "StawkaVatId")))
                 {
-                    // Stawka ustawiona jawnie - podajemy TYLKO netto, brutto liczy Subiekt z tej stawki. Ustawienie
-                    // obu cen nadpisywałoby jedną drugą przy domyślnej stawce Subiekta.
-                    TrySetFirstPropertyPath(position, line.NetAmount.Value, "Cena.NettoPrzedRabatem", "Cena.NettoPoRabacie");
+                    // Stawka ustawiona jawnie - podajemy TYLKO cenę netto za jednostkę, brutto liczy Subiekt z tej
+                    // stawki. Ustawienie obu cen nadpisywałoby jedną drugą przy domyślnej stawce Subiekta.
+                    TrySetFirstPropertyPath(position, unitNet.Value, "Cena.NettoPrzedRabatem", "Cena.NettoPoRabacie");
                     return;
                 }
 
@@ -314,32 +322,27 @@ namespace NexoBridge.Services
                     "użyto domyślnej stawki Subiekta, sprawdź fakturę.");
             }
 
-            if (line.NetAmount.HasValue)
+            if (unitNet.HasValue)
             {
-                TrySetFirstPropertyPath(position, line.NetAmount.Value, "Cena.NettoPrzedRabatem", "Cena.NettoPoRabacie");
+                TrySetFirstPropertyPath(position, unitNet.Value, "Cena.NettoPrzedRabatem", "Cena.NettoPoRabacie");
             }
 
-            if (line.GrossAmount.HasValue)
+            if (unitGross.HasValue)
             {
-                TrySetFirstPropertyPath(position, line.GrossAmount.Value, "Cena.BruttoPrzedRabatem", "Cena.BruttoPoRabacie");
+                TrySetFirstPropertyPath(position, unitGross.Value, "Cena.BruttoPrzedRabatem", "Cena.BruttoPoRabacie");
             }
         }
 
-        private static object CreateOneOffServicePosition(IPozycjeDokumentu positions, string description)
+        /// <summary>
+        /// IPozycjeDokumentu.DodajUslugeJednorazowa(nazwa, ilosc[, symbolJednostkiMiary]) - przeciążenia zweryfikowane
+        /// refleksją na InsERT.Moria.API. Z jednostką tylko, gdy wywołujący ją podał (symbol ze słownika nexo:
+        /// szt/usl/godz/min - pilnuje tego panel); bez niej jednostka domyślna Subiekta, jak dotąd.
+        /// </summary>
+        private static object CreateOneOffServicePosition(IPozycjeDokumentu positions, string description, decimal quantity, string unitSymbol)
         {
-            MethodInfo addMethod = positions.GetType().GetMethod(
-                "DodajUslugeJednorazowa",
-                BindingFlags.Instance | BindingFlags.Public,
-                binder: null,
-                types: new[] { typeof(string), typeof(decimal) },
-                modifiers: null);
-
-            if (addMethod == null)
-            {
-                throw new MissingMethodException("Nie udało się odnaleźć metody DodajUslugeJednorazowa(string, decimal).");
-            }
-
-            object created = addMethod.Invoke(positions, new object[] { description, 1m });
+            object created = string.IsNullOrWhiteSpace(unitSymbol)
+                ? positions.DodajUslugeJednorazowa(description, quantity)
+                : positions.DodajUslugeJednorazowa(description, quantity, unitSymbol.Trim());
             if (created == null)
             {
                 throw new InvalidOperationException($"Sfera nie zwróciła nowej pozycji dla `{description}`.");

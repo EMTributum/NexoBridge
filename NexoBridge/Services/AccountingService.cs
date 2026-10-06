@@ -106,7 +106,21 @@ namespace NexoBridge.Services
             var operacjaSeryjna = menedzerImportu.UtworzOperacjeImportuDokumentow(new CichaObslugaImportu());
             dynamic operacjaBypass = operacjaSeryjna;
 
-            dynamic rezultat = operacjaBypass.WykonajOperacje(zatwierdzone, parametry);
+            // Bez okresu w kontekście sesji Sfera wywala się na zapisach EP rodzaju "Wynajem" (limit
+            // najmu liczony z roku z kontekstu, nie z daty dokumentu) - patrz KontekstOkresuObrachunkowegoScope.
+            dynamic rezultat;
+            using (KontekstOkresuObrachunkowegoScope.Ustaw(_sfera, obecnyOkres, _logger))
+            {
+                try
+                {
+                    rezultat = operacjaBypass.WykonajOperacje(zatwierdzone, parametry);
+                }
+                catch (ArgumentNullException ex) when (string.Equals(ex.ParamName, "okresObrachunkowy", StringComparison.OrdinalIgnoreCase))
+                {
+                    LogujNiezadekretowanePoBledzieOkresu(menedzerDokumentow, zatwierdzone);
+                    throw;
+                }
+            }
             int liczbaWynikow = PoliczWynikiOperacji(rezultat);
             _logger.LogInformation("[DEKRETACJA OPERACJA] Zlecono={Zlecono}; wynikiOperacji={Wyniki}", (object)zatwierdzone.Count, (object)liczbaWynikow);
 
@@ -123,6 +137,33 @@ namespace NexoBridge.Services
             return menedzerDokumentow.Dane.Wszystkie()
                 .Where(d => (int)d.StatusKsiegowy == 2)
                 .ToList();
+        }
+
+        /// <summary>
+        /// Sfera dekretuje zatwierdzone dokumenty po kolei i commituje każdy osobno, więc po wyjątku
+        /// część jest już zaksięgowana, a reszta wciąż czeka w poczekalni. Pierwszy z tych czekających
+        /// to ten, na którym operacja padła - wypisujemy go razem ze schematem, żeby nie trzeba było
+        /// tego odtwarzać z liczników baseline'u (jak przy incydencie 2026-10-05).
+        /// </summary>
+        private void LogujNiezadekretowanePoBledzieOkresu(IDokumentyDoKsiegowania menedzerDokumentow, List<Tuple<DokumentDoKsiegowania, SchematImportu>> zatwierdzone)
+        {
+            try
+            {
+                var nadalOczekujace = PobierzOczekujace(menedzerDokumentow).Select(d => d.Nr).ToHashSet();
+                var niezadekretowane = zatwierdzone.Where(p => nadalOczekujace.Contains(p.Item1.Nr)).ToList();
+                string Opisz(Tuple<DokumentDoKsiegowania, SchematImportu> p) => $"{InvoiceDocumentMatcher.Describe(p.Item1)}, Schemat={p.Item2?.Nazwa ?? "brak"}";
+
+                _logger.LogError("[DEKRETACJA BŁĄD OKRESU SZCZEGÓŁY] Zadekretowane przed błędem={Zadekretowane}/{Zlecone}; najpewniej winny (pierwszy niezadekretowany)={Winny}; niezadekretowane={Niezadekretowane}. " +
+                    "Jeśli schemat tworzy zapis EP rodzaju 'Wynajem' (8,5%/12,5%), sprawdź wpis [KONTEKST OKRESU] wyżej - Sfera potrzebuje okresu w kontekście sesji.",
+                    zatwierdzone.Count - niezadekretowane.Count,
+                    zatwierdzone.Count,
+                    niezadekretowane.Count > 0 ? Opisz(niezadekretowane[0]) : "brak",
+                    niezadekretowane.Count > 0 ? string.Join(" || ", niezadekretowane.Select(Opisz)) : "brak");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[DEKRETACJA BŁĄD OKRESU SZCZEGÓŁY] Nie udało się ustalić, które dokumenty zostały niezadekretowane.");
+            }
         }
 
         /// <summary>
