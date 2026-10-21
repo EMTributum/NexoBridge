@@ -299,17 +299,19 @@ namespace NexoBridge.Services
                     return;
                 }
 
-                var wszystkieWersje = ((IEnumerable)mgrWersjiDeklaracji.Wersje).Cast<dynamic>().ToList();
-                var wybranyWzorzec = wszystkieWersje
-                    .Where(w => { try { return ((string)w.Nazwa).Contains(etykieta); } catch { return false; } })
-                    .OrderByDescending(w => w.Id)
-                    .FirstOrDefault();
+                // Wersja wg daty (Znajdz(typ, dataDo)), a nie OrderByDescending po Id - Id to Guid, więc
+                // poprzednia kolejność była losowa (V7M(2) vs V7M(3) to rzut monetą).
+                var wszystkieWersje = ((IEnumerable)mgrWersjiDeklaracji.Wersje).Cast<object>().ToList();
+                dynamic wybranyWzorzec = WersjaDeklaracjiSelector.Wybierz(
+                    (object)mgrWersjiDeklaracji, wszystkieWersje, nazwa => nazwa.Contains(etykieta), dataDo, out string regulaWyboru);
 
                 if (wybranyWzorzec == null)
                 {
                     _logger.LogWarning("[VAT KWOTY] Brak wzorca JPK_{Etykieta} do awaryjnego wyliczenia kwot VAT.", etykieta);
                     return;
                 }
+
+                _logger.LogInformation("[VAT KWOTY] Wzorzec do awaryjnego wyliczenia: {Wzorzec} ({Regula}).", (string)wybranyWzorzec.Nazwa, regulaWyboru);
 
                 using (dynamic jpkBO = mgrDeklaracji.Utworz())
                 {

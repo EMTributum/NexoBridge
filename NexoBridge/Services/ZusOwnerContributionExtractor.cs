@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using InsERT.Moria.Klienci;
@@ -12,13 +13,13 @@ namespace NexoBridge.Services
     /// <summary>
     /// Odczytuje JUŻ POLICZONE w Nexo naliczenia składek ZUS właściciela (INaliczenieSkladekZus,
     /// namespace InsERT.Moria.Klienci) bezpośrednio z bazy Gratyfikant klienta - WYŁĄCZNIE do
-    /// odczytu, przez INaliczeniaSkladekZusDane.WszystkieWgUprawnien(), NIGDY przez
+    /// odczytu, przez INaliczeniaSkladekZusDane.Wszystkie(), NIGDY przez
     /// IUbezpieczeniaWlascicielskieZus.NaliczSkladkiZUS(...) (ta druga ścieżka liczy/zapisuje NOWY
     /// rekord w produkcyjnej bazie klienta - celowo jej tu nie używamy, ryzyko niechcianego zapisu).
     /// Jeśli biuro nie policzyło jeszcze ZUS-u klienta za dany miesiąc w samym Nexo, zwracamy pustą
     /// listę - NIE liczymy niczego na siłę.
     ///
-    /// WszystkieWgUprawnien() zwraca surowe encje ModelDanych.NaliczenieSkladekZus, które NIE mają
+    /// Wszystkie() zwraca surowe encje ModelDanych.NaliczenieSkladekZus, które NIE mają
     /// kwot (DoZaplaty, SumaSkladek, ...) - te istnieją dopiero na obiekcie biznesowym
     /// INaliczenieSkladekZus, dlatego każdą encję otwieramy przez manager.Znajdz(encja) i od razu
     /// zwalniamy (bez Zapisz() - nic nie trafia do bazy).
@@ -42,7 +43,14 @@ namespace NexoBridge.Services
             DateTime periodStart = new DateTime(periodYear, periodMonth, 1);
             DateTime periodEnd = periodStart.AddMonths(1);
 
-            List<NaliczenieSkladekZus> naliczenia = dane.WszystkieWgUprawnien()
+            // Wszystkie(), NIE WszystkieWgUprawnien(): zapytanie "wg uprawnień" zostawia w sesji coś, co
+            // przy Uchwyt.Dispose() rzuca NullReferenceException w InsERT.Mox.Security.DataRightsProvider.
+            // Dispose - w procesie potomnym (using w RunZusOwnerClientWorker) zamieniało to poprawnie
+            // odczytane wpisy w status FAILED. Sprawdzone w NexoBridgeKonsola (--tax-preview, TP_ZUS_VARIANT):
+            // identyczne wpisy i kwoty, Dispose bez błędu. Robot ma pełne uprawnienia, więc filtr
+            // uprawnień niczego tu nie odcinał.
+            List<NaliczenieSkladekZus> naliczenia = ((IEnumerable)((dynamic)dane).Wszystkie())
+                .Cast<NaliczenieSkladekZus>()
                 .Where(n => n.MiesiacNaliczenia >= periodStart && n.MiesiacNaliczenia < periodEnd)
                 .ToList();
 

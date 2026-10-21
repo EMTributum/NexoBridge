@@ -102,6 +102,16 @@ namespace NexoBridge
                 return;
             }
 
+            // Tryb procesu potomnego dla POJEDYNCZEGO klienta w podglądzie podatków - patrz
+            // TaxPreviewService.PoliczDlaKlientaWProcesie. Ten sam powód wczesnej, samotnej gałęzi w Main.
+            if (args.Length > 0 && string.Equals(args[0], "--tax-preview-client-worker", StringComparison.Ordinal))
+            {
+                LoadEnvironment();
+                RegisterNexoRuntimeResolvers();
+                Environment.Exit(RunTaxPreviewClientWorker());
+                return;
+            }
+
             // Tryb procesu potomnego dla POJEDYNCZEGO klienta w backfillu linków do podglądu faktur -
             // patrz BackfillService (EnumerateOneClientInChildProcessAsync) i to samo uzasadnienie co
             // przy --payroll-client-worker powyżej (JIT + świeży, nieskażony stan statyczny Sfery).
@@ -264,6 +274,8 @@ namespace NexoBridge
                 builder.Services.AddSingleton<RawPayrollCountsResultStore>();
                 builder.Services.AddSingleton<ZusOwnerContributionJobQueue>();
                 builder.Services.AddSingleton<ZusOwnerContributionResultStore>();
+                builder.Services.AddSingleton<TaxPreviewJobQueue>();
+                builder.Services.AddSingleton<TaxPreviewResultStore>();
                 builder.Services.AddSingleton<DuplicateScanJobQueue>();
                 builder.Services.AddSingleton<DuplicateScanResultStore>();
                 builder.Services.AddSingleton<BackfillEnumerateJobQueue>();
@@ -282,6 +294,7 @@ namespace NexoBridge
                 builder.Services.AddHostedService<PayrollCountsBackgroundWorker>();
                 builder.Services.AddHostedService<RawPayrollCountsBackgroundWorker>();
                 builder.Services.AddHostedService<ZusOwnerContributionBackgroundWorker>();
+                builder.Services.AddHostedService<TaxPreviewBackgroundWorker>();
                 builder.Services.AddHostedService<DuplicateScanBackgroundWorker>();
                 builder.Services.AddHostedService<BackfillEnumerateBackgroundWorker>();
                 builder.Services.AddHostedService<BackfillWriteCommentsBackgroundWorker>();
@@ -325,6 +338,7 @@ namespace NexoBridge
                 app.MapPayrollCountsEndpoints();
                 app.MapRawPayrollCountsEndpoints();
                 app.MapZusOwnerContributionEndpoints();
+                app.MapTaxPreviewEndpoints();
                 app.MapDuplicateScanEndpoints();
                 app.MapBackfillEndpoints();
 
@@ -469,21 +483,23 @@ namespace NexoBridge
                 var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
                 ZusOwnerContributionWorkerRequest request = JsonSerializer.Deserialize<ZusOwnerContributionWorkerRequest>(inputJson, jsonOptions);
 
+                var silnik = new SferaEngine();
                 try
                 {
-                    using (var silnik = new SferaEngine())
-                    {
-                        // Rachmistrz, nie Gratyfikant - rozliczenia właścicielskie (ZUS właściciela) to moduł Rachmistrza.
-                        silnik.Uruchom(request.Username, request.Password, request.DatabaseName, ProductId.Rachmistrz);
+                    // Rachmistrz, nie Gratyfikant - rozliczenia właścicielskie (ZUS właściciela) to moduł Rachmistrza.
+                    silnik.Uruchom(request.Username, request.Password, request.DatabaseName, ProductId.Rachmistrz);
 
-                        response.Entries = ZusOwnerContributionExtractor.GetOwnerContributionsForPeriod(
-                            silnik.Sfera, request.PeriodYear, request.PeriodMonth);
-                    }
+                    response.Entries = ZusOwnerContributionExtractor.GetOwnerContributionsForPeriod(
+                        silnik.Sfera, request.PeriodYear, request.PeriodMonth);
                 }
                 catch (Exception ex)
                 {
                     response.Status = "FAILED";
                     response.Error = ex.GetBaseException().Message;
+                }
+                finally
+                {
+                    ZwolnijSesjeProcesuPotomnego(silnik, "zus-owner-client-worker");
                 }
 
                 string outputJson = JsonSerializer.Serialize(response, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
@@ -496,6 +512,73 @@ namespace NexoBridge
             {
                 Console.Error.WriteLine($"[zus-owner-client-worker] Krytyczny błąd: {ex}");
                 return 1;
+            }
+        }
+
+        /// <summary>Podgląd podatków JEDNEGO klienta (TaxPreviewCalculator) w izolowanym procesie -
+        /// wszystkie okresy w jednej sesji Rachmistrza, WYŁĄCZNIE odczyt. Patrz TaxPreviewService.</summary>
+        private static int RunTaxPreviewClientWorker()
+        {
+            var response = new TaxPreviewWorkerResponse { Status = "SUCCESS" };
+
+            try
+            {
+                string inputJson = Console.In.ReadToEnd();
+                var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                TaxPreviewWorkerRequest request = JsonSerializer.Deserialize<TaxPreviewWorkerRequest>(inputJson, jsonOptions);
+
+                // Podgląd niezaksięgowanych rat (NaliczAmortyzacje bez Zapisz) - domyślnie wyłączony,
+                // dopóki ścieżka z ratą > 0 nie zostanie sprawdzona w Konsoli na WARSZTATOWNI.
+                bool podgladAmortyzacji = string.Equals(Environment.GetEnvironmentVariable("TAX_PREVIEW_PENDING_AMORTIZATION"), "true", StringComparison.OrdinalIgnoreCase);
+
+                var silnik = new SferaEngine();
+                try
+                {
+                    silnik.Uruchom(request.Username, request.Password, request.DatabaseName, ProductId.Rachmistrz);
+                    response.Periods = TaxPreviewCalculator.Compute(silnik.Sfera, request, podgladAmortyzacji);
+
+                    int nieudane = response.Periods.Count(p => p.Status is "FAILED" or "SKIPPED_DEADLINE");
+                    int czesciowe = response.Periods.Count(p => p.Status == "PARTIAL_SUCCESS");
+                    response.Status = nieudane == 0 && czesciowe == 0
+                        ? "SUCCESS"
+                        : nieudane == response.Periods.Count ? "FAILED" : "PARTIAL_SUCCESS";
+                }
+                catch (Exception ex)
+                {
+                    response.Status = "FAILED";
+                    response.Error = ex.GetBaseException().Message;
+                }
+                finally
+                {
+                    ZwolnijSesjeProcesuPotomnego(silnik, "tax-preview-client-worker");
+                }
+
+                string outputJson = JsonSerializer.Serialize(response, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                Console.Out.Write(PayrollWorkerResultStartMarker);
+                Console.Out.Write(outputJson);
+                Console.Out.Write(PayrollWorkerResultEndMarker);
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[tax-preview-client-worker] Krytyczny błąd: {ex}");
+                return 1;
+            }
+        }
+
+        /// <summary>Dispose sesji Sfery w procesie potomnym POZA blokiem liczenia - wyjątek z Dispose
+        /// (np. NullReferenceException w DataRightsProvider.Dispose, patrz ZusOwnerContributionExtractor)
+        /// nie może zamieniać już policzonego wyniku w FAILED. Trafia na stderr, który rodzic loguje
+        /// jako ostrzeżenie.</summary>
+        private static void ZwolnijSesjeProcesuPotomnego(SferaEngine silnik, string tryb)
+        {
+            try
+            {
+                silnik.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[{tryb}] Ostrzeżenie: zamknięcie sesji Sfery rzuciło {ex.GetBaseException().GetType().Name}: {ex.GetBaseException().Message}");
             }
         }
 
@@ -543,7 +626,7 @@ namespace NexoBridge
                 {
                     response.Status = "FAILED";
                     response.Error = ex.GetBaseException().Message;
-                    workerLogger.LogError(ex, "[BACKFILL KOMENTARZE] {Database}: zapis nieudany.", request.DatabaseName);
+                    workerLogger.LogError(ex, "[BACKFILL ENUMERATE] {Database}: enumeracja nieudana.", request.DatabaseName);
                 }
                 finally
                 {
@@ -606,7 +689,7 @@ namespace NexoBridge
                 {
                     response.Status = "FAILED";
                     response.Error = ex.GetBaseException().Message;
-                    workerLogger.LogError(ex, "[BACKFILL ENUMERATE] {Database}: enumeracja nieudana.", request.DatabaseName);
+                    workerLogger.LogError(ex, "[BACKFILL KOMENTARZE] {Database}: zapis nieudany.", request.DatabaseName);
                 }
                 finally
                 {

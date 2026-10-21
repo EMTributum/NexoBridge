@@ -42,7 +42,7 @@ namespace NexoBridge.Models
     /// <summary>Jedno naliczenie ZUS właściciela (INaliczenieSkladekZus) dopasowane do żądanego
     /// okresu - zwykle jeden wpis na klienta (właściciel JDG), potencjalnie więcej przy osobie
     /// współpracującej. Odczytane WYŁĄCZNIE z już istniejących, policzonych w Nexo naliczeń
-    /// (WszystkieWgUprawnien) - nigdy nie liczone/zapisywane na nowo przez ten kod.</summary>
+    /// (Wszystkie) - nigdy nie liczone/zapisywane na nowo przez ten kod.</summary>
     public class ZusOwnerContributionEntry
     {
         public string PersonName { get; set; }
