@@ -62,7 +62,7 @@ namespace NexoBridge.Services
 
             if (oczekujace.Count == 0)
             {
-                await ZapiszBaselinePoDekretacjiAsync(job, menedzerDokumentow, wybor);
+                await ZapiszBaselinePoDekretacjiAsync(job, menedzerDokumentow, wybor, brakSchematu: null, bledneSchematy: null);
                 _logger.LogInformation("Zakończono: Brak nowych dokumentów do zadekretowania po synchronizacji.");
                 return (null, new List<Tuple<DokumentDoKsiegowania, SchematImportu>>(), oczekujace, new List<DokumentDoKsiegowania>(), new List<DokumentDoKsiegowania>());
             }
@@ -91,7 +91,7 @@ namespace NexoBridge.Services
             if (zatwierdzone.Count == 0)
             {
                 _logger.LogWarning("Żaden dokument z Poczekalni nie pasuje do schematów dekretacji. Nie przerywam procesu - raport zostanie zwrócony na front.");
-                await ZapiszBaselinePoDekretacjiAsync(job, menedzerDokumentow, wybor);
+                await ZapiszBaselinePoDekretacjiAsync(job, menedzerDokumentow, wybor, brakSchematu, bledneSchematy);
                 return (null, zatwierdzone, oczekujace, brakSchematu, bledneSchematy);
             }
 
@@ -124,7 +124,7 @@ namespace NexoBridge.Services
             int liczbaWynikow = PoliczWynikiOperacji(rezultat);
             _logger.LogInformation("[DEKRETACJA OPERACJA] Zlecono={Zlecono}; wynikiOperacji={Wyniki}", (object)zatwierdzone.Count, (object)liczbaWynikow);
 
-            await ZapiszBaselinePoDekretacjiAsync(job, menedzerDokumentow, wybor);
+            await ZapiszBaselinePoDekretacjiAsync(job, menedzerDokumentow, wybor, brakSchematu, bledneSchematy);
 
             return (rezultat, zatwierdzone, oczekujace, brakSchematu, bledneSchematy);
         }
@@ -173,14 +173,58 @@ namespace NexoBridge.Services
         /// Klasyfikatora, bo inaczej baseline "po cichu" uznałby ten dokument za znany i nikt by go
         /// więcej automatycznie nie spróbował zadekretować.
         /// </summary>
-        private async Task ZapiszBaselinePoDekretacjiAsync(ImportJob job, IDokumentyDoKsiegowania menedzerDokumentow, WaitingRoomDocumentSelection wybor)
+        /// <remarks>
+        /// Dokumenty odrzucone przez Sędziego nigdy nie trafiają do operacji dekretacji, więc zgłaszamy
+        /// je osobno (brak schematu / błędy krytyczne), żeby nie mieszały się z dokumentami, które
+        /// faktycznie poszły do dekretacji i mimo to zostały w Poczekalni.
+        /// </remarks>
+        private async Task ZapiszBaselinePoDekretacjiAsync(
+            ImportJob job,
+            IDokumentyDoKsiegowania menedzerDokumentow,
+            WaitingRoomDocumentSelection wybor,
+            IEnumerable<DokumentDoKsiegowania> brakSchematu,
+            IEnumerable<DokumentDoKsiegowania> bledneSchematy)
         {
             var poDekretacji = PobierzOczekujace(menedzerDokumentow);
             var poDekretacjiNumery = poDekretacji.Select(d => d.Nr).ToHashSet();
 
-            var utkniete = (wybor?.Included ?? new List<DokumentDoKsiegowania>())
+            var brakSchematuNumery = (brakSchematu ?? Enumerable.Empty<DokumentDoKsiegowania>()).Select(d => d.Nr).ToHashSet();
+            var bledneSchematyNumery = (bledneSchematy ?? Enumerable.Empty<DokumentDoKsiegowania>()).Select(d => d.Nr).ToHashSet();
+
+            var wszystkieUtkniete = (wybor?.Included ?? new List<DokumentDoKsiegowania>())
                 .Where(d => poDekretacjiNumery.Contains(d.Nr))
                 .ToList();
+            var utknieteBezSchematu = wszystkieUtkniete.Where(d => brakSchematuNumery.Contains(d.Nr)).ToList();
+            var utknieteZBledamiSchematu = wszystkieUtkniete.Where(d => !brakSchematuNumery.Contains(d.Nr) && bledneSchematyNumery.Contains(d.Nr)).ToList();
+            var utkniete = wszystkieUtkniete.Where(d => !brakSchematuNumery.Contains(d.Nr) && !bledneSchematyNumery.Contains(d.Nr)).ToList();
+
+            if (utknieteBezSchematu.Count > 0)
+            {
+                string opis = OpiszDokumenty(utknieteBezSchematu);
+                _logger.LogWarning("[POCZEKALNIA BRAK SCHEMATU] {Count} dokumentów nie ma schematu dekretacji i zostaje w Poczekalni: {Dokumenty}", utknieteBezSchematu.Count, opis);
+                await _errorReporter.ReportJobFailureAsync(
+                    job,
+                    component: "AccountingService",
+                    activity: "Dekretacja",
+                    operation: "BrakSchematuDekretacji",
+                    message: $"Brak schematu dekretacji dla {utknieteBezSchematu.Count} dokumentów - Sędzia nie dopasował żadnego schematu, dokumenty nie zostały zadekretowane i czekają w Poczekalni: {opis}",
+                    exception: null,
+                    cancellationToken: default);
+            }
+
+            if (utknieteZBledamiSchematu.Count > 0)
+            {
+                string opis = OpiszDokumenty(utknieteZBledamiSchematu);
+                _logger.LogWarning("[POCZEKALNIA BŁĘDY SCHEMATU] {Count} dokumentów odrzuconych przez Sędziego z błędami krytycznymi zostaje w Poczekalni: {Dokumenty}", utknieteZBledamiSchematu.Count, opis);
+                await _errorReporter.ReportJobFailureAsync(
+                    job,
+                    component: "AccountingService",
+                    activity: "Dekretacja",
+                    operation: "BledySchematuDekretacji",
+                    message: $"{utknieteZBledamiSchematu.Count} dokumentów odrzuconych przez Sędziego (błędy krytyczne w fakturze) - nie zostały zadekretowane i czekają w Poczekalni: {opis}",
+                    exception: null,
+                    cancellationToken: default);
+            }
 
             if (utkniete.Count > 0)
             {
