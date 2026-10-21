@@ -3,7 +3,9 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Reflection;
+using System.Text.RegularExpressions;
 
 namespace NexoBridge.Services
 {
@@ -30,11 +32,17 @@ namespace NexoBridge.Services
             public bool Deleted { get; set; }
             public int? ZapisKsiegowyId { get; set; }
             public int? ZapisVatId { get; set; }
+            /// <summary>Dekret Rewizora (KomentarzNexo.BazowyDokumentKsiegowy).</summary>
+            public int? DokumentKsiegowyId { get; set; }
             public string TypPowiazanego { get; set; }
             public string NazwaPowiazanego { get; set; }
 
             /// <summary>Zapis potwierdzony odwrotnie (komentarz znaleziony wśród komentarzy tego zapisu).</summary>
             public int? ConfirmedEntityId { get; set; }
+
+            public string ViewerUrl => ExtractViewerUrl(Tresc, ZserializowanaTresc);
+
+            public bool PureLink => IsPureLink(Tresc, ZserializowanaTresc);
 
             public bool ContainsUrl(string url)
             {
@@ -47,7 +55,7 @@ namespace NexoBridge.Services
                     || (Tresc ?? string.Empty).Contains(url, StringComparison.OrdinalIgnoreCase);
             }
 
-            /// <summary>Id zapisu, do którego komentarz jest podpięty, wg klucza menedżera (KPiR/EP/Vat).</summary>
+            /// <summary>Id zapisu, do którego komentarz jest podpięty, wg klucza menedżera (KPiR/EP/Vat/DK).</summary>
             public int? LinkedEntityId(string managerKey)
             {
                 if (ConfirmedEntityId.HasValue)
@@ -66,7 +74,12 @@ namespace NexoBridge.Services
                     return ZapisKsiegowyId;
                 }
 
-                return ZapisKsiegowyId ?? ZapisVatId;
+                if (string.Equals(managerKey, "DK", StringComparison.OrdinalIgnoreCase))
+                {
+                    return DokumentKsiegowyId;
+                }
+
+                return ZapisKsiegowyId ?? ZapisVatId ?? DokumentKsiegowyId;
             }
 
             public string Describe()
@@ -165,47 +178,204 @@ namespace NexoBridge.Services
             return result;
         }
 
-        /// <summary>
-        /// Id zapisów (KPiR/EP przez ZapisKsiegowy, VAT przez BazowyZapisWEwidencjiVAT), które mają już aktywny
-        /// komentarz zawierający <paramref name="urlMarker"/> - jedno zapytanie na bazę zamiast odczytu
-        /// komentarzy rekord po rekordzie (backfill). Zwraca null, gdy zapytania nie da się wykonać.
-        /// </summary>
-        public static (HashSet<int> ZapisyKsiegowe, HashSet<int> ZapisyVat) EntityIdsWithLink(object komentarzeManager, string urlMarker, out string error)
+        // Link do podglądu = ścieżka /faktury/{id} (niezależnie od hosta) ORAZ nasza etykieta - sam "/faktury/"
+        // łapał też obce linki wklejone przez księgowych (np. portal dostawcy), a takie zapisy backfill pomijał.
+        internal const string ViewerUrlMarker = "/faktury/";
+        internal const string ViewerLinkLabel = "Podgląd faktury";
+
+        private static readonly Regex ViewerUrlRegex = new(@"https?://[^\s""'<>]+?/faktury/[^\s""'<>]+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        private static readonly Regex PureTrescRegex = new(@"^Podgląd faktury[^:\r\n]{0,40}:\s*https?://\S+\s*$", RegexOptions.CultureInvariant);
+
+        internal sealed class LinkedCommentIndex
         {
-            object dane = GetData(komentarzeManager, out error);
-            if (dane == null)
+            public Dictionary<int, List<CommentInfo>> ZapisyKsiegowe { get; } = new Dictionary<int, List<CommentInfo>>();
+            public Dictionary<int, List<CommentInfo>> ZapisyVat { get; } = new Dictionary<int, List<CommentInfo>>();
+            public Dictionary<int, List<CommentInfo>> DokumentyKsiegowe { get; } = new Dictionary<int, List<CommentInfo>>();
+
+            /// <summary>Słownik zapisów danego typu backfillu: VAT, DK (dekret Rewizora), reszta = zapisy księgowe KPiR/EP.</summary>
+            public Dictionary<int, List<CommentInfo>> ForEntityType(string entityType)
             {
-                return (null, null);
+                return entityType?.ToUpperInvariant() switch
+                {
+                    "VAT" => ZapisyVat,
+                    "DK" => DokumentyKsiegowe,
+                    _ => ZapisyKsiegowe
+                };
+            }
+        }
+
+        /// <summary>
+        /// Aktywne komentarze z linkiem do podglądu, pogrupowane po zapisie (KPiR/EP przez ZapisKsiegowy, VAT przez
+        /// BazowyZapisWEwidencjiVAT) - jedno zapytanie na bazę zamiast odczytu komentarzy rekord po rekordzie
+        /// (backfill). Zwraca null, gdy zapytania nie da się wykonać.
+        /// </summary>
+        public static LinkedCommentIndex LinkedComments(object komentarzeManager, out string error)
+        {
+            IQueryable<KomentarzNexo> wszystkie = Zapytanie(komentarzeManager, out error);
+            if (wszystkie == null)
+            {
+                return null;
             }
 
             try
             {
-                var wszystkie = dane.GetType().GetMethod("Wszystkie", new[] { typeof(string[]) })
-                    ?.Invoke(dane, new object[] { Array.Empty<string>() }) as IQueryable<KomentarzNexo>;
-                if (wszystkie == null)
+                var indeks = new LinkedCommentIndex();
+                foreach (CommentInfo komentarz in Projekcja(wszystkie.Where(k => !k.Usuniety
+                    && (k.Tresc.Contains(ViewerUrlMarker) || k.ZserializowanaTresc.Contains(ViewerUrlMarker))
+                    && (k.Tresc.Contains(ViewerLinkLabel) || k.ZserializowanaTresc.Contains(ViewerLinkLabel)))))
                 {
-                    error = "Dane.Wszystkie(String[]) nie zwróciło IQueryable<KomentarzNexo>";
-                    return (null, null);
+                    if (komentarz.ZapisKsiegowyId.HasValue)
+                    {
+                        Dodaj(indeks.ZapisyKsiegowe, komentarz.ZapisKsiegowyId.Value, komentarz);
+                    }
+
+                    if (komentarz.ZapisVatId.HasValue)
+                    {
+                        Dodaj(indeks.ZapisyVat, komentarz.ZapisVatId.Value, komentarz);
+                    }
+
+                    if (komentarz.DokumentKsiegowyId.HasValue)
+                    {
+                        Dodaj(indeks.DokumentyKsiegowe, komentarz.DokumentKsiegowyId.Value, komentarz);
+                    }
                 }
 
-                var powiazania = wszystkie
-                    .Where(k => !k.Usuniety && (k.Tresc.Contains(urlMarker) || k.ZserializowanaTresc.Contains(urlMarker)))
-                    .Select(k => new
-                    {
-                        ZapisKsiegowyId = (int?)k.ZapisKsiegowy.Id,
-                        ZapisVatId = (int?)k.BazowyZapisWEwidencjiVAT.Id
-                    })
-                    .ToList();
-
-                var ksiegowe = new HashSet<int>(powiazania.Where(p => p.ZapisKsiegowyId.HasValue).Select(p => p.ZapisKsiegowyId.Value));
-                var vat = new HashSet<int>(powiazania.Where(p => p.ZapisVatId.HasValue).Select(p => p.ZapisVatId.Value));
-                return (ksiegowe, vat);
+                return indeks;
             }
             catch (Exception ex)
             {
                 error = $"zapytanie o komentarze z linkiem: {ex.GetBaseException().GetType().Name}: {ex.GetBaseException().Message}";
-                return (null, null);
+                return null;
             }
+        }
+
+        /// <summary>
+        /// Komentarze po Id czytane projekcją - wartości idą prosto z bazy, a nie z encji śledzonych przez kontekst
+        /// sesji, więc to rzetelny odczyt kontrolny po zapisie w tej samej sesji (sprawdzone w NexoBridgeKonsola
+        /// --comment-relink-test na WARSZTATOWNI). Zwraca null, gdy zapytania nie da się wykonać.
+        /// </summary>
+        public static List<CommentInfo> ReadFromDatabase(object komentarzeManager, IEnumerable<int> ids, out string error)
+        {
+            IQueryable<KomentarzNexo> wszystkie = Zapytanie(komentarzeManager, out error);
+            if (wszystkie == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                var wynik = new List<CommentInfo>();
+                foreach (int[] paczka in (ids ?? Enumerable.Empty<int>()).Distinct().Chunk(500))
+                {
+                    wynik.AddRange(Projekcja(wszystkie.Where(k => paczka.Contains(k.Id))));
+                }
+
+                return wynik;
+            }
+            catch (Exception ex)
+            {
+                error = $"odczyt komentarzy po Id: {ex.GetBaseException().GetType().Name}: {ex.GetBaseException().Message}";
+                return null;
+            }
+        }
+
+        public static string ExtractViewerUrl(string tresc, string zserializowanaTresc)
+        {
+            foreach (string zrodlo in new[] { zserializowanaTresc, tresc })
+            {
+                if (string.IsNullOrWhiteSpace(zrodlo))
+                {
+                    continue;
+                }
+
+                Match match = ViewerUrlRegex.Match(WebUtility.HtmlDecode(zrodlo));
+                if (match.Success)
+                {
+                    return match.Value.TrimEnd('.', ',', ';', ')');
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>Komentarz zawiera wyłącznie nasz link ("Podgląd faktury...: URL" i HTML z jednym &lt;a&gt;) -
+        /// tylko taki naprawa backfillu może nadpisać, nie ryzykując utraty tekstu dopisanego przez księgowego.</summary>
+        public static bool IsPureLink(string tresc, string zserializowanaTresc)
+        {
+            if (string.IsNullOrWhiteSpace(tresc) || !PureTrescRegex.IsMatch(tresc.Trim()))
+            {
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(zserializowanaTresc))
+            {
+                return true;
+            }
+
+            string html = WebUtility.HtmlDecode(zserializowanaTresc);
+            if (Regex.Matches(html, "href", RegexOptions.IgnoreCase).Count != 1)
+            {
+                return false;
+            }
+
+            string tekst = Regex.Replace(html, "<[^>]+>", string.Empty).Trim();
+            return tekst.StartsWith(ViewerLinkLabel, StringComparison.Ordinal) && tekst.Length <= 60;
+        }
+
+        private static IQueryable<KomentarzNexo> Zapytanie(object komentarzeManager, out string error)
+        {
+            object dane = GetData(komentarzeManager, out error);
+            if (dane == null)
+            {
+                return null;
+            }
+
+            var wszystkie = dane.GetType().GetMethod("Wszystkie", new[] { typeof(string[]) })
+                ?.Invoke(dane, new object[] { Array.Empty<string>() }) as IQueryable<KomentarzNexo>;
+            if (wszystkie == null)
+            {
+                error = "Dane.Wszystkie(String[]) nie zwróciło IQueryable<KomentarzNexo>";
+            }
+
+            return wszystkie;
+        }
+
+        private static List<CommentInfo> Projekcja(IQueryable<KomentarzNexo> zapytanie)
+        {
+            return zapytanie
+                .Select(k => new
+                {
+                    k.Id,
+                    ZapisKsiegowyId = (int?)k.ZapisKsiegowy.Id,
+                    ZapisVatId = (int?)k.BazowyZapisWEwidencjiVAT.Id,
+                    DokumentKsiegowyId = (int?)k.BazowyDokumentKsiegowy.Id,
+                    k.Usuniety,
+                    k.Tresc,
+                    k.ZserializowanaTresc
+                })
+                .ToList()
+                .Select(k => new CommentInfo
+                {
+                    Id = k.Id,
+                    ZapisKsiegowyId = k.ZapisKsiegowyId,
+                    ZapisVatId = k.ZapisVatId,
+                    DokumentKsiegowyId = k.DokumentKsiegowyId,
+                    Deleted = k.Usuniety,
+                    Tresc = k.Tresc,
+                    ZserializowanaTresc = k.ZserializowanaTresc
+                })
+                .ToList();
+        }
+
+        private static void Dodaj(Dictionary<int, List<CommentInfo>> slownik, int zapisId, CommentInfo komentarz)
+        {
+            if (!slownik.TryGetValue(zapisId, out List<CommentInfo> lista))
+            {
+                lista = new List<CommentInfo>();
+                slownik[zapisId] = lista;
+            }
+
+            lista.Add(komentarz);
         }
 
         private static object GetData(object komentarzeManager, out string error)
@@ -265,6 +435,7 @@ namespace NexoBridge.Services
                     || SferaReflectionHelpers.ReadBoolCandidate(komentarz, "IsInRecycleBin") == true,
                 ZapisKsiegowyId = SferaReflectionHelpers.ReadIntCandidate(komentarz, "ZapisKsiegowy.Id"),
                 ZapisVatId = SferaReflectionHelpers.ReadIntCandidate(komentarz, "BazowyZapisWEwidencjiVAT.Id"),
+                DokumentKsiegowyId = SferaReflectionHelpers.ReadIntCandidate(komentarz, "BazowyDokumentKsiegowy.Id"),
                 TypPowiazanego = SferaReflectionHelpers.ReadStringCandidate(komentarz, "TypPowiazanego"),
                 NazwaPowiazanego = SferaReflectionHelpers.ReadStringCandidate(komentarz, "NazwaPowiazanego")
             };

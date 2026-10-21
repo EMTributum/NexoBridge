@@ -98,16 +98,35 @@ namespace NexoBridge.Services
                 OpiszStatystykeZalacznikow(job.Attachments),
                 OpiszStatystykeMetadanych(job.InvoicesMetadata));
 
+            var raporty = zatwierdzone.Select(z => ImportManifestService.ZnajdzRaportDlaDokumentu(manifest, z.Item1)).ToList();
+            var przypisania = PrzypiszZalaczniki(job, zatwierdzone, raporty);
+
             for (int i = 0; i < zatwierdzone.Count; i++)
             {
                 var dok = zatwierdzone[i].Item1;
                 string nrSystemowy = dok.NumerDokumentu ?? "";
                 string nipSystemowy = dok.PodmiotHistoria?.NIP ?? "";
-                var raport = ImportManifestService.ZnajdzRaportDlaDokumentu(manifest, dok);
+                var raport = raporty[i];
                 var operacja = UtworzOperacje(job, dok, raport, i);
                 operacje.Add(operacja);
 
-                var zalacznik = ZnajdzZalacznik(job, dok, raport, out string attachmentMatchStatus);
+                var zalacznik = przypisania[i].Zalacznik;
+                string attachmentMatchStatus = przypisania[i].MatchStatus;
+                if (zalacznik == null && przypisania[i].Niejednoznaczne)
+                {
+                    niepodpieteZalaczniki.Add($"NIEJEDNOZNACZNE -> {nrSystemowy} ({nipSystemowy})");
+                    operacja.FinalStatus = "ambiguous";
+                    operacja.MatchStatus = attachmentMatchStatus;
+                    operacja.FailureReason = "Wiele plików z paczki pasuje do tego dokumentu (albo plik pasuje do kilku dokumentów).";
+                    if (raport != null)
+                    {
+                        raport.AttachmentStatus = "ambiguous";
+                        ImportManifestService.DodajWarning(raport, "Nie podpięto linku do podglądu, bo dopasowanie pliku do dokumentu jest niejednoznaczne.");
+                    }
+                    _logger.LogDebug("[ZAŁĄCZNIK NIEJEDNOZNACZNY] Dokument={Numer}; NIP={Nip}", nrSystemowy, nipSystemowy);
+                    continue;
+                }
+
                 if (zalacznik == null)
                 {
                     bool oczekiwanoPdf = CzyOczekiwanoPdf(raport);
@@ -179,8 +198,7 @@ namespace NexoBridge.Services
                     continue;
                 }
 
-                string plainTextFallback = $"Podgląd faktury (oryginał): {viewerUrl}";
-                string htmlLink = $"<a href=\"{System.Net.WebUtility.HtmlEncode(viewerUrl)}\">Podgląd faktury (oryginał)</a>";
+                var (htmlLink, plainTextFallback) = ZbudujTresciLinku(viewerUrl);
 
                 try
                 {
@@ -833,7 +851,9 @@ namespace NexoBridge.Services
         {
             ["KPiR"] = "IZapisyWKPiR",
             ["Vat"] = "IZapisyWEwidencjiVAT",
-            ["EP"] = "IZapisyWEP"
+            ["EP"] = "IZapisyWEP",
+            // Dekret Rewizora (backfill spółek) - DokumentKsiegowy, Dane.FindById(int) jak w zapisach Rachmistrza.
+            ["DK"] = "IDokumentyKsiegowe"
         };
 
         private string PobierzInterfejsMenedzera(string managerKey)
@@ -1180,39 +1200,97 @@ namespace NexoBridge.Services
             };
         }
 
-        private AttachmentPayload ZnajdzZalacznik(ImportJob job, DokumentDoKsiegowania dok, DocumentProcessingReport raport, out string matchStatus)
+        /// <summary>Treść komentarza z linkiem do podglądu - wspólna dla importu i backfillu.</summary>
+        internal static (string Html, string Plain) ZbudujTresciLinku(string viewerUrl)
         {
-            matchStatus = "none";
-            if (job.Attachments == null || job.Attachments.Count == 0) return null;
+            return (
+                $"<a href=\"{System.Net.WebUtility.HtmlEncode(viewerUrl)}\">Podgląd faktury (oryginał)</a>",
+                $"Podgląd faktury (oryginał): {viewerUrl}");
+        }
 
-            if (raport != null && !string.IsNullOrWhiteSpace(raport.PdfFileName))
+        private sealed class PrzypisanieZalacznika
+        {
+            public AttachmentPayload Zalacznik { get; set; }
+            public string MatchStatus { get; set; } = "none";
+            public bool Niejednoznaczne { get; set; }
+        }
+
+        // Przypisanie dokument -> plik liczone raz dla całej paczki:
+        // (1) po PdfFileName wpisu manifestu - parę metadane<->dokument manifest dopasował już na tle CAŁEJ poczekalni;
+        // (2) dla pozostałych dokumentów tylko DOKŁADNY numer (+NIP), wyłącznie spośród plików jeszcze nieużytych,
+        //     i tylko gdy relacja jest 1:1. Wcześniej fallback sprawdzał warianty/sufiksy na pojedynczym dokumencie
+        //     (np. "FV/1/05/2026" pasowało do "FV/7/05/2026" przez wariant "052026") i nie pamiętał, które pliki
+        //     już przypisano - dokument spoza paczki dostawał link do cudzej faktury tego samego dostawcy.
+        private List<PrzypisanieZalacznika> PrzypiszZalaczniki(
+            ImportJob job,
+            List<Tuple<DokumentDoKsiegowania, SchematImportu>> zatwierdzone,
+            List<DocumentProcessingReport> raporty)
+        {
+            var wynik = zatwierdzone.Select(_ => new PrzypisanieZalacznika()).ToList();
+            var zalaczniki = job.Attachments ?? new List<AttachmentPayload>();
+            if (zalaczniki.Count == 0)
             {
-                var byName = job.Attachments.FirstOrDefault(z => string.Equals(z.FileName, raport.PdfFileName, StringComparison.OrdinalIgnoreCase));
-                if (byName != null)
+                return wynik;
+            }
+
+            var uzyte = new HashSet<AttachmentPayload>();
+            for (int i = 0; i < zatwierdzone.Count; i++)
+            {
+                string pdf = raporty[i]?.PdfFileName;
+                if (string.IsNullOrWhiteSpace(pdf))
                 {
-                    matchStatus = "pdfFileName";
-                    return byName;
+                    continue;
+                }
+
+                var poNazwie = zalaczniki.FirstOrDefault(z => !uzyte.Contains(z) && string.Equals(z.FileName, pdf, StringComparison.OrdinalIgnoreCase));
+                if (poNazwie != null)
+                {
+                    wynik[i].Zalacznik = poNazwie;
+                    wynik[i].MatchStatus = "pdfFileName";
+                    uzyte.Add(poNazwie);
                 }
             }
 
-            var matches = job.Attachments
-                .Select(z => new { Attachment = z, Match = InvoiceDocumentMatcher.Match(new[] { dok }, new InvoiceMetadata { InvoiceNumber = z.DocumentNumber, VendorNip = z.VendorNip }) })
-                .Where(x => x.Match.Document != null)
-                .ToList();
-
-            if (matches.Count == 1)
+            var kandydaci = new Dictionary<int, List<AttachmentPayload>>();
+            for (int i = 0; i < zatwierdzone.Count; i++)
             {
-                matchStatus = matches[0].Match.Status;
-                return matches[0].Attachment;
+                if (wynik[i].Zalacznik != null)
+                {
+                    continue;
+                }
+
+                var dok = zatwierdzone[i].Item1;
+                kandydaci[i] = zalaczniki
+                    .Where(z => !uzyte.Contains(z))
+                    .Where(z =>
+                    {
+                        var match = InvoiceDocumentMatcher.Match(new[] { dok }, new InvoiceMetadata { InvoiceNumber = z.DocumentNumber, VendorNip = z.VendorNip });
+                        return match.Document != null && (match.Status == "matchedExact" || match.Status == "matchedExactWithoutNip");
+                    })
+                    .ToList();
             }
 
-            if (matches.Count > 1 && raport != null)
+            foreach (var (i, pliki) in kandydaci.Select(kv => (kv.Key, kv.Value)))
             {
-                raport.AttachmentStatus = "ambiguous";
-                ImportManifestService.DodajWarning(raport, "Nie podpięto załącznika, bo wiele plików pasuje do tego samego dokumentu.");
+                if (pliki.Count == 0)
+                {
+                    continue;
+                }
+
+                bool plikJednegoDokumentu = pliki.Count == 1 && kandydaci.Count(kv => kv.Value.Contains(pliki[0])) == 1;
+                if (plikJednegoDokumentu)
+                {
+                    wynik[i].Zalacznik = pliki[0];
+                    wynik[i].MatchStatus = "exactNumber";
+                }
+                else
+                {
+                    wynik[i].Niejednoznaczne = true;
+                    wynik[i].MatchStatus = "ambiguous";
+                }
             }
 
-            return null;
+            return wynik;
         }
 
         private string OpiszZalaczniki(IEnumerable<AttachmentPayload> zalaczniki)
@@ -1325,7 +1403,7 @@ namespace NexoBridge.Services
             }
         }
 
-        private string WyciagnijBledySfery(object obiektBO)
+        internal string WyciagnijBledySfery(object obiektBO)
         {
             if (obiektBO == null)
             {

@@ -18,6 +18,8 @@ namespace NexoBridge.Models
         public string ClientName { get; set; }
         public string DatabaseName { get; set; }
         public int Year { get; set; }
+        public bool IncludeLinked { get; set; }
+        public string Product { get; set; }
     }
 
     public class BackfillEnumerateClientWorkerResponse
@@ -35,6 +37,7 @@ namespace NexoBridge.Models
         public string Username { get; set; }
         public string Password { get; set; }
         public string DatabaseName { get; set; }
+        public string Product { get; set; }
         public List<BackfillCommentRow> Rows { get; set; } = new List<BackfillCommentRow>();
     }
 
@@ -43,8 +46,22 @@ namespace NexoBridge.Models
         public string Status { get; set; } // SUCCESS / FAILED
         public string Error { get; set; }
         public int Written { get; set; }
+        public int Replaced { get; set; }
         public int SkippedAlreadyLinked { get; set; }
         public int Failed { get; set; }
+        public int Verified { get; set; }
+        public int Unverified { get; set; }
         public List<string> Errors { get; set; } = new List<string>();
+    }
+
+    /// <summary>Wynik pojedynczego wiersza wypisywany przez "--backfill-write-comments-worker" na stdout
+    /// zaraz po jego przetworzeniu (linia z BackfillWorkerRowMarker) - gdy proces zostanie zabity po
+    /// przekroczeniu czasu, rodzic wie, które wiersze już zapisano.</summary>
+    public class BackfillWriteCommentsRowResult
+    {
+        public int Index { get; set; }
+        public string Status { get; set; } // written / replaced / alreadyLinked / failed
+        public int? CommentId { get; set; }
+        public string Error { get; set; }
     }
 }

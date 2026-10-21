@@ -7,6 +7,9 @@ namespace NexoBridge.Models
         public string Nip { get; set; }
         public string DatabaseName { get; set; }
         public string ClientName { get; set; }
+        // "Rachmistrz" (domyślnie) albo "Rewizor" - produkt sesji Sfery dla bazy klienta. Przy złym produkcie
+        // logowanie się nie udaje, a NexoBridge ponawia z drugim (BackfillService.EnumerateAsync).
+        public string Product { get; set; }
     }
 
     public class BackfillEnumerateJob
@@ -15,6 +18,9 @@ namespace NexoBridge.Models
         public string Username { get; set; }
         public string Password { get; set; }
         public int Year { get; set; }
+        // Tryb weryfikacji/naprawy w Klasyfikatorze: zapisy, które już mają link, NIE są pomijane, tylko
+        // wracają z ExistingLinks - Klasyfikator porównuje je z dopasowaniem w Scanye.
+        public bool IncludeLinked { get; set; }
         public List<BackfillClientRef> Clients { get; set; } = new List<BackfillClientRef>();
     }
 
@@ -31,8 +37,18 @@ namespace NexoBridge.Models
         // na dokumencie do księgowania - zależy od tego, jak dokument trafił do Rachmistrza.
         public List<string> NumerKandydaci { get; set; } = new List<string>();
         public int? RecordYear { get; set; }
-        public bool HasPdf { get; set; }
-        public string PdfBase64 { get; set; }
+        // Produkt, którym faktycznie udało się zalogować przy enumeracji - Klasyfikator odsyła go w BackfillCommentRow.
+        public string Product { get; set; }
+        // Tylko przy IncludeLinked: komentarze z linkiem do podglądu, które zapis już ma.
+        public List<BackfillExistingLink> ExistingLinks { get; set; } = new List<BackfillExistingLink>();
+    }
+
+    public class BackfillExistingLink
+    {
+        public int CommentId { get; set; }
+        public string ViewerUrl { get; set; }
+        // Komentarz zawiera wyłącznie nasz link - tylko taki wolno podmienić przy naprawie.
+        public bool PureLink { get; set; }
     }
 
     public class BackfillEnumerateReport
@@ -46,6 +62,9 @@ namespace NexoBridge.Models
         public int ClientsFailed { get; set; }
         // Zapisy pominięte przy enumeracji, bo mają już komentarz z linkiem do podglądu.
         public int SkippedAlreadyLinked { get; set; }
+        // Potwierdzenie dla Klasyfikatora, że ta wersja NexoBridge obsłużyła IncludeLinked (starsza zwracałaby
+        // wiersze bez ExistingLinks, a naprawa dopisałaby wtedy drugi link zamiast podmienić zły).
+        public bool LinkedIncluded { get; set; }
     }
 
     public class BackfillCommentRow
@@ -55,6 +74,10 @@ namespace NexoBridge.Models
         public int RachmistrzId { get; set; }
         public string ViewerUrl { get; set; }
         public string NumerDokumentu { get; set; }
+        public string Product { get; set; }
+        // Naprawa: komentarze z błędnym linkiem na tym zapisie, w których podmieniamy URL na ViewerUrl
+        // (zamiast dopisywać nowy komentarz).
+        public List<int> ReplaceCommentIds { get; set; } = new List<int>();
     }
 
     public class BackfillWriteCommentsJob
@@ -71,8 +94,12 @@ namespace NexoBridge.Models
         public string Status { get; set; } = "PENDING";
         public string Message { get; set; }
         public int Written { get; set; }
+        public int Replaced { get; set; }
         public int SkippedAlreadyLinked { get; set; }
         public int Failed { get; set; }
+        // Odczyt kontrolny po zapisie (projekcja z bazy): komentarz istnieje, wisi na właściwym zapisie, ma link.
+        public int Verified { get; set; }
+        public int Unverified { get; set; }
         public List<string> Errors { get; set; } = new List<string>();
     }
 }

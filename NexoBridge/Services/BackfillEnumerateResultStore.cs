@@ -7,7 +7,7 @@ namespace NexoBridge.Services
     {
         private readonly ConcurrentDictionary<string, bool> _pendingJobs = new();
         private readonly ConcurrentDictionary<string, (int Percent, string Message)> _progress = new();
-        private readonly ConcurrentDictionary<string, BackfillEnumerateReport> _reports = new();
+        private readonly WygasajaceRaporty<BackfillEnumerateReport> _reports = new(System.TimeSpan.FromHours(24));
 
         public void MarkPending(string jobId)
         {
@@ -21,14 +21,14 @@ namespace NexoBridge.Services
 
         public void Store(BackfillEnumerateReport report)
         {
-            _reports[report.JobId] = report;
+            _reports.Store(report.JobId, report);
             _pendingJobs.TryRemove(report.JobId, out _);
             _progress.TryRemove(report.JobId, out _);
         }
 
         public bool TryGet(string jobId, out BackfillEnumerateReport report)
         {
-            return _reports.TryGetValue(jobId, out report);
+            return _reports.TryGet(jobId, out report);
         }
 
         public bool IsPending(string jobId)

@@ -21,6 +21,7 @@ using NexoBridge.Services;
 using NexoBridge.Workers;
 using NexoBridge.Hubs;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Serilog;
 using Serilog.Events;
 
@@ -47,6 +48,10 @@ namespace NexoBridge
         /// nigdy nie działają w tym samym procesie naraz, więc jedna para wystarcza.</summary>
         internal const string BackfillWorkerResultStartMarker = "###BACKFILL_WORKER_RESULT_START###";
         internal const string BackfillWorkerResultEndMarker = "###BACKFILL_WORKER_RESULT_END###";
+
+        /// <summary>Prefiks linii z wynikiem pojedynczego wiersza w "--backfill-write-comments-worker"
+        /// (patrz BackfillService.OdtworzZWynikowWierszy).</summary>
+        internal const string BackfillWorkerRowMarker = "###BACKFILL_ROW###";
 
         public static void Main(string[] args)
         {
@@ -511,23 +516,26 @@ namespace NexoBridge
                 string inputJson = Console.In.ReadToEnd();
                 var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
                 BackfillEnumerateClientWorkerRequest request = JsonSerializer.Deserialize<BackfillEnumerateClientWorkerRequest>(inputJson, jsonOptions);
+                var loggerFactory = ChildProcessLogging.Utworz("backfill-enumerate", ReadMinimumLogLevel());
+                var workerLogger = loggerFactory.CreateLogger("BackfillEnumerateWorker");
 
                 try
                 {
                     using (var silnik = new SferaEngine())
                     {
-                        silnik.Uruchom(request.Username, request.Password, request.DatabaseName);
+                        ProductId produkt = BackfillService.ResolveProduct(request.Product);
+                        silnik.Uruchom(request.Username, request.Password, request.DatabaseName, produkt);
 
-                        var loggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder => { });
                         var service = new BackfillService(loggerFactory);
                         var client = new BackfillClientRef
                         {
                             Nip = request.ClientNip,
                             ClientName = request.ClientName,
-                            DatabaseName = request.DatabaseName
+                            DatabaseName = request.DatabaseName,
+                            Product = request.Product
                         };
 
-                        response.Rows = service.EnumerateOneClient(silnik.Sfera, client, request.Year, out int skippedAlreadyLinked);
+                        response.Rows = service.EnumerateOneClient(silnik.Sfera, client, produkt, request.Year, request.IncludeLinked, out int skippedAlreadyLinked);
                         response.SkippedAlreadyLinked = skippedAlreadyLinked;
                     }
                 }
@@ -535,6 +543,11 @@ namespace NexoBridge
                 {
                     response.Status = "FAILED";
                     response.Error = ex.GetBaseException().Message;
+                    workerLogger.LogError(ex, "[BACKFILL KOMENTARZE] {Database}: zapis nieudany.", request.DatabaseName);
+                }
+                finally
+                {
+                    Log.CloseAndFlush();
                 }
 
                 string outputJson = JsonSerializer.Serialize(response, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
@@ -561,20 +574,31 @@ namespace NexoBridge
                 string inputJson = Console.In.ReadToEnd();
                 var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
                 BackfillWriteCommentsClientWorkerRequest request = JsonSerializer.Deserialize<BackfillWriteCommentsClientWorkerRequest>(inputJson, jsonOptions);
+                var loggerFactory = ChildProcessLogging.Utworz("backfill-write-comments", ReadMinimumLogLevel());
+                var workerLogger = loggerFactory.CreateLogger("BackfillWriteCommentsWorker");
+                var rowJsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
                 try
                 {
                     using (var silnik = new SferaEngine())
                     {
-                        silnik.Uruchom(request.Username, request.Password, request.DatabaseName);
+                        silnik.Uruchom(request.Username, request.Password, request.DatabaseName, BackfillService.ResolveProduct(request.Product));
 
-                        var loggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder => { });
                         var service = new BackfillService(loggerFactory);
-                        BackfillService.WriteCommentsResult result = service.WriteCommentsForDatabase(silnik.Sfera, request.Rows);
+                        // Wynik każdego wiersza od razu na stdout - po zabiciu procesu (limit czasu) rodzic wie,
+                        // które wiersze już zapisano.
+                        BackfillService.WriteCommentsResult result = service.WriteCommentsForDatabase(silnik.Sfera, request.Rows, rowResult =>
+                        {
+                            Console.Out.Write(BackfillWorkerRowMarker + JsonSerializer.Serialize(rowResult, rowJsonOptions) + "\n");
+                            Console.Out.Flush();
+                        });
 
                         response.Written = result.Written;
+                        response.Replaced = result.Replaced;
                         response.SkippedAlreadyLinked = result.SkippedAlreadyLinked;
                         response.Failed = result.Failed;
+                        response.Verified = result.Verified;
+                        response.Unverified = result.Unverified;
                         response.Errors = result.Errors;
                     }
                 }
@@ -582,6 +606,11 @@ namespace NexoBridge
                 {
                     response.Status = "FAILED";
                     response.Error = ex.GetBaseException().Message;
+                    workerLogger.LogError(ex, "[BACKFILL ENUMERATE] {Database}: enumeracja nieudana.", request.DatabaseName);
+                }
+                finally
+                {
+                    Log.CloseAndFlush();
                 }
 
                 string outputJson = JsonSerializer.Serialize(response, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
