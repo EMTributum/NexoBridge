@@ -282,6 +282,7 @@ namespace NexoBridge
                 builder.Services.AddSingleton<BackfillEnumerateResultStore>();
                 builder.Services.AddSingleton<BackfillWriteCommentsJobQueue>();
                 builder.Services.AddSingleton<BackfillWriteCommentsResultStore>();
+                builder.Services.AddSingleton<OfficeReportsSqlService>();
                 builder.Services.AddHttpClient<NexoBridgeErrorReporter>();
                 builder.Services.AddHttpClient<RcpSourceClient>();
                 builder.Services.AddHostedService<NexoBackgroundWorker>();
@@ -341,6 +342,7 @@ namespace NexoBridge
                 app.MapTaxPreviewEndpoints();
                 app.MapDuplicateScanEndpoints();
                 app.MapBackfillEndpoints();
+                app.MapOfficeReportsEndpoints();
 
                 Log.Information("NexoBridge nasłuchuje na porcie 5000...");
                 app.Run("http://0.0.0.0:5000");
