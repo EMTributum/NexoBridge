@@ -144,4 +144,27 @@ namespace NexoBridge.Models
         public int ContactCount { get; set; }
         public List<OfficeClientEmail> Contacts { get; set; } = new List<OfficeClientEmail>();
     }
+
+    /// <summary>POST /api/office-reports/client-features</summary>
+    public class OfficeClientFeaturesRequest
+    {
+        public string DatabaseName { get; set; }
+    }
+
+    /// <summary>Klient biura (KlienciBiura) z nazwami cech podmiotu (Cechy przez CechaPodmiot); pusta lista = brak cech.</summary>
+    public class OfficeClientFeatures
+    {
+        public int ClientId { get; set; }
+        public string Nip { get; set; }
+        public string Name { get; set; }
+        public bool Active { get; set; }
+        public List<string> Features { get; set; } = new List<string>();
+    }
+
+    public class OfficeClientFeaturesResponse
+    {
+        public string DatabaseName { get; set; }
+        public int ClientCount { get; set; }
+        public List<OfficeClientFeatures> Clients { get; set; } = new List<OfficeClientFeatures>();
+    }
 }

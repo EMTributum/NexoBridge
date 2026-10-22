@@ -26,7 +26,7 @@ namespace NexoBridge.Services
 
     /// <summary>
     /// Synchroniczne odczyty z WŁASNEJ bazy biura (Subiekt nexo) dla raportów biura: koszt pracodawcy z list płac,
-    /// faktury sprzedaży FS z pozycjami i adresy e-mail klientów biura. Czysty Microsoft.Data.SqlClient - bez Sfery i bez kolejki zleceń.
+    /// faktury sprzedaży FS z pozycjami, adresy e-mail i cechy klientów biura. Czysty Microsoft.Data.SqlClient - bez Sfery i bez kolejki zleceń.
     /// Wyłącznie sparametryzowane SELECT-y, połączenie z ApplicationIntent=ReadOnly.
     /// Zapytania przeniesione 1:1 z dawnej aplikacji (rejestr_nexo_payroll.py / rejestr_nexo_invoices.py)
     /// i sprawdzone w NexoBridgeKonsola (--office-payroll-costs / --office-sales-invoices) na bazie biura.
@@ -37,6 +37,7 @@ namespace NexoBridge.Services
         public const int MaxInvoiceRows = 20000;
         public const int MaxInvoiceDocuments = 2000;
         public const int MaxClientEmails = 20000;
+        public const int MaxClientFeatureRows = 20000;
         private const int MaxIssuerCandidates = 200;
         private const int CommandTimeoutSeconds = 60;
         private const int ConnectTimeoutSeconds = 15;
@@ -71,6 +72,21 @@ namespace NexoBridge.Services
                 WHERE ox.Podmiot_Id = p.Id ORDER BY ox.Id) o
             WHERE r.Nazwa = @contactKind
             ORDER BY kb.Id, k.Id";
+
+        // Wszyscy klienci biura (aktywni i nie), po wierszu na cechę; klient bez cech ma jeden wiersz z Feature = NULL.
+        // Sprawdzone w NexoBridgeKonsola (--office-sql-json) na bazie biura.
+        private const string ClientFeaturesSql = @"
+            SELECT TOP (@limit)
+                kb.Id AS ClientId,
+                p.NIP AS Nip,
+                p.NazwaSkrocona AS Name,
+                kb.Aktywny AS Active,
+                c.Nazwa AS Feature
+            FROM ModelDanychContainer.KlienciBiura kb
+            JOIN ModelDanychContainer.Podmioty p ON p.Id = kb.Podmiot_Id
+            LEFT JOIN ModelDanychContainer.CechaPodmiot cp ON cp.Podmioty_Id = p.Id
+            LEFT JOIN ModelDanychContainer.Cechy c ON c.Id = cp.Cechy_Id
+            ORDER BY kb.Id, c.Nazwa";
 
         private const string CompanySql = @"
             SELECT TOP (2) f.Id AS CompanyId, f.Firma_Podmiot_Id AS EntityId, f.Nazwa AS Name, p.NIP AS Nip
@@ -251,6 +267,53 @@ namespace NexoBridge.Services
             }
 
             response.ContactCount = response.Contacts.Count;
+            return response;
+        }
+
+        public async Task<OfficeClientFeaturesResponse> ReadClientFeaturesAsync(string databaseName, CancellationToken cancellationToken)
+        {
+            var response = new OfficeClientFeaturesResponse { DatabaseName = databaseName };
+
+            await using var connection = new SqlConnection(BuildConnectionString(databaseName));
+            await connection.OpenAsync(cancellationToken);
+
+            var clients = new Dictionary<int, OfficeClientFeatures>();
+            int rowCount = 0;
+            await using (var command = CreateCommand(connection, ClientFeaturesSql))
+            {
+                command.Parameters.Add("@limit", SqlDbType.Int).Value = MaxClientFeatureRows + 1;
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    rowCount++;
+                    int clientId = GetInt(reader, "ClientId").Value;
+                    if (!clients.TryGetValue(clientId, out var client))
+                    {
+                        client = new OfficeClientFeatures
+                        {
+                            ClientId = clientId,
+                            Nip = GetString(reader, "Nip"),
+                            Name = GetString(reader, "Name"),
+                            Active = GetBool(reader, "Active") ?? false,
+                        };
+                        clients.Add(clientId, client);
+                        response.Clients.Add(client);
+                    }
+
+                    string feature = GetString(reader, "Feature");
+                    if (!string.IsNullOrWhiteSpace(feature))
+                    {
+                        client.Features.Add(feature.Trim());
+                    }
+                }
+            }
+
+            if (rowCount > MaxClientFeatureRows)
+            {
+                throw new OfficeReportsException($"Za dużo wierszy cech klientów (> {MaxClientFeatureRows}). Odczyt przerwany, aby nie zwrócić niepełnych danych.");
+            }
+
+            response.ClientCount = response.Clients.Count;
             return response;
         }
 

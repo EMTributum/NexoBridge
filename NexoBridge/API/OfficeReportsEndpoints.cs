@@ -16,7 +16,8 @@ namespace NexoBridge.API
     /// Synchroniczne (bez Sfery, bez kolejki) odczyty z WŁASNEJ bazy biura dla raportów biura:
     ///   POST /api/office-reports/payroll-costs  - koszt pracodawcy z list płac / rachunków za miesiąc listy,
     ///   POST /api/office-reports/sales-invoices - faktury FS z pozycjami wystawione w danym miesiącu,
-    ///   POST /api/office-reports/client-emails  - adresy e-mail (Kontakty) klientów biura (KlienciBiura).
+    ///   POST /api/office-reports/client-emails  - adresy e-mail (Kontakty) klientów biura (KlienciBiura),
+    ///   POST /api/office-reports/client-features - cechy (Cechy) klientów biura, np. "Nie wyświetlaj na tablicy".
     /// Tylko odczyt (ApplicationIntent=ReadOnly, sparametryzowane SELECT-y) - patrz OfficeReportsSqlService.
     /// </summary>
     public static class OfficeReportsEndpoints
@@ -102,6 +103,29 @@ namespace NexoBridge.API
                     {
                         var response = await service.ReadClientEmailsAsync(databaseName, cancellationToken);
                         return (response, $"kontaktów e-mail: {response.ContactCount}");
+                    });
+            });
+
+            group.MapPost("/client-features", async (
+                OfficeClientFeaturesRequest request,
+                OfficeReportsSqlService service,
+                CancellationToken cancellationToken) =>
+            {
+                var validationError = ValidateDatabaseName("cech klientów", request?.DatabaseName);
+                if (validationError != null)
+                {
+                    return validationError;
+                }
+
+                string databaseName = request.DatabaseName.Trim();
+                return await ExecuteAsync(
+                    "cech klientów",
+                    databaseName,
+                    "-",
+                    async () =>
+                    {
+                        var response = await service.ReadClientFeaturesAsync(databaseName, cancellationToken);
+                        return (response, $"klientów: {response.ClientCount}");
                     });
             });
 
