@@ -15,7 +15,8 @@ namespace NexoBridge.API
     /// <summary>
     /// Synchroniczne (bez Sfery, bez kolejki) odczyty z WŁASNEJ bazy biura dla raportów biura:
     ///   POST /api/office-reports/payroll-costs  - koszt pracodawcy z list płac / rachunków za miesiąc listy,
-    ///   POST /api/office-reports/sales-invoices - faktury FS z pozycjami wystawione w danym miesiącu.
+    ///   POST /api/office-reports/sales-invoices - faktury FS z pozycjami wystawione w danym miesiącu,
+    ///   POST /api/office-reports/client-emails  - adresy e-mail (Kontakty) klientów biura (KlienciBiura).
     /// Tylko odczyt (ApplicationIntent=ReadOnly, sparametryzowane SELECT-y) - patrz OfficeReportsSqlService.
     /// </summary>
     public static class OfficeReportsEndpoints
@@ -44,8 +45,7 @@ namespace NexoBridge.API
                 return await ExecuteAsync(
                     "kosztów list płac",
                     databaseName,
-                    request.Year,
-                    request.Month,
+                    FormatPeriod(request.Year, request.Month),
                     async () =>
                     {
                         var response = await service.ReadPayrollCostsAsync(databaseName, request.Year, request.Month, cancellationToken);
@@ -74,12 +74,34 @@ namespace NexoBridge.API
                 return await ExecuteAsync(
                     "faktur sprzedaży FS",
                     databaseName,
-                    request.IssueYear,
-                    request.IssueMonth,
+                    FormatPeriod(request.IssueYear, request.IssueMonth),
                     async () =>
                     {
                         var response = await service.ReadSalesInvoicesAsync(databaseName, request.IssueYear, request.IssueMonth, cancellationToken);
                         return (response, $"faktur: {response.DocumentCount}, pozycji: {response.PositionCount}");
+                    });
+            });
+
+            group.MapPost("/client-emails", async (
+                OfficeClientEmailsRequest request,
+                OfficeReportsSqlService service,
+                CancellationToken cancellationToken) =>
+            {
+                var validationError = ValidateDatabaseName("adresów e-mail klientów", request?.DatabaseName);
+                if (validationError != null)
+                {
+                    return validationError;
+                }
+
+                string databaseName = request.DatabaseName.Trim();
+                return await ExecuteAsync(
+                    "adresów e-mail klientów",
+                    databaseName,
+                    "-",
+                    async () =>
+                    {
+                        var response = await service.ReadClientEmailsAsync(databaseName, cancellationToken);
+                        return (response, $"kontaktów e-mail: {response.ContactCount}");
                     });
             });
 
@@ -89,8 +111,7 @@ namespace NexoBridge.API
         private static async Task<IResult> ExecuteAsync<T>(
             string what,
             string databaseName,
-            int year,
-            int month,
+            string period,
             Func<Task<(T Response, string Summary)>> read)
         {
             var watch = Stopwatch.StartNew();
@@ -98,15 +119,15 @@ namespace NexoBridge.API
             {
                 var (response, summary) = await read();
                 Log.Information(
-                    "Odczyt {What} z bazy biura zakończony (Baza: {Database}, Okres: {Year}-{Month:00}, {Summary}, {ElapsedMs} ms)",
-                    what, databaseName, year, month, summary, watch.ElapsedMilliseconds);
+                    "Odczyt {What} z bazy biura zakończony (Baza: {Database}, Okres: {Period}, {Summary}, {ElapsedMs} ms)",
+                    what, databaseName, period, summary, watch.ElapsedMilliseconds);
                 return Results.Ok(response);
             }
             catch (OfficeReportsException ex)
             {
                 Log.Warning(
-                    "Odczyt {What} z bazy biura przerwany (Baza: {Database}, Okres: {Year}-{Month:00}): {Message}",
-                    what, databaseName, year, month, ex.Message);
+                    "Odczyt {What} z bazy biura przerwany (Baza: {Database}, Okres: {Period}): {Message}",
+                    what, databaseName, period, ex.Message);
                 return Results.UnprocessableEntity(new { Message = ex.Message });
             }
             catch (OfficeReportsConfigurationException ex)
@@ -124,15 +145,37 @@ namespace NexoBridge.API
             catch (SqlException ex)
             {
                 Log.Error(ex,
-                    "Błąd SQL podczas odczytu {What} z bazy biura (Baza: {Database}, Okres: {Year}-{Month:00}, SQL {Number}).",
-                    what, databaseName, year, month, ex.Number);
+                    "Błąd SQL podczas odczytu {What} z bazy biura (Baza: {Database}, Okres: {Period}, SQL {Number}).",
+                    what, databaseName, period, ex.Number);
                 return Results.Problem(
                     $"Błąd SQL podczas odczytu {what} z bazy biura (SQL {ex.Number}).",
                     statusCode: StatusCodes.Status500InternalServerError);
             }
         }
 
+        private static string FormatPeriod(int year, int month)
+        {
+            return $"{year}-{month:00}";
+        }
+
         private static IResult ValidateRequest(string what, string databaseName, int year, int month)
+        {
+            var validationError = ValidateDatabaseName(what, databaseName);
+            if (validationError != null)
+            {
+                return validationError;
+            }
+
+            if (year < MinYear || year > MaxYear || month < 1 || month > 12)
+            {
+                Log.Warning("Odrzucono odczyt {What} z bazy biura - niepoprawny okres {Year}-{Month}.", what, year, month);
+                return Results.BadRequest("Niepoprawny rok/miesiąc okresu.");
+            }
+
+            return null;
+        }
+
+        private static IResult ValidateDatabaseName(string what, string databaseName)
         {
             if (string.IsNullOrWhiteSpace(databaseName))
             {
@@ -147,12 +190,6 @@ namespace NexoBridge.API
             {
                 Log.Warning("Odrzucono odczyt {What} z bazy biura - niepoprawna nazwa bazy {Database}.", what, databaseName);
                 return Results.BadRequest($"Niepoprawna nazwa bazy biura (oczekiwano technicznej nazwy bazy nexo zaczynającej się od '{NexoDatabasePrefix}').");
-            }
-
-            if (year < MinYear || year > MaxYear || month < 1 || month > 12)
-            {
-                Log.Warning("Odrzucono odczyt {What} z bazy biura - niepoprawny okres {Year}-{Month}.", what, year, month);
-                return Results.BadRequest("Niepoprawny rok/miesiąc okresu.");
             }
 
             return null;

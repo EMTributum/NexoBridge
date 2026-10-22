@@ -115,4 +115,33 @@ namespace NexoBridge.Models
         public int PositionCount { get; set; }
         public List<OfficeSalesInvoice> Documents { get; set; } = new List<OfficeSalesInvoice>();
     }
+
+    /// <summary>POST /api/office-reports/client-emails</summary>
+    public class OfficeClientEmailsRequest
+    {
+        public string DatabaseName { get; set; }
+    }
+
+    /// <summary>Jeden kontakt rodzaju "e-mail" (ModelDanychContainer.Kontakty) podmiotu będącego klientem biura.
+    /// Value to surowa wartość z nexo - bywa kilka adresów rozdzielonych przecinkiem/średnikiem (dzieli wywołujący).</summary>
+    public class OfficeClientEmail
+    {
+        public int ContactId { get; set; }
+        public int ClientId { get; set; }
+        public int EntityId { get; set; }
+        public string Nip { get; set; }
+        public string Name { get; set; }
+        public string ShortName { get; set; }
+        public bool Active { get; set; }
+        public string Value { get; set; }
+        public bool IsPrimary { get; set; }
+        public string Comment { get; set; }
+    }
+
+    public class OfficeClientEmailsResponse
+    {
+        public string DatabaseName { get; set; }
+        public int ContactCount { get; set; }
+        public List<OfficeClientEmail> Contacts { get; set; } = new List<OfficeClientEmail>();
+    }
 }

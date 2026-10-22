@@ -25,8 +25,8 @@ namespace NexoBridge.Services
     }
 
     /// <summary>
-    /// Synchroniczne odczyty z WŁASNEJ bazy biura (Subiekt nexo) dla raportów biura: koszt pracodawcy z list płac
-    /// i faktury sprzedaży FS z pozycjami. Czysty Microsoft.Data.SqlClient - bez Sfery i bez kolejki zleceń.
+    /// Synchroniczne odczyty z WŁASNEJ bazy biura (Subiekt nexo) dla raportów biura: koszt pracodawcy z list płac,
+    /// faktury sprzedaży FS z pozycjami i adresy e-mail klientów biura. Czysty Microsoft.Data.SqlClient - bez Sfery i bez kolejki zleceń.
     /// Wyłącznie sparametryzowane SELECT-y, połączenie z ApplicationIntent=ReadOnly.
     /// Zapytania przeniesione 1:1 z dawnej aplikacji (rejestr_nexo_payroll.py / rejestr_nexo_invoices.py)
     /// i sprawdzone w NexoBridgeKonsola (--office-payroll-costs / --office-sales-invoices) na bazie biura.
@@ -36,9 +36,41 @@ namespace NexoBridge.Services
         public const int MaxPayrollDocuments = 2000;
         public const int MaxInvoiceRows = 20000;
         public const int MaxInvoiceDocuments = 2000;
+        public const int MaxClientEmails = 20000;
         private const int MaxIssuerCandidates = 200;
         private const int CommandTimeoutSeconds = 60;
         private const int ConnectTimeoutSeconds = 15;
+
+        // Kontakty rodzaju "e-mail" podmiotów, które są klientami biura (KlienciBiura, aktywnymi i nie). Nazwa: pełna
+        // nazwa firmy, a dla osoby fizycznej imię i nazwisko; NazwaSkrocona jako zapas. Sprawdzone w NexoBridgeKonsola
+        // (--office-sql-json) na bazie biura.
+        private const string ClientEmailsSql = @"
+            SELECT TOP (@limit)
+                k.Id AS ContactId,
+                kb.Id AS ClientId,
+                p.Id AS EntityId,
+                p.NIP AS Nip,
+                COALESCE(
+                    NULLIF(LTRIM(RTRIM(f.Nazwa)), ''),
+                    NULLIF(LTRIM(RTRIM(CONCAT(o.Imie, ' ', o.Nazwisko))), ''),
+                    p.NazwaSkrocona) AS Name,
+                p.NazwaSkrocona AS ShortName,
+                kb.Aktywny AS Active,
+                k.Wartosc AS Value,
+                k.Podstawowy AS IsPrimary,
+                k.Komentarz AS Comment
+            FROM ModelDanychContainer.KlienciBiura kb
+            JOIN ModelDanychContainer.Podmioty p ON p.Id = kb.Podmiot_Id
+            JOIN ModelDanychContainer.Kontakty k ON k.Podmiot_Id = p.Id
+            JOIN ModelDanychContainer.RodzajeKontaktu r ON r.Id = k.Rodzaj_Id
+            OUTER APPLY (
+                SELECT TOP (1) fx.Nazwa FROM ModelDanychContainer.Firmy fx
+                WHERE fx.Firma_Podmiot_Id = p.Id ORDER BY fx.Id) f
+            OUTER APPLY (
+                SELECT TOP (1) ox.Imie, ox.Nazwisko FROM ModelDanychContainer.Osoby ox
+                WHERE ox.Podmiot_Id = p.Id ORDER BY ox.Id) o
+            WHERE r.Nazwa = @contactKind
+            ORDER BY kb.Id, k.Id";
 
         private const string CompanySql = @"
             SELECT TOP (2) f.Id AS CompanyId, f.Firma_Podmiot_Id AS EntityId, f.Nazwa AS Name, p.NIP AS Nip
@@ -174,6 +206,51 @@ namespace NexoBridge.Services
             }
 
             response.DocumentCount = response.Documents.Count;
+            return response;
+        }
+
+        public async Task<OfficeClientEmailsResponse> ReadClientEmailsAsync(string databaseName, CancellationToken cancellationToken)
+        {
+            var response = new OfficeClientEmailsResponse { DatabaseName = databaseName };
+
+            await using var connection = new SqlConnection(BuildConnectionString(databaseName));
+            await connection.OpenAsync(cancellationToken);
+
+            await using (var command = CreateCommand(connection, ClientEmailsSql))
+            {
+                command.Parameters.Add("@limit", SqlDbType.Int).Value = MaxClientEmails + 1;
+                command.Parameters.Add("@contactKind", SqlDbType.NVarChar, 100).Value = "e-mail";
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                var seen = new HashSet<int>();
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    var contact = new OfficeClientEmail
+                    {
+                        ContactId = GetInt(reader, "ContactId").Value,
+                        ClientId = GetInt(reader, "ClientId").Value,
+                        EntityId = GetInt(reader, "EntityId").Value,
+                        Nip = GetString(reader, "Nip"),
+                        Name = GetString(reader, "Name"),
+                        ShortName = GetString(reader, "ShortName"),
+                        Active = GetBool(reader, "Active") ?? false,
+                        Value = GetString(reader, "Value"),
+                        IsPrimary = GetBool(reader, "IsPrimary") ?? false,
+                        Comment = GetString(reader, "Comment"),
+                    };
+                    if (!seen.Add(contact.ContactId))
+                    {
+                        throw new OfficeReportsException("Powtórzony kontakt e-mail w wyniku zapytania. Odczyt przerwany.");
+                    }
+                    response.Contacts.Add(contact);
+                }
+            }
+
+            if (response.Contacts.Count > MaxClientEmails)
+            {
+                throw new OfficeReportsException($"Za dużo kontaktów e-mail klientów (> {MaxClientEmails}). Odczyt przerwany, aby nie zwrócić niepełnych danych.");
+            }
+
+            response.ContactCount = response.Contacts.Count;
             return response;
         }
 
