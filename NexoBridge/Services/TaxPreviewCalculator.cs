@@ -1,4 +1,5 @@
 using InsERT.Moria.DokumentyDoKsiegowania;
+using InsERT.Moria.KontrolaSkarbowa;
 using InsERT.Moria.ModelDanych;
 using InsERT.Moria.Sfera;
 using NexoBridge.Models;
@@ -290,6 +291,7 @@ namespace NexoBridge.Services
 
                 vat.AmountToPay = doZaplaty;
                 vat.AmountToCarryOver = ReadDecimalCandidate(dane, "KwotaDoPrzeniesienia");
+                vat.AmountToRefund = ZwrotZZapisanegoJpk(ctx, etykieta, dataOd, dataDo);
             }
             catch (Exception ex)
             {
@@ -298,6 +300,47 @@ namespace NexoBridge.Services
             }
 
             return vat;
+        }
+
+        /// <summary>P_54 (zwrot na rachunek) z najnowszego zapisanego JPK_V7 za okres - jak
+        /// VatCalculationService.ZnajdzJpkV7 + WypelnijKwotyZPowiazanejDeklaracji (prototyp: Konsola TpReadSavedJpk).
+        /// Tylko odczyt; błąd nie psuje sekcji VAT (null = nie wiadomo, kwota zostaje "do przeniesienia").</summary>
+        private static decimal? ZwrotZZapisanegoJpk(Kontekst ctx, string etykieta, DateTime dataOd, DateTime dataDo)
+        {
+            try
+            {
+                object mgrJpk = GetManagerByInterfaceName(ctx.Sfera, "IJednolitePlikiKontrolne");
+                object daneJpk = mgrJpk == null ? null : ((dynamic)mgrJpk).Dane;
+                if (daneJpk == null)
+                {
+                    return null;
+                }
+
+                int rodzajOczekiwany = Convert.ToInt32(etykieta == "V7K" ? RodzajJPK.V7K : RodzajJPK.V7M);
+                object jpk = ((IEnumerable)((dynamic)daneJpk).ZnajdzWysylkeVATRozliczeniowaWOkresie(dataOd, dataDo))
+                    .Cast<object>()
+                    .Where(j => TryReadPropertyPath(j, "Rodzaj", out object rodzaj) && rodzaj != null && Convert.ToInt32(rodzaj) == rodzajOczekiwany)
+                    .OrderByDescending(j => ReadIntCandidate(j, "Id") ?? 0)
+                    .FirstOrDefault();
+                if (jpk == null)
+                {
+                    return null;
+                }
+
+                foreach (object czesc in ReadObjectCollection(jpk, "CzesciDeklaracyjne"))
+                {
+                    TryReadPropertyPath(czesc, "Deklaracja", out object deklaracja);
+                    if (ReadDeclarationFieldAmount(deklaracja, "54") is decimal zwrot)
+                    {
+                        return zwrot;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return null;
         }
 
         // --- VAT-UE ----------------------------------------------------------------------------------

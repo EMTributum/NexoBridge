@@ -24,7 +24,7 @@ namespace NexoBridge.API
                 {
                     return validationError;
                 }
-
+    //test nowej kompilacji
                 EnsureJobId(job);
                 resultStore.MarkPending(job.JobId);
                 await queue.QueueJobAsync(job);

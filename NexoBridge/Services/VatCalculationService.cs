@@ -240,6 +240,12 @@ namespace NexoBridge.Services
                         znalezionoKwote = true;
                     }
 
+                    // Zwrot na rachunek nie ma własnej kolumny w Deklaracje - tylko pole P_54.
+                    if (SferaReflectionHelpers.ReadDeclarationFieldAmount((object)deklaracja, "54") is decimal doZwrotu)
+                    {
+                        raport.AmountToRefund = doZwrotu;
+                    }
+
                     if (znalezionoKwote)
                     {
                         return true;
@@ -261,7 +267,8 @@ namespace NexoBridge.Services
                 var document = XDocument.Parse(xml);
                 bool znaleziono = false;
 
-                if (TryReadXmlDecimal(document, "P_53", out decimal kwotaDoZaplaty))
+                // JPK_V7: P_51 do wpłaty, P_53 nadwyżka (= P_54 zwrot + P_62 do przeniesienia).
+                if (TryReadXmlDecimal(document, "P_51", out decimal kwotaDoZaplaty))
                 {
                     raport.AmountToPay = kwotaDoZaplaty;
                     znaleziono = true;
@@ -270,6 +277,12 @@ namespace NexoBridge.Services
                 if (TryReadXmlDecimal(document, "P_62", out decimal kwotaDoPrzeniesienia))
                 {
                     raport.AmountToCarryOver = kwotaDoPrzeniesienia;
+                    znaleziono = true;
+                }
+
+                if (TryReadXmlDecimal(document, "P_54", out decimal kwotaDoZwrotu))
+                {
+                    raport.AmountToRefund = kwotaDoZwrotu;
                     znaleziono = true;
                 }
 

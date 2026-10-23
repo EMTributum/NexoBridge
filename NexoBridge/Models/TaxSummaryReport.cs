@@ -113,6 +113,9 @@ namespace NexoBridge.Models
         public decimal AmountToPay { get; set; }
         public decimal AmountToCarryOver { get; set; }
 
+        // Zwrot nadwyżki na rachunek (P_54) - wpisuje go księgowa w zapisanej deklaracji
+        public decimal AmountToRefund { get; set; }
+
         // Zignorowane, oczekiwane sytuacje (np. cichy skip miesiąca nie kończącego kwartału)
         public string Warning { get; set; }
 

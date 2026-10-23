@@ -87,6 +87,10 @@ namespace NexoBridge.Models
         public bool? CashMethod { get; set; }
         public decimal? AmountToPay { get; set; }
         public decimal? AmountToCarryOver { get; set; }
+
+        /// <summary>Zwrot na rachunek (P_54) z ZAPISANEJ deklaracji JPK za okres - Wylicz bez zapisu nie zna
+        /// podziału nadwyżki (całą wpisuje do przeniesienia), decyduje o nim księgowa. null - brak zapisanego JPK.</summary>
+        public decimal? AmountToRefund { get; set; }
         public string TemplateName { get; set; }
     }
 

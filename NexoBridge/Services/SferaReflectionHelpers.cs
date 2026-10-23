@@ -817,6 +817,27 @@ namespace NexoBridge.Services
             return items;
         }
 
+        /// <summary>Kwota z pola deklaracji o numerze (Deklaracja.Pola, Numer bez prefiksu, np. JPK_V7:
+        /// "51" do wpłaty, "53" nadwyżka, "54" zwrot na rachunek, "62" do przeniesienia). null - brak pola.
+        /// Wartosc to tekst; sprawdzone w Konsoli na zapisanym JPK i na Dane z Wylicz.</summary>
+        public static decimal? ReadDeclarationFieldAmount(object deklaracja, string numer)
+        {
+            foreach (object pole in ReadObjectCollection(deklaracja, "Pola"))
+            {
+                if (!string.Equals(ReadStringCandidate(pole, "Numer"), numer, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string wartosc = ReadStringCandidate(pole, "Wartosc");
+                return decimal.TryParse(wartosc?.Replace(',', '.'), NumberStyles.Number, CultureInfo.InvariantCulture, out decimal kwota)
+                    ? kwota
+                    : null;
+            }
+
+            return null;
+        }
+
         public static string NormalizeDigits(string value)
         {
             if (string.IsNullOrWhiteSpace(value))
