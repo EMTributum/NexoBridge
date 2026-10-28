@@ -69,6 +69,8 @@ namespace NexoBridge.Models
         public bool? AlwaysUseNipUe { get; set; }
         public bool? SmeVatPayer { get; set; }
         public string Guardian { get; set; }
+        // null = nie udalo sie odczytac (klasyfikator zachowuje zapisanych); pusta lista = klient nie ma dodatkowych.
+        public List<string> AdditionalGuardians { get; set; }
         public string AccountingProgram { get; set; }
         public string DatabaseName { get; set; }
         public string DatabaseServerName { get; set; }

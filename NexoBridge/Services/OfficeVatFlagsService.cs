@@ -216,21 +216,46 @@ namespace NexoBridge.Services
             return result;
         }
 
+        private bool _opiekunowieDodatkowiOdczytani;
+
         private IEnumerable<dynamic> PobierzPodmiotyZDanymiKlientaBiura(dynamic mgrPodmioty)
         {
+            _opiekunowieDodatkowiOdczytani = false;
+            var include = new List<string>
+            {
+                "Firma",
+                "Grupy",
+                "FlagaWlasna",
+                "KlientBiura",
+                "KlientBiura.BazaDanych",
+                "OpiekunPodstawowy",
+                "OpiekunPodstawowy.Uzytkownik",
+                "OpiekunPodstawowy.Uzytkownik.Osoba"
+            };
+
+            // Opiekunowie dodatkowi (Podmiot.Opiekunowie - zawiera tez podstawowego). Gdy samo wczytanie
+            // tej kolekcji sie nie powiedzie, czytamy klientow jak dawniej, tylko z opiekunem podstawowym.
+            var includeZOpiekunami = include.Concat(new[]
+            {
+                "Opiekunowie",
+                "Opiekunowie.Uzytkownik",
+                "Opiekunowie.Uzytkownik.Osoba"
+            }).ToArray();
+
             try
             {
-                return ((IEnumerable)mgrPodmioty.Dane.WszystkieDostepne(new[]
-                {
-                    "Firma",
-                    "Grupy",
-                    "FlagaWlasna",
-                    "KlientBiura",
-                    "KlientBiura.BazaDanych",
-                    "OpiekunPodstawowy",
-                    "OpiekunPodstawowy.Uzytkownik",
-                    "OpiekunPodstawowy.Uzytkownik.Osoba"
-                })).Cast<dynamic>().ToList();
+                var zOpiekunami = ((IEnumerable)mgrPodmioty.Dane.WszystkieDostepne(includeZOpiekunami)).Cast<dynamic>().ToList();
+                _opiekunowieDodatkowiOdczytani = true;
+                return zOpiekunami;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Nie udalo sie wczytac opiekunow dodatkowych klientow Biura - odczyt tylko z opiekunem podstawowym.");
+            }
+
+            try
+            {
+                return ((IEnumerable)mgrPodmioty.Dane.WszystkieDostepne(include.ToArray())).Cast<dynamic>().ToList();
             }
             catch
             {
@@ -344,6 +369,7 @@ namespace NexoBridge.Services
             var groupNames = PobierzNazwyGrup(podmiot);
             string vatUeFlagName = SafeString(SafeObj(podmiot, "FlagaWlasna"), "Nazwa");
             string guardian = PobierzOpiekuna(podmiot);
+            var additionalGuardians = PobierzOpiekunowDodatkowych(podmiot, guardian);
             object bazaKlienta = SafeObj(klient, "BazaDanych");
             bool? rachmistrzActive = SafeBool(bazaKlienta, "AktywnyRachmistrz");
             bool? rewizorActive = SafeBool(bazaKlienta, "AktywnyRewizor");
@@ -368,6 +394,7 @@ namespace NexoBridge.Services
                 AlwaysUseNipUe = SafeBool(podmiot, "ZawszeStosujNIPUE"),
                 SmeVatPayer = SafeBool(firma, "PodatnikSme"),
                 Guardian = guardian,
+                AdditionalGuardians = additionalGuardians,
                 AccountingProgram = OkreslProgramKsiegowy(rachmistrzActive, rewizorActive),
                 DatabaseName = danePolaczenia.DatabaseName,
                 DatabaseServerName = danePolaczenia.ServerName,
@@ -773,34 +800,7 @@ namespace NexoBridge.Services
         {
             try
             {
-                object opiekunPodstawowy = SafeObj(podmiot, "OpiekunPodstawowy");
-                if (opiekunPodstawowy == null)
-                {
-                    return null;
-                }
-
-                object uzytkownik = SafeObj(opiekunPodstawowy, "Uzytkownik");
-                if (uzytkownik == null)
-                {
-                    return null;
-                }
-
-                object osoba = SafeObj(uzytkownik, "Osoba");
-                if (osoba == null)
-                {
-                    return null;
-                }
-
-                string imie = SafeString(osoba, "Imie")?.Trim();
-                string nazwisko = SafeString(osoba, "Nazwisko")?.Trim();
-
-                string guardian = string.Join(" ", new[]
-                {
-            imie,
-            nazwisko
-        }.Where(x => !string.IsNullOrWhiteSpace(x)));
-
-                return string.IsNullOrWhiteSpace(guardian) ? null : guardian;
+                return NazwaOpiekuna(SafeObj(podmiot, "OpiekunPodstawowy"));
             }
             catch (Exception ex)
             {
@@ -812,6 +812,80 @@ namespace NexoBridge.Services
 
                 return null;
             }
+        }
+
+        private string NazwaOpiekuna(object opiekun)
+        {
+            object uzytkownik = SafeObj(opiekun, "Uzytkownik");
+            object osoba = SafeObj(uzytkownik, "Osoba");
+            if (osoba == null)
+            {
+                return null;
+            }
+
+            string imie = SafeString(osoba, "Imie")?.Trim();
+            string nazwisko = SafeString(osoba, "Nazwisko")?.Trim();
+
+            string guardian = string.Join(" ", new[] { imie, nazwisko }.Where(x => !string.IsNullOrWhiteSpace(x)));
+
+            return string.IsNullOrWhiteSpace(guardian) ? null : guardian;
+        }
+
+        /// <summary>
+        /// Opiekunowie dodatkowi klienta: Podmiot.Opiekunowie zawiera wszystkich opiekunow lacznie z podstawowym
+        /// (podstawowy = wiersz wskazany przez Podmiot.OpiekunPodstawowy), wiec pomijamy go po Id i po nazwie.
+        /// Zwraca null, gdy odczyt sie nie udal (brak kolekcji, blad) - "nie wiem", a nie "brak dodatkowych";
+        /// pusta lista oznacza udany odczyt bez opiekunow dodatkowych. Blad nie psuje opiekuna podstawowego.
+        /// </summary>
+        private List<string> PobierzOpiekunowDodatkowych(object podmiot, string opiekunPodstawowy)
+        {
+            if (!_opiekunowieDodatkowiOdczytani)
+            {
+                return null;
+            }
+
+            var result = new List<string>();
+            try
+            {
+                object kolekcja = SafeObj(podmiot, "Opiekunowie");
+                if (kolekcja is not IEnumerable enumerable || kolekcja is string)
+                {
+                    return null;
+                }
+
+                int? podstawowyId = SafeInt(SafeObj(podmiot, "OpiekunPodstawowy"), "Id");
+                var widziani = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (!string.IsNullOrWhiteSpace(opiekunPodstawowy))
+                {
+                    widziani.Add(opiekunPodstawowy);
+                }
+
+                foreach (var opiekun in enumerable)
+                {
+                    int? id = SafeInt(opiekun, "Id");
+                    if (podstawowyId.HasValue && id == podstawowyId)
+                    {
+                        continue;
+                    }
+
+                    string nazwa = NazwaOpiekuna(opiekun);
+                    if (!string.IsNullOrWhiteSpace(nazwa) && widziani.Add(nazwa))
+                    {
+                        result.Add(nazwa);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(
+                    ex,
+                    "Nie udalo sie pobrac opiekunow dodatkowych dla podmiotu ID {Id}: {Message}",
+                    SafeInt(podmiot, "Id"),
+                    ex.GetBaseException().Message);
+                return null;
+            }
+
+            return result;
         }
 
         private dynamic PobierzMenedzera(string nazwaInterfejsu)
