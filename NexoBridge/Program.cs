@@ -376,37 +376,48 @@ namespace NexoBridge
                 var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
                 PayrollClientWorkerRequest request = JsonSerializer.Deserialize<PayrollClientWorkerRequest>(inputJson, jsonOptions);
 
+                List<PayrollClientWorkerLineSpec> counterLines = request.Lines.Where(l => !l.IsPpk).ToList();
+                List<PayrollClientWorkerLineSpec> ppkLines = request.Lines.Where(l => l.IsPpk).ToList();
+
                 try
                 {
-                    using (var silnik = new SferaEngine())
+                    // Sferę (Gratyfikant) uruchamiamy tylko, gdy są pozycje z licznikiem - sam PPK liczy się zwykłym SELECT-em.
+                    if (counterLines.Count > 0)
                     {
-                        silnik.Uruchom(request.Username, request.Password, request.DatabaseName, ProductId.Gratyfikant);
-
-                        IFabrykaLicznikowObiektow counterFactory =
-                            SferaReflectionHelpers.GetRequiredService<IFabrykaLicznikowObiektow>(silnik.Sfera, DateTime.Today);
-
-                        foreach (PayrollClientWorkerLineSpec lineSpec in request.Lines)
+                        using (var silnik = new SferaEngine())
                         {
-                            try
-                            {
-                                var pendingSpec = new PendingPayrollLineSpec(
-                                    lineSpec.Label,
-                                    lineSpec.CounterGuid,
-                                    lineSpec.Tiers
-                                        .Select(t => new PayrollTierSpec(t.From, t.To, t.UnitNet, t.UnitGross, t.CollectiveNet, t.CollectiveGross))
-                                        .ToList());
+                            silnik.Uruchom(request.Username, request.Password, request.DatabaseName, ProductId.Gratyfikant);
 
-                                PayrollFeeLineDto line = PayrollLineSpecExtractor.ComputeLine(
-                                    pendingSpec, counterFactory, request.PeriodStart, request.PeriodEnd);
-                                if (line != null)
+                            IFabrykaLicznikowObiektow counterFactory =
+                                SferaReflectionHelpers.GetRequiredService<IFabrykaLicznikowObiektow>(silnik.Sfera, DateTime.Today);
+
+                            foreach (PayrollClientWorkerLineSpec lineSpec in counterLines)
+                            {
+                                try
                                 {
-                                    response.Lines.Add(line);
+                                    PayrollFeeLineDto line = PayrollLineSpecExtractor.ComputeLine(
+                                        ToPendingSpec(lineSpec), counterFactory, request.PeriodStart, request.PeriodEnd);
+                                    if (line != null)
+                                    {
+                                        response.Lines.Add(line);
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.Error.WriteLine($"[payroll-client-worker] Błąd pozycji '{lineSpec.Label}': {ex.GetBaseException().Message}");
                                 }
                             }
-                            catch (Exception ex)
-                            {
-                                Console.Error.WriteLine($"[payroll-client-worker] Błąd pozycji '{lineSpec.Label}': {ex.GetBaseException().Message}");
-                            }
+                        }
+                    }
+
+                    // Pozycje PPK bez licznika: ilość z SQL w bazie klienta. Błąd zapytania = FAILED (nie pomijamy po cichu).
+                    foreach (PayrollClientWorkerLineSpec lineSpec in ppkLines)
+                    {
+                        PayrollFeeLineDto line = PayrollLineSpecExtractor.ComputePpkLine(
+                            ToPendingSpec(lineSpec), request.DatabaseName, request.PeriodStart, request.PeriodEnd);
+                        if (line != null)
+                        {
+                            response.Lines.Add(line);
                         }
                     }
                 }
@@ -414,6 +425,10 @@ namespace NexoBridge
                 {
                     response.Status = "FAILED";
                     response.Error = ex.GetBaseException().Message;
+                    // Błąd klienta = brak pozycji (jak dotąd), nie wynik częściowy.
+                    response.Lines.Clear();
+                    // Pełny wyjątek ze stosem na stderr (rodzic loguje go do pliku) - w polu Error zostaje tylko komunikat.
+                    Console.Error.WriteLine($"[payroll-client-worker] Wyjątek przy liczeniu bazy '{request.DatabaseName}': {ex}");
                 }
 
                 string outputJson = JsonSerializer.Serialize(response, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
@@ -427,6 +442,17 @@ namespace NexoBridge
                 Console.Error.WriteLine($"[payroll-client-worker] Krytyczny błąd: {ex}");
                 return 1;
             }
+        }
+
+        private static PendingPayrollLineSpec ToPendingSpec(PayrollClientWorkerLineSpec lineSpec)
+        {
+            return new PendingPayrollLineSpec(
+                lineSpec.Label,
+                lineSpec.CounterGuid,
+                lineSpec.Tiers
+                    .Select(t => new PayrollTierSpec(t.From, t.To, t.UnitNet, t.UnitGross, t.CollectiveNet, t.CollectiveGross))
+                    .ToList(),
+                lineSpec.IsPpk);
         }
 
         /// <summary>Analogiczne do RunPayrollClientWorker, ale liczy SUROWE rachunki do umów
@@ -456,6 +482,7 @@ namespace NexoBridge
                 {
                     response.Status = "FAILED";
                     response.Error = ex.GetBaseException().Message;
+                    Console.Error.WriteLine($"[raw-payroll-client-worker] Wyjątek przy liczeniu bazy '{request.DatabaseName}': {ex}");
                 }
 
                 string outputJson = JsonSerializer.Serialize(response, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });

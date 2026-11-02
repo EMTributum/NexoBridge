@@ -33,7 +33,8 @@ namespace NexoBridge.Models
     {
         public string Nip { get; set; }
 
-        /// <summary>SUCCESS / FAILED (błąd połączenia z bazą klienta, brak licencji, timeout itp.).</summary>
+        /// <summary>SUCCESS / NO_PAYROLL (w bazie klienta nie prowadzono kadr - to NIE błąd, liczniki = 0) /
+        /// FAILED (błąd połączenia z bazą klienta, brak licencji, timeout itp.).</summary>
         public string Status { get; set; }
         public string Error { get; set; }
         public int RachunekCount { get; set; }

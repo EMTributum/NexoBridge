@@ -23,6 +23,9 @@ namespace NexoBridge.Models
     {
         public string Label { get; set; }
         public Guid CounterGuid { get; set; }
+
+        /// <summary>Pozycja PPK bez licznika nexo - ilość liczona zapytaniem SQL (patrz PayrollPpkCounter), CounterGuid pusty.</summary>
+        public bool IsPpk { get; set; }
         public List<PayrollClientWorkerTierSpec> Tiers { get; set; } = new List<PayrollClientWorkerTierSpec>();
     }
 

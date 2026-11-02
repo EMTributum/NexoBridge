@@ -115,6 +115,7 @@ namespace NexoBridge.Services
             int total = specs.Count;
             int processed = 0;
             int failedCount = 0;
+            int noPayrollCount = 0;
 
             foreach (ClientPayrollSpec spec in specs)
             {
@@ -142,12 +143,16 @@ namespace NexoBridge.Services
                 {
                     failedCount++;
                 }
+                else if (item.Status == PayrollPresenceChecker.NoPayrollStatus)
+                {
+                    noPayrollCount++;
+                }
 
                 processed++;
             }
 
             report.Status = failedCount == 0 ? "SUCCESS" : (failedCount == report.Items.Count ? "FAILED" : "PARTIAL_SUCCESS");
-            report.Message = $"Policzono {report.Items.Count} klientów kadrowo-płacowych ({failedCount} błędów).";
+            report.Message = $"Policzono {report.Items.Count} klientów kadrowo-płacowych ({failedCount} błędów, {noPayrollCount} bez kadr w bazie).";
             await raportujPostep(100, report.Message);
             return report;
         }
@@ -165,6 +170,15 @@ namespace NexoBridge.Services
         {
             var item = new PayrollCountsItem { Nip = spec.Nip, Name = spec.Name };
 
+            // Baza bez kadr (brak umów pracowniczych/list płac/wynagrodzeń) nie ma czego liczyć, a start Gratyfikanta
+            // kończy się w niej wyjątkiem - dostaje spokojny status NO_PAYROLL zamiast FAILED (patrz PayrollPresenceChecker).
+            PayrollPresence presence = await PayrollPresenceChecker.CheckAsync(clientDatabaseName, _logger, cancellationToken);
+            if (presence == PayrollPresence.Absent)
+            {
+                item.Status = PayrollPresenceChecker.NoPayrollStatus;
+                return item;
+            }
+
             var request = new PayrollClientWorkerRequest
             {
                 Username = job.Username,
@@ -176,6 +190,7 @@ namespace NexoBridge.Services
                 {
                     Label = l.Label,
                     CounterGuid = l.CounterGuid,
+                    IsPpk = l.IsPpk,
                     Tiers = l.Tiers.Select(t => new PayrollClientWorkerTierSpec
                     {
                         From = t.From,
@@ -274,6 +289,16 @@ namespace NexoBridge.Services
                     item.Status = response.Status;
                     item.Error = response.Error;
                     item.Lines = response.Lines ?? new List<PayrollFeeLineDto>();
+
+                    // Wstępne sprawdzenie nie zadziałało (Unknown), a proces padł na starcie Gratyfikanta - sprawdzamy jeszcze raz.
+                    // Prawdziwy błąd bazy Z kadrami (Present) zostaje FAILED.
+                    if (item.Status == "FAILED" && presence == PayrollPresence.Unknown && PayrollPresenceChecker.IsStartFailure(item.Error)
+                        && await PayrollPresenceChecker.CheckAsync(clientDatabaseName, _logger, cancellationToken) == PayrollPresence.Absent)
+                    {
+                        item.Status = PayrollPresenceChecker.NoPayrollStatus;
+                        item.Error = null;
+                        item.Lines = new List<PayrollFeeLineDto>();
+                    }
 
                     if (!string.IsNullOrWhiteSpace(stderr))
                     {

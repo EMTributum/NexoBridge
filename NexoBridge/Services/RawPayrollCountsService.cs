@@ -46,6 +46,7 @@ namespace NexoBridge.Services
             int total = clients.Count;
             int processed = 0;
             int failedCount = 0;
+            int noPayrollCount = 0;
 
             foreach (ClientDatabaseRef client in clients)
             {
@@ -60,12 +61,16 @@ namespace NexoBridge.Services
                 {
                     failedCount++;
                 }
+                else if (item.Status == PayrollPresenceChecker.NoPayrollStatus)
+                {
+                    noPayrollCount++;
+                }
 
                 processed++;
             }
 
             report.Status = failedCount == 0 ? "SUCCESS" : (failedCount == report.Items.Count ? "FAILED" : "PARTIAL_SUCCESS");
-            report.Message = $"Policzono surowo {report.Items.Count} klientów ({failedCount} błędów).";
+            report.Message = $"Policzono surowo {report.Items.Count} klientów ({failedCount} błędów, {noPayrollCount} bez kadr w bazie).";
             await raportujPostep(100, report.Message);
             return report;
         }
@@ -80,6 +85,15 @@ namespace NexoBridge.Services
             ClientDatabaseRef client, RawPayrollCountsBatchJob job, CancellationToken cancellationToken)
         {
             var item = new RawPayrollCountsItem { Nip = client.Nip };
+
+            // Baza bez kadr: licznik 0/0 i spokojny status NO_PAYROLL zamiast błędu startu Gratyfikanta
+            // (patrz PayrollPresenceChecker).
+            PayrollPresence presence = await PayrollPresenceChecker.CheckAsync(client.DatabaseName, _logger, cancellationToken);
+            if (presence == PayrollPresence.Absent)
+            {
+                item.Status = PayrollPresenceChecker.NoPayrollStatus;
+                return item;
+            }
 
             (DateTime periodStart, DateTime periodEnd) = PayrollLineSpecExtractor.ResolvePeriodRange(job.PeriodYear, job.PeriodMonth);
 
@@ -177,6 +191,16 @@ namespace NexoBridge.Services
                     item.Error = response.Error;
                     item.RachunekCount = response.RachunekCount;
                     item.WyplataCount = response.WyplataCount;
+
+                    // Wstępne sprawdzenie nie zadziałało (Unknown), a proces padł na starcie Gratyfikanta - sprawdzamy jeszcze raz.
+                    if (item.Status == "FAILED" && presence == PayrollPresence.Unknown && PayrollPresenceChecker.IsStartFailure(item.Error)
+                        && await PayrollPresenceChecker.CheckAsync(client.DatabaseName, _logger, cancellationToken) == PayrollPresence.Absent)
+                    {
+                        item.Status = PayrollPresenceChecker.NoPayrollStatus;
+                        item.Error = null;
+                        item.RachunekCount = 0;
+                        item.WyplataCount = 0;
+                    }
 
                     if (!string.IsNullOrWhiteSpace(stderr))
                     {

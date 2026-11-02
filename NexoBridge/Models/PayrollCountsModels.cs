@@ -44,7 +44,9 @@ namespace NexoBridge.Models
         public string Name { get; set; }
 
         /// <summary>SUCCESS / SKIPPED_NO_PRICING (cennik klienta nie jest kadrowo-płacowy, nic do
-        /// policzenia) / SKIPPED_NO_DATABASE (brak znanej własnej bazy Nexo klienta) / FAILED.</summary>
+        /// policzenia) / SKIPPED_NO_DATABASE (brak znanej własnej bazy Nexo klienta) / NO_PAYROLL (w bazie
+        /// klienta nie prowadzono kadr - brak umów pracowniczych, list płac i wynagrodzeń; to NIE błąd,
+        /// pozycje kadrowe = 0) / FAILED.</summary>
         public string Status { get; set; }
         public string Error { get; set; }
         public List<PayrollFeeLineDto> Lines { get; set; } = new List<PayrollFeeLineDto>();

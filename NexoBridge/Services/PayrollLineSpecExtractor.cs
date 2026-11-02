@@ -13,9 +13,10 @@ namespace NexoBridge.Services
     /// cennika) a sesją Gratyfikanta konkretnego klienta (gdzie dopiero wywołujemy licznik).</summary>
     internal sealed record PayrollTierSpec(int From, int To, decimal? UnitNet, decimal? UnitGross, decimal? CollectiveNet, decimal? CollectiveGross);
 
-    /// <summary>Jedna pozycja cennika kadrowo-płacowego z podpiętym licznikiem obiektów - gotowa do
-    /// policzenia w sesji Gratyfikanta klienta (patrz PayrollLineSpecExtractor.ComputeLine).</summary>
-    internal sealed record PendingPayrollLineSpec(string Label, Guid CounterGuid, List<PayrollTierSpec> Tiers);
+    /// <summary>Jedna pozycja cennika kadrowo-płacowego - gotowa do policzenia w procesie potomnym klienta:
+    /// albo z podpiętym licznikiem obiektów (sesja Gratyfikanta, patrz PayrollLineSpecExtractor.ComputeLine),
+    /// albo pozycja PPK bez licznika (IsPpk - ilość z zapytania SQL, patrz PayrollPpkCounter).</summary>
+    internal sealed record PendingPayrollLineSpec(string Label, Guid CounterGuid, List<PayrollTierSpec> Tiers, bool IsPpk = false);
 
     /// <summary>Wszystkie oczekujące pozycje kadrowo-płacowe jednego klienta biura, plus jego NIP/nazwa
     /// do zbudowania raportu.</summary>
@@ -45,13 +46,26 @@ namespace NexoBridge.Services
             // 2026-10-05). Przegląd wszystkich 135 klientów biura (NexoBillingKonsola --dump-pricing-overview)
             // pokazał, że liczniki są podpięte wyłącznie do "Rachunek do umowy pracowniczej" i "Wypłata wg
             // miesiąca rozliczenia" - to sam licznik mówi, co policzyć, nazwa cennika nic nie wnosi.
+            // Wyjątek: "Obsługa PPK" nie ma licznika (patrz PayrollPpkCounter) - rozpoznajemy ją po nazwie.
             if (TryReadPropertyPath(client, "KlientBiura", out object biuroClient) && biuroClient != null
                 && TryReadPropertyPath(biuroClient, "CennikUslug", out object pricing) && pricing != null)
             {
                 foreach (object position in ReadObjectCollection(pricing, "PozycjeCennikaUslug"))
                 {
+                    string label = BillingConfigurationService.GetPositionLabel(position)
+                        ?? BillingConfigurationService.GetDefaultServiceName(BillingConfigurationService.MonthlyServiceKind.Payroll);
+
                     string counterGuidText = ReadStringCandidate(position, "ObiektPozycjiCennikaUslug.FunkcjaZliczajaca");
-                    if (string.IsNullOrWhiteSpace(counterGuidText) || !Guid.TryParse(counterGuidText, out Guid counterGuid) || counterGuid == Guid.Empty)
+                    Guid counterGuid = Guid.Empty;
+                    bool hasCounter = !string.IsNullOrWhiteSpace(counterGuidText)
+                        && Guid.TryParse(counterGuidText, out counterGuid) && counterGuid != Guid.Empty;
+
+                    // Pozycja bez licznika nexo: jedyną, którą liczymy sami, jest "Obsługa PPK" (nazwa z osobnym słowem
+                    // PPK) - ilość z zapytania SQL w bazie klienta. Reszta pozycji bez licznika to zwykłe usługi - pomijamy.
+                    bool isPpk = !hasCounter
+                        && (PayrollPpkCounter.IsPpkName(label)
+                            || PayrollPpkCounter.IsPpkName(ReadStringCandidate(position, "ObiektPozycjiCennikaUslug.Nazwa")));
+                    if (!hasCounter && !isPpk)
                     {
                         continue;
                     }
@@ -66,9 +80,7 @@ namespace NexoBridge.Services
                             ReadDecimalCandidate(tier, "CenaZbiorczaWPrzedzialeBrutto", "CenaZbiorczaBrutto")))
                         .ToList();
 
-                    string label = BillingConfigurationService.GetPositionLabel(position)
-                        ?? BillingConfigurationService.GetDefaultServiceName(BillingConfigurationService.MonthlyServiceKind.Payroll);
-                    lineSpecs.Add(new PendingPayrollLineSpec(label, counterGuid, tiers));
+                    lineSpecs.Add(new PendingPayrollLineSpec(label, counterGuid, tiers, isPpk));
                 }
             }
 
@@ -87,7 +99,21 @@ namespace NexoBridge.Services
                 return null;
             }
 
-            int quantity = (int)Math.Round(counter.Zlicz(periodStart, periodEnd), MidpointRounding.AwayFromZero);
+            return BuildLine(spec, (int)Math.Round(counter.Zlicz(periodStart, periodEnd), MidpointRounding.AwayFromZero));
+        }
+
+        /// <summary>Pozycja PPK (bez licznika nexo): ilość = liczba pracowników z wpłatą pracodawcy na PPK w miesiącu
+        /// (zapytanie SQL w bazie klienta, patrz PayrollPpkCounter), cena z cennika dokładnie jak przy liczniku.
+        /// Zwraca null przy ilości 0. Błąd bazy leci wyżej.</summary>
+        public static PayrollFeeLineDto ComputePpkLine(PendingPayrollLineSpec spec, string databaseName, DateTime periodStart, DateTime periodEnd)
+        {
+            return BuildLine(spec, PayrollPpkCounter.CountEmployees(databaseName, periodStart, periodEnd));
+        }
+
+        /// <summary>Przelicza policzoną ilość na pozycję wg przedziałów cennika. Zwraca null przy ilości 0/ujemnej
+        /// albo gdy żaden przedział nie pasuje.</summary>
+        private static PayrollFeeLineDto BuildLine(PendingPayrollLineSpec spec, int quantity)
+        {
             if (quantity <= 0)
             {
                 return null;

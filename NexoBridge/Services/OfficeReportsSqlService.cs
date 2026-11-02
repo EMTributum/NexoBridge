@@ -493,7 +493,7 @@ namespace NexoBridge.Services
         /// <summary>Połączenie z DB_SERVER / DB_USER / DB_PASS (te same zmienne co Sfera) i bazą z żądania.
         /// Encrypt + TrustServerCertificate ustawiane słowami kluczowymi, żeby kod działał identycznie z
         /// Microsoft.Data.SqlClient 5.x (NexoDLLs) i 7.x (pakiet NuGet).</summary>
-        private static string BuildConnectionString(string databaseName)
+        internal static string BuildConnectionString(string databaseName)
         {
             string server = Environment.GetEnvironmentVariable("DB_SERVER");
             string user = Environment.GetEnvironmentVariable("DB_USER");
