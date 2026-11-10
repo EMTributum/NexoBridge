@@ -69,6 +69,21 @@ namespace NexoBridge.Services
             JOIN ModelDanychContainer.StopnieNiepelnosprawnosci s ON s.Id = n.StopienNiepelnosprawnosci_Id
             WHERE n.Od < @end AND (n.Do IS NULL OR n.Do >= @start)";
 
+        // Kody tytułu ubezpieczenia (4 cyfry, np. 0110 = pracownik) z umów wypłat za miesiąc i prawo do emerytury/renty
+        // (Pracownicy.PrawoDoEmeryturyRenty_Id, KodZUS 0/1/2). Pełny 6-cyfrowy kod jak w RCA i w Excelu kadrowych =
+        // tytuł + prawo do emerytury + stopień niepełnosprawności (np. 011002). Rozróżnia dwa rekordy tej samej osoby.
+        private const string InsuranceCodesSql = @"
+            SELECT DISTINCT u.Pracownik_Id AS EmployeeId, RTRIM(k.Kod) AS TitleCode, pe.KodZUS AS PensionCode
+            FROM ModelDanychContainer.Wynagrodzenia w
+            JOIN ModelDanychContainer.ListyWynagrodzen l ON l.Id = w.ListaWynagrodzen_Id
+            JOIN ModelDanychContainer.Wynagrodzenia_Wyplata wy ON wy.Id = w.Id
+            JOIN ModelDanychContainer.UmowyPracownicze u ON u.Id = w.Umowa_Id
+            JOIN ModelDanychContainer.KodyTytuluUbezpieczenia k ON k.Id = u.KodTytuluUbezpieczenia_Id
+            JOIN ModelDanychContainer.PracownicyGr pg ON pg.Id = u.Pracownik_Id
+            JOIN ModelDanychContainer.Pracownicy pr ON pr.Id = pg.Pracownik_Id
+            LEFT JOIN ModelDanychContainer.PrawaDoEmeryturyRenty pe ON pe.Id = pr.PrawoDoEmeryturyRenty_Id
+            WHERE l.Miesiac >= @start AND l.Miesiac < @end";
+
         public async Task<KadryPodstawyZusResponse> ReadAsync(string databaseName, int year, int month, CancellationToken cancellationToken)
         {
             GetCredentials(out string server, out string user, out string password);
@@ -107,6 +122,24 @@ namespace NexoBridge.Services
                 }
             }, cancellationToken);
 
+            var insuranceCodes = new Dictionary<int, SortedSet<string>>();
+            await ReadAsync(connection, InsuranceCodesSql, start, reader =>
+            {
+                int employeeId = reader.GetInt32(0);
+                string title = reader.IsDBNull(1) ? "" : reader.GetString(1).Trim();
+                if (title.Length == 0)
+                {
+                    return;
+                }
+                string pension = reader.IsDBNull(2) ? "0" : reader.GetString(2).Trim();
+                string degreeCode = disability.TryGetValue(employeeId, out var d) ? d.Code : "0";
+                if (!insuranceCodes.TryGetValue(employeeId, out var codes))
+                {
+                    insuranceCodes[employeeId] = codes = new SortedSet<string>(StringComparer.Ordinal);
+                }
+                codes.Add(title + (pension.Length == 0 ? "0" : pension) + degreeCode);
+            }, cancellationToken);
+
             await ReadAsync(connection, EmployeesSql, start, reader =>
             {
                 int employeeId = reader.GetInt32(0);
@@ -124,6 +157,7 @@ namespace NexoBridge.Services
                     HasUnapproved = reader.GetInt32(8) > 0,
                     DisabilityCode = disabled ? degree.Code : null,
                     SpecialConditions = disabled && degree.Special,
+                    InsuranceCodes = insuranceCodes.TryGetValue(employeeId, out var codes) ? codes.ToList() : new List<string>(),
                 });
             }, cancellationToken);
 

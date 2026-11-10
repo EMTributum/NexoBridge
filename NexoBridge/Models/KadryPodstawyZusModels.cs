@@ -50,5 +50,10 @@ namespace NexoBridge.Models
 
         /// <summary>OkresyNiepelnosprawnosci.SchorzeniaSpecjalne aktywnego okresu.</summary>
         public bool SpecialConditions { get; set; }
+
+        /// <summary>Pełne 6-cyfrowe kody tytułu ubezpieczenia z umów wypłat za miesiąc (np. "011002" = pracownik,
+        /// bez prawa do emerytury, stopień umiarkowany) - kadrowe mają je w Excelu i rozróżniają nimi dwa rekordy
+        /// tej samej osoby. Zwykle jeden kod.</summary>
+        public List<string> InsuranceCodes { get; set; } = new();
     }
 }
