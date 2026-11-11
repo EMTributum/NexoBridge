@@ -40,9 +40,6 @@ namespace NexoBridge.Services
     public class KadryPodstawyZusSqlService
     {
         private const int CommandTimeoutSeconds = 60;
-        private const int ConnectTimeoutSeconds = 15;
-        private const int MaxDatabaseNameLength = 128;
-        private const string NexoDatabasePrefix = "Nexo_";
 
         private const string EmployeesSql = @"
             SELECT pg.Id AS EmployeeId, o.Nazwisko AS LastName, o.Imie AS FirstName,
@@ -164,14 +161,7 @@ namespace NexoBridge.Services
             return response;
         }
 
-        public static bool IsValidDatabaseName(string databaseName)
-        {
-            if (string.IsNullOrWhiteSpace(databaseName)) return false;
-            string trimmed = databaseName.Trim();
-            return trimmed.Length <= MaxDatabaseNameLength
-                && trimmed.StartsWith(NexoDatabasePrefix, StringComparison.OrdinalIgnoreCase)
-                && !trimmed.Any(char.IsControl);
-        }
+        public static bool IsValidDatabaseName(string databaseName) => GratyfikantReadOnlyAccess.IsValidDatabaseName(databaseName);
 
         private static async Task ReadAsync(SqlConnection connection, string sql, DateTime start, Action<SqlDataReader> onRow, CancellationToken cancellationToken)
         {
@@ -185,64 +175,18 @@ namespace NexoBridge.Services
             }
         }
 
-        private static void GetCredentials(out string server, out string user, out string password)
-        {
-            server = Environment.GetEnvironmentVariable("DB_SERVER");
-            user = Environment.GetEnvironmentVariable("DB_READ_USER");
-            password = Environment.GetEnvironmentVariable("DB_READ_PASS");
-            if (string.IsNullOrWhiteSpace(server) || string.IsNullOrWhiteSpace(user) || string.IsNullOrEmpty(password))
-            {
-                throw new KadryPodstawyZusConfigurationException(
-                    "Brak konfiguracji konta tylko do odczytu (DB_SERVER / DB_READ_USER / DB_READ_PASS) w środowisku NexoBridge. Konto administracyjne nie jest używane.");
-            }
-        }
+        private static Exception ConfigurationError(string message) => new KadryPodstawyZusConfigurationException(message);
 
-        private static async Task EnsureReadOnlyLoginAsync(SqlConnection connection, string expectedUser, CancellationToken cancellationToken)
-        {
-            await using var command = new SqlCommand(
-                "SELECT SUSER_SNAME() AS LoginName, ISNULL(IS_SRVROLEMEMBER('sysadmin'), 0) AS IsSysAdmin", connection) { CommandTimeout = CommandTimeoutSeconds };
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            string login = null;
-            int isSysAdmin = 0;
-            if (await reader.ReadAsync(cancellationToken))
-            {
-                login = reader.IsDBNull(0) ? null : reader.GetString(0);
-                isSysAdmin = Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture);
-            }
-            if (!string.Equals(login, expectedUser, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new KadryPodstawyZusConfigurationException("Połączenie SQL nie idzie na koncie DB_READ_USER - przerywam odczyt podstaw składek.");
-            }
-            if (isSysAdmin != 0)
-            {
-                throw new KadryPodstawyZusConfigurationException(
-                    "Konto DB_READ_USER ma rolę sysadmin - to nie jest konto tylko do odczytu. Odczyt podstaw składek odrzucony.");
-            }
-        }
+        private static void GetCredentials(out string server, out string user, out string password) =>
+            GratyfikantReadOnlyAccess.GetCredentials(ConfigurationError, out server, out user, out password);
 
-        private static async Task<string> ResolveDatabaseAsync(SqlConnection master, string databaseName, CancellationToken cancellationToken)
-        {
-            if (!IsValidDatabaseName(databaseName)) return null;
-            await using var command = new SqlCommand("SELECT name FROM sys.databases WHERE name = @name AND state = 0", master) { CommandTimeout = CommandTimeoutSeconds };
-            command.Parameters.Add("@name", System.Data.SqlDbType.NVarChar, MaxDatabaseNameLength).Value = databaseName;
-            return await command.ExecuteScalarAsync(cancellationToken) as string;
-        }
+        private static string BuildConnectionString(string server, string user, string password, string database) =>
+            GratyfikantReadOnlyAccess.BuildConnectionString(server, user, password, database, "NexoBridge-KadryPodstawyZus");
 
-        private static string BuildConnectionString(string server, string user, string password, string database)
-        {
-            var builder = new SqlConnectionStringBuilder
-            {
-                DataSource = server,
-                InitialCatalog = database,
-                UserID = user,
-                Password = password,
-                ApplicationIntent = ApplicationIntent.ReadOnly,
-                ConnectTimeout = ConnectTimeoutSeconds,
-                ApplicationName = "NexoBridge-KadryPodstawyZus",
-            };
-            builder["Encrypt"] = "True";
-            builder["TrustServerCertificate"] = "True";
-            return builder.ConnectionString;
-        }
+        private static Task EnsureReadOnlyLoginAsync(SqlConnection connection, string expectedUser, CancellationToken cancellationToken) =>
+            GratyfikantReadOnlyAccess.EnsureReadOnlyLoginAsync(connection, expectedUser, "podstaw składek", ConfigurationError, cancellationToken);
+
+        private static Task<string> ResolveDatabaseAsync(SqlConnection master, string databaseName, CancellationToken cancellationToken) =>
+            GratyfikantReadOnlyAccess.ResolveDatabaseAsync(master, databaseName, cancellationToken);
     }
 }
