@@ -105,10 +105,10 @@ namespace NexoBridge.Services
         {
             var report = new PayrollCountsBatchReport { JobId = job.JobId, Status = "SUCCESS" };
 
-            Dictionary<string, string> databaseByNip = job.ClientDatabases
+            Dictionary<string, ClientDatabaseRef> databaseByNip = job.ClientDatabases
                 .Where(c => !string.IsNullOrWhiteSpace(c.Nip) && !string.IsNullOrWhiteSpace(c.DatabaseName))
                 .GroupBy(c => c.Nip.Trim())
-                .ToDictionary(g => g.Key, g => g.First().DatabaseName.Trim());
+                .ToDictionary(g => g.Key, g => g.First());
 
             (DateTime periodStart, DateTime periodEnd) = PayrollLineSpecExtractor.ResolvePeriodRange(job.PeriodYear, job.PeriodMonth);
 
@@ -119,7 +119,7 @@ namespace NexoBridge.Services
 
             foreach (ClientPayrollSpec spec in specs)
             {
-                if (!databaseByNip.TryGetValue(spec.Nip, out string clientDatabaseName))
+                if (!databaseByNip.TryGetValue(spec.Nip, out ClientDatabaseRef clientRef))
                 {
                     report.Items.Add(new PayrollCountsItem
                     {
@@ -132,11 +132,14 @@ namespace NexoBridge.Services
                     continue;
                 }
 
+                string clientDatabaseName = clientRef.DatabaseName.Trim();
+
                 await raportujPostep(
                     5 + (int)(90.0 * processed / Math.Max(1, total)),
                     $"{processed + 1}/{total}: {spec.Name}...");
 
-                PayrollCountsItem item = await PoliczDlaKlientaWProcesie(spec, clientDatabaseName, job, periodStart, periodEnd, cancellationToken);
+                PayrollCountsItem item = await PoliczDlaKlientaWProcesie(
+                    spec, clientDatabaseName, clientRef.GroupFilter, job, periodStart, periodEnd, cancellationToken);
 
                 report.Items.Add(item);
                 if (item.Status == "FAILED")
@@ -165,7 +168,7 @@ namespace NexoBridge.Services
         /// Świeży proces = świeży, nieskażony stan statyczny Sfery - to jest CAŁY sens tego podejścia
         /// (patrz uzasadnienie w komentarzu klasy).</summary>
         private async Task<PayrollCountsItem> PoliczDlaKlientaWProcesie(
-            ClientPayrollSpec spec, string clientDatabaseName, PayrollCountsBatchJob job,
+            ClientPayrollSpec spec, string clientDatabaseName, PayrollGroupFilter groupFilter, PayrollCountsBatchJob job,
             DateTime periodStart, DateTime periodEnd, CancellationToken cancellationToken)
         {
             var item = new PayrollCountsItem { Nip = spec.Nip, Name = spec.Name };
@@ -186,6 +189,10 @@ namespace NexoBridge.Services
                 DatabaseName = clientDatabaseName,
                 PeriodStart = periodStart,
                 PeriodEnd = periodEnd,
+                IncludedGroups = groupFilter?.IncludedGroups?
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList() ?? new List<string>(),
                 Lines = spec.Lines.Select(l => new PayrollClientWorkerLineSpec
                 {
                     Label = l.Label,

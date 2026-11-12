@@ -10,6 +10,19 @@ namespace NexoBridge.Models
     {
         public string Nip { get; set; }
         public string DatabaseName { get; set; }
+
+        /// <summary>
+        /// Opcjonalna, konfigurowana w panelu billingu lista grup z tytułów list wynagrodzeń.
+        /// Null oznacza dotychczasowe zachowanie (licz wszystkie obiekty licznika). Niepusta lista
+        /// oznacza: dla liczników wypłat/rachunków uwzględnij tylko rekordy z tym oznaczeniem w
+        /// końcowym nawiasie tytułu listy, np. "Lista płac 11/2026 (trenerzy)".
+        /// </summary>
+        public PayrollGroupFilter GroupFilter { get; set; }
+    }
+
+    public class PayrollGroupFilter
+    {
+        public List<string> IncludedGroups { get; set; } = new List<string>();
     }
 
     public class PayrollCountsBatchJob
@@ -50,5 +63,32 @@ namespace NexoBridge.Models
         public string Status { get; set; }
         public string Error { get; set; }
         public List<PayrollFeeLineDto> Lines { get; set; } = new List<PayrollFeeLineDto>();
+    }
+
+    public class PayrollGroupsRequest
+    {
+        public string DatabaseName { get; set; }
+        public int PeriodYear { get; set; }
+        public int PeriodMonth { get; set; }
+        public int MonthsBack { get; set; } = 12;
+    }
+
+    public class PayrollGroupOptionDto
+    {
+        public string Key { get; set; }
+        public string Label { get; set; }
+        public int PayoutCount { get; set; }
+        public int ContractBillCount { get; set; }
+        public int HistoryCount { get; set; }
+        public DateTime? LastSeenAt { get; set; }
+    }
+
+    public class PayrollGroupsResponse
+    {
+        public string DatabaseName { get; set; }
+        public int PeriodYear { get; set; }
+        public int PeriodMonth { get; set; }
+        public int MonthsBack { get; set; }
+        public List<PayrollGroupOptionDto> Groups { get; set; } = new List<PayrollGroupOptionDto>();
     }
 }

@@ -339,6 +339,7 @@ namespace NexoBridge
                 app.MapLogEndpoints();
                 app.MapBillingEndpoints();
                 app.MapPayrollCountsEndpoints();
+                app.MapPayrollGroupsEndpoints();
                 app.MapRawPayrollCountsEndpoints();
                 app.MapZusOwnerContributionEndpoints();
                 app.MapTaxPreviewEndpoints();
@@ -382,6 +383,7 @@ namespace NexoBridge
 
                 List<PayrollClientWorkerLineSpec> counterLines = request.Lines.Where(l => !l.IsPpk).ToList();
                 List<PayrollClientWorkerLineSpec> ppkLines = request.Lines.Where(l => l.IsPpk).ToList();
+                bool filterByGroups = request.IncludedGroups?.Any(value => !string.IsNullOrWhiteSpace(value)) == true;
 
                 try
                 {
@@ -399,8 +401,16 @@ namespace NexoBridge
                             {
                                 try
                                 {
-                                    PayrollFeeLineDto line = PayrollLineSpecExtractor.ComputeLine(
-                                        ToPendingSpec(lineSpec), counterFactory, request.PeriodStart, request.PeriodEnd);
+                                    PayrollFeeLineDto line = filterByGroups
+                                        ? PayrollLineSpecExtractor.ComputeFilteredLine(
+                                            ToPendingSpec(lineSpec),
+                                            counterFactory,
+                                            request.DatabaseName,
+                                            request.IncludedGroups,
+                                            request.PeriodStart,
+                                            request.PeriodEnd)
+                                        : PayrollLineSpecExtractor.ComputeLine(
+                                            ToPendingSpec(lineSpec), counterFactory, request.PeriodStart, request.PeriodEnd);
                                     if (line != null)
                                     {
                                         response.Lines.Add(line);
@@ -409,6 +419,13 @@ namespace NexoBridge
                                 catch (Exception ex)
                                 {
                                     Console.Error.WriteLine($"[payroll-client-worker] Błąd pozycji '{lineSpec.Label}': {ex.GetBaseException().Message}");
+                                    // Przy aktywnym filtrze brak rozpoznania licznika nie może po cichu usunąć
+                                    // pozycji z faktury. Cały wynik klienta oznaczamy jako FAILED.
+                                    if (filterByGroups)
+                                    {
+                                        throw new InvalidOperationException(
+                                            $"Nie udało się policzyć filtrowanej pozycji '{lineSpec.Label}'.", ex);
+                                    }
                                 }
                             }
                         }

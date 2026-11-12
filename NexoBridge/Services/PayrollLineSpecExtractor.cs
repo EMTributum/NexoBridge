@@ -102,6 +102,31 @@ namespace NexoBridge.Services
             return BuildLine(spec, (int)Math.Round(counter.Zlicz(periodStart, periodEnd), MidpointRounding.AwayFromZero));
         }
 
+        /// <summary>
+        /// Wariant dla klienta z polityką grupową: rodzaj standardowego licznika rozpoznajemy z SQL-a
+        /// udostępnianego przez samo Nexo, a ilość liczymy z rekordów wypłat/rachunków należących do
+        /// wybranych grup. Cena i przedziały nadal pochodzą z cennika klienta biura.
+        /// </summary>
+        public static PayrollFeeLineDto ComputeFilteredLine(
+            PendingPayrollLineSpec spec,
+            IFabrykaLicznikowObiektow counterFactory,
+            string databaseName,
+            IEnumerable<string> includedGroups,
+            DateTime periodStart,
+            DateTime periodEnd)
+        {
+            ILicznikObiektow counter = counterFactory.Znajdz(spec.CounterGuid);
+            if (counter == null)
+            {
+                return null;
+            }
+
+            PayrollDocumentKind kind = PayrollGroupCounter.DetectCounterKind(counter);
+            int quantity = PayrollGroupCounter.CountFiltered(
+                databaseName, kind, includedGroups, periodStart, periodEnd);
+            return BuildLine(spec, quantity);
+        }
+
         /// <summary>Pozycja PPK (bez licznika nexo): ilość = liczba pracowników z wpłatą pracodawcy na PPK w miesiącu
         /// (zapytanie SQL w bazie klienta, patrz PayrollPpkCounter), cena z cennika dokładnie jak przy liczniku.
         /// Zwraca null przy ilości 0. Błąd bazy leci wyżej.</summary>
@@ -112,7 +137,7 @@ namespace NexoBridge.Services
 
         /// <summary>Przelicza policzoną ilość na pozycję wg przedziałów cennika. Zwraca null przy ilości 0/ujemnej
         /// albo gdy żaden przedział nie pasuje.</summary>
-        private static PayrollFeeLineDto BuildLine(PendingPayrollLineSpec spec, int quantity)
+        internal static PayrollFeeLineDto BuildLine(PendingPayrollLineSpec spec, int quantity)
         {
             if (quantity <= 0)
             {

@@ -16,6 +16,7 @@ namespace NexoBridge.Models
         public string DatabaseName { get; set; }
         public DateTime PeriodStart { get; set; }
         public DateTime PeriodEnd { get; set; }
+        public List<string> IncludedGroups { get; set; } = new List<string>();
         public List<PayrollClientWorkerLineSpec> Lines { get; set; } = new List<PayrollClientWorkerLineSpec>();
     }
 
