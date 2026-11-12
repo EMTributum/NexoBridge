@@ -571,6 +571,7 @@ namespace NexoBridge.Services
                 var umowa = PickUmowa(umowyPracownika, monthStart, monthEnd, out string zrodlo);
                 rec["umowa_zrodlo"] = zrodlo;
                 rec["zatrudniony_w_miesiacu"] = umowa != null && zrodlo == "w_miesiacu";
+                DateTime? zatrudnienieOd = null; // początek ciągu umów (do reguły "brutto" w braki_danych)
                 if (umowa != null)
                 {
                     int umowaId = Id(umowa, "Id");
@@ -586,7 +587,11 @@ namespace NexoBridge.Services
                     rec["umowa_kwota"] = Dec(umowa["Kwota"]);
                     rec["zawod"] = Str(umowa["Zawod"]);
 
-                    var chainIds = Chain(umowyPracownika, umowa).Select(c => Id(c, "Id")).ToHashSet();
+                    var chain = Chain(umowyPracownika, umowa);
+                    var chainIds = chain.Select(c => Id(c, "Id")).ToHashSet();
+                    zatrudnienieOd = chain
+                        .Select(c => Date(c["OkresObowiazywania_DataPoczatkowa"]) ?? Date(c["PierwszyDzienObowiazywania"]))
+                        .Where(x => x != null).Min();
                     var etat = PickByDate(etaty, "UmowaPracownicza_Id", "DataOd", "Lp", umowaId, chainIds, monthEnd);
                     rec["wymiar_etatu"] = etat == null ? null : $"{etat["Licznik"]}/{etat["Mianownik"]}";
                     var stan = PickByDate(stanowiska, "UmowaPracownicza_Id", "DataOd", "LP", umowaId, chainIds, monthEnd);
@@ -634,27 +639,35 @@ namespace NexoBridge.Services
                 decimal? podstawaWartosc = Get(rec, "podstawa_wartosc") as decimal?;
                 rec["wynagrodzenie_podstawa"] = cywilna ? (kwotaUmowy > 0 ? kwotaUmowy : null) : podstawaWartosc;
 
-                rec["braki_danych"] = MissingFields(rec);
+                rec["braki_danych"] = MissingFields(rec, monthStart, zatrudnienieOd);
                 records.Add(rec);
             }
 
             return records;
         }
 
-        /// <summary>Klucze pól potrzebnych do pisma, które są puste (pula: organ_nazwa, organ_adres, organ_konto, sygnatura_sprawy,
-        /// umowa, stanowisko, wynagrodzenie_podstawa, brutto_3m).</summary>
-        private static List<string> MissingFields(Dictionary<string, object> rec)
+        /// <summary>Braki danych do pisma - reguły (zależne od sytuacji pracownika) opisane w KadryPotraceniaBraki.</summary>
+        private static List<string> MissingFields(Dictionary<string, object> rec, DateTime monthStart, DateTime? zatrudnienieOd)
         {
-            var missing = new List<string>();
-            if (Text(rec, "organ_nazwa") == null) missing.Add("organ_nazwa");
-            if (Text(rec, "organ_adres_pelny") == null && Text(rec, "organ_miejscowosc") == null) missing.Add("organ_adres");
-            if (Text(rec, "organ_konto") == null) missing.Add("organ_konto");
-            if (Text(rec, "sygnatura_sprawy") == null) missing.Add("sygnatura_sprawy");
-            if (Text(rec, "umowa_zrodlo") == "brak") missing.Add("umowa");
-            if (Text(rec, "stanowisko") == null) missing.Add("stanowisko");
-            if (Get(rec, "wynagrodzenie_podstawa") == null) missing.Add("wynagrodzenie_podstawa");
-            if (Get(rec, "brutto_3m_suma") == null) missing.Add("brutto_3m");
-            return missing;
+            var brutto = new bool[3];
+            for (int k = 1; k <= 3; k++) brutto[k - 1] = Get(rec, $"brutto_m{k}") != null;
+            return KadryPotraceniaBraki.Oblicz(new KadryPotraceniaBrakiDane
+            {
+                MonthStart = monthStart,
+                OrganNazwa = Text(rec, "organ_nazwa"),
+                OrganMaAdres = Text(rec, "organ_adres_pelny") != null || Text(rec, "organ_miejscowosc") != null,
+                SygnaturaSprawy = Text(rec, "sygnatura_sprawy"),
+                UmowaZrodlo = Text(rec, "umowa_zrodlo"),
+                ZatrudnionyWMiesiacu = Flag(rec, "zatrudniony_w_miesiacu"),
+                UmowaTypPrawny = Text(rec, "umowa_typ_prawny"),
+                MaDateRozwiazania = Text(rec, "umowa_data_rozwiazania") != null,
+                MaDateKoncaUmowy = Text(rec, "umowa_data_do") != null,
+                Stanowisko = Text(rec, "stanowisko"),
+                WymiarEtatu = Text(rec, "wymiar_etatu"),
+                MaPodstawe = Get(rec, "wynagrodzenie_podstawa") != null,
+                ZatrudnienieOd = zatrudnienieOd,
+                BruttoMiesiace = brutto,
+            });
         }
 
         // ------------------------------------------------------------------------------------------------
