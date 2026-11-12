@@ -9,6 +9,13 @@ namespace NexoBridge.Services
         public DateTime MonthStart;
         public string OrganNazwa;
         public bool OrganMaAdres;
+        public string PracownikPesel;
+        /// <summary>Pracownik ma adres zamieszkania (adres pełny albo miejscowość).</summary>
+        public bool PracownikMaAdres;
+        public string PracodawcaNazwa;
+        public string PracodawcaNip;
+        /// <summary>Pracodawca ma adres (adres pełny albo miejscowość).</summary>
+        public bool PracodawcaMaAdres;
         public string SygnaturaSprawy;
         /// <summary>"w_miesiacu" / "ostatnia_przed_miesiacem" / "brak".</summary>
         public string UmowaZrodlo;
@@ -30,6 +37,8 @@ namespace NexoBridge.Services
     /// Reguły pola "braki_danych" potrącenia komorniczego. Zależą od sytuacji pracownika w miesiącu:
     ///  - ZAWSZE: organ_nazwa (brak nazwy organu), organ_adres (brak adresu organu), sygnatura_sprawy.
     ///    Numer konta organu NIE jest brakiem (pismo go nie zawiera).
+    ///    Dane osób potrzebne w każdym piśmie, niezależnie od sytuacji pracownika: pracownik_pesel, pracownik_adres
+    ///    (brak adresu pełnego i miejscowości), pracodawca_nazwa, pracodawca_nip, pracodawca_adres.
     ///  - Brak jakiejkolwiek umowy (umowa_zrodlo = "brak"): tylko "umowa", nic więcej z części umowy/wynagrodzenia.
     ///  - Jest umowa, ale pracownik niezatrudniony w miesiącu: wymagana tylko data zakończenia umowy
     ///    (data rozwiązania albo data końca umowy na czas określony) - brak = "data_rozwiazania".
@@ -61,6 +70,11 @@ namespace NexoBridge.Services
             if (string.IsNullOrWhiteSpace(d.OrganNazwa)) braki.Add("organ_nazwa");
             if (!d.OrganMaAdres) braki.Add("organ_adres");
             if (string.IsNullOrWhiteSpace(d.SygnaturaSprawy)) braki.Add("sygnatura_sprawy");
+            if (string.IsNullOrWhiteSpace(d.PracownikPesel)) braki.Add("pracownik_pesel");
+            if (!d.PracownikMaAdres) braki.Add("pracownik_adres");
+            if (string.IsNullOrWhiteSpace(d.PracodawcaNazwa)) braki.Add("pracodawca_nazwa");
+            if (string.IsNullOrWhiteSpace(d.PracodawcaNip)) braki.Add("pracodawca_nip");
+            if (!d.PracodawcaMaAdres) braki.Add("pracodawca_adres");
 
             if (d.UmowaZrodlo == "brak")
             {
