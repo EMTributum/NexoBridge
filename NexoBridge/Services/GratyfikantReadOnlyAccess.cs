@@ -84,6 +84,38 @@ namespace NexoBridge.Services
             }
         }
 
+        /// <summary>Otwiera połączenie do bazy klienta wyłącznie na koncie DB_READ_USER: waliduje nazwę bazy, bierze dane
+        /// z DB_READ_*, odrzuca inny login i rolę sysadmin. Wołający zamyka połączenie (using/await using).
+        /// <paramref name="applicationName"/> trafia do połączenia, <paramref name="what"/> do komunikatów błędów.</summary>
+        public static async Task<SqlConnection> OpenReadOnlyConnectionAsync(
+            string databaseName, string applicationName, string what, Func<string, Exception> configurationError, CancellationToken cancellationToken)
+        {
+            if (!IsValidDatabaseName(databaseName))
+            {
+                throw new ArgumentException("Niepoprawna nazwa bazy Gratyfikanta.", nameof(databaseName));
+            }
+
+            GetCredentials(configurationError, out string server, out string user, out string password);
+
+            var connection = new SqlConnection(BuildConnectionString(server, user, password, databaseName.Trim(), applicationName));
+            try
+            {
+                await connection.OpenAsync(cancellationToken);
+                await EnsureReadOnlyLoginAsync(connection, user, what, configurationError, cancellationToken);
+                return connection;
+            }
+            catch
+            {
+                await connection.DisposeAsync();
+                throw;
+            }
+        }
+
+        /// <summary>Wersja synchroniczna <see cref="OpenReadOnlyConnectionAsync"/> - dla procesu potomnego liczącego jednego klienta.</summary>
+        public static SqlConnection OpenReadOnlyConnection(
+            string databaseName, string applicationName, string what, Func<string, Exception> configurationError)
+            => OpenReadOnlyConnectionAsync(databaseName, applicationName, what, configurationError, CancellationToken.None).GetAwaiter().GetResult();
+
         /// <summary>Zwraca nazwę bazy z sys.databases (online) albo null, gdy takiej bazy nie ma lub nazwa jest niepoprawna.</summary>
         public static async Task<string> ResolveDatabaseAsync(SqlConnection master, string databaseName, CancellationToken cancellationToken)
         {

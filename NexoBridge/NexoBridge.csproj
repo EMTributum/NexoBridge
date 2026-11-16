@@ -673,4 +673,7 @@
 		<Reference Include="NexoDLLs\Xceed.Wpf.Toolkit.dll" />
 		<Reference Include="NexoDLLs\XpsToPdf.dll" />
 	</ItemGroup>
+	<ItemGroup>
+		<InternalsVisibleTo Include="NexoBridge.Tests" />
+	</ItemGroup>
 </Project>

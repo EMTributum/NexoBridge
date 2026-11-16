@@ -21,8 +21,8 @@ namespace NexoBridge.Services
 {
     /// <summary>
     /// Liczy realne pozycje kadrowo-płacowe (rachunki do umów pracowniczych, wypłaty wg listy płac)
-    /// per klient biura - dwuetapowo, bo konfiguracja cennika i realne dane liczbowe żyją w dwóch
-    /// różnych bazach (patrz PayrollLineSpecExtractor - pełne uzasadnienie i historia błędu):
+    /// wg MIESIĄCA LISTY (PayrollListMonthCounter) per klient biura - dwuetapowo, bo konfiguracja cennika
+    /// i realne dane liczbowe żyją w dwóch różnych bazach (patrz PayrollLineSpecExtractor - pełne uzasadnienie i historia błędu):
     ///   Faza 1 (ExtractEligibleSpecs): w JUŻ otwartej sesji biura odczytuje konfigurację cennika
     ///           każdego klienta (tanie, bez dodatkowego połączenia) - wołający ZAMYKA tę sesję biura
     ///           zaraz po tej fazie, PRZED rozpoczęciem Fazy 2 (patrz PayrollCountsBackgroundWorker) -
@@ -34,6 +34,9 @@ namespace NexoBridge.Services
     /// Błąd jednego klienta (zła/niedostępna baza, wygasła licencja, brak uprawnień operatora) nigdy
     /// nie przerywa całego batcha - trafia do PayrollCountsItem.Status=FAILED z komunikatem, reszta
     /// klientów jest liczona dalej.
+    ///
+    /// UWAGA (2026-11): proces potomny nie otwiera już sesji Sfery do liczenia - ilości idą zwykłym SQL-em (jak PPK).
+    /// Osobny proces zostaje (izolacja, limit czasu na klienta); poniższe uzasadnienie dotyczy historii.
     ///
     /// DLACZEGO OSOBNY PROCES, A NIE SAMA BLOKADA (SferaSessionGate)? Nawet przy pełnej serializacji
     /// (jedna sesja Sfery aktywna naraz w całym procesie NexoBridge) batch na 225 klientach nadal

@@ -1,10 +1,8 @@
-using InsERT.Moria.OperacjeZewnetrzne;
 using Microsoft.Data.SqlClient;
 using NexoBridge.Models;
 using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -22,8 +20,11 @@ namespace NexoBridge.Services
 
     /// <summary>
     /// Odczytuje grupę z końcowego nawiasu tytułu listy wynagrodzeń i liczy wypłaty/rachunki należące
-    /// do grup wybranych w panelu billingu. Konfiguracja klienta nie żyje tutaj: NexoBridge dostaje
-    /// wyłącznie listę wybranych kluczy w żądaniu. Brak listy zachowuje standardowy licznik Nexo.
+    /// do grup wybranych w panelu billingu - wg miesiąca listy i tą samą miarą co klient bez filtra
+    /// (wypłaty = różne osoby, rachunki = dokumenty; patrz PayrollListMonthCounter), także w podglądzie grup
+    /// (DiscoverAsync) - liczby w panelu zgadzają się z fakturą. Konfiguracja klienta
+    /// nie żyje tutaj: NexoBridge dostaje wyłącznie listę wybranych kluczy w żądaniu. Brak listy grup
+    /// oznacza liczenie bez filtra (PayrollListMonthCounter.Count).
     /// </summary>
     internal static class PayrollGroupCounter
     {
@@ -33,24 +34,30 @@ namespace NexoBridge.Services
             @"\((?<group>[^()]*)\)\s*$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+        // Wiersze (miesiąc listy, tytuł listy, rodzaj, pracownik dla wypłat, liczba dokumentów). Pracownik pozwala
+        // liczyć wypłaty w OSOBACH (ten sam pracownik na dwóch listach to jedna wypłata - jak na fakturach), zarówno
+        // przy liczeniu z filtrem grup, jak i w podglądzie grup.
         private const string RowsSql = @"
             SELECT l.Miesiac AS ListMonth,
                    l.Tytul AS ListTitle,
                    CASE WHEN wy.Id IS NOT NULL AND r.Id IS NULL THEN 'payout'
                         WHEN r.Id IS NOT NULL AND wy.Id IS NULL THEN 'contract_bill'
                         ELSE 'unknown' END AS Kind,
+                   CASE WHEN wy.Id IS NOT NULL THEN u.Pracownik_Id END AS PersonId,
                    COUNT_BIG(*) AS ItemCount
             FROM ModelDanychContainer.Wynagrodzenia w
             JOIN ModelDanychContainer.ListyWynagrodzen l ON l.Id = w.ListaWynagrodzen_Id
             LEFT JOIN ModelDanychContainer.Wynagrodzenia_Wyplata wy ON wy.Id = w.Id
             LEFT JOIN ModelDanychContainer.Wynagrodzenia_RachunekDoUmowyPracowniczej r ON r.Id = w.Id
+            LEFT JOIN ModelDanychContainer.UmowyPracownicze u ON u.Id = w.Umowa_Id
             WHERE l.Miesiac >= @periodStart AND l.Miesiac < @periodEnd
             GROUP BY l.Miesiac, l.Tytul,
                      CASE WHEN wy.Id IS NOT NULL AND r.Id IS NULL THEN 'payout'
                           WHEN r.Id IS NOT NULL AND wy.Id IS NULL THEN 'contract_bill'
-                          ELSE 'unknown' END";
+                          ELSE 'unknown' END,
+                     CASE WHEN wy.Id IS NOT NULL THEN u.Pracownik_Id END";
 
-        private sealed record PayrollGroupRow(DateTime ListMonth, string ListTitle, PayrollDocumentKind Kind, int Count);
+        internal sealed record PayrollGroupRow(DateTime ListMonth, string ListTitle, PayrollDocumentKind Kind, int? PersonId, int Count);
 
         private sealed class MutableOption
         {
@@ -88,25 +95,8 @@ namespace NexoBridge.Services
                 : (key, label);
         }
 
-        public static PayrollDocumentKind DetectCounterKind(ILicznikObiektow counter)
-        {
-            string sql = NormalizeSql(counter?.ZliczSqlCommandString());
-            if (string.IsNullOrWhiteSpace(sql))
-            {
-                return PayrollDocumentKind.Unknown;
-            }
-
-            if ((sql.Contains("RACHUN") && sql.Contains("UMOW")) || sql.Contains("CONTRACTBILL"))
-            {
-                return PayrollDocumentKind.ContractBill;
-            }
-            if (sql.Contains("WYPLAT") || sql.Contains("PAYOUT"))
-            {
-                return PayrollDocumentKind.Payout;
-            }
-            return PayrollDocumentKind.Unknown;
-        }
-
+        /// <summary>Ilość z list należących do wybranych grup, wg miesiąca listy: wypłaty = różne osoby, rachunki = dokumenty
+        /// (ta sama miara co PayrollListMonthCounter.Count dla klienta bez filtra).</summary>
         public static int CountFiltered(
             string databaseName,
             PayrollDocumentKind kind,
@@ -126,9 +116,7 @@ namespace NexoBridge.Services
 
             List<PayrollGroupRow> rows = ReadRowsAsync(
                 databaseName, periodStart, periodEnd, CancellationToken.None).GetAwaiter().GetResult();
-            return rows
-                .Where(row => row.Kind == kind && selected.Contains(ExtractGroup(row.ListTitle).Key))
-                .Sum(row => row.Count);
+            return PayrollListMonthCounter.CountRows(rows.Select(ToCountRow), kind, selected);
         }
 
         public static async Task<PayrollGroupsResponse> DiscoverAsync(
@@ -141,53 +129,72 @@ namespace NexoBridge.Services
             List<PayrollGroupRow> rows = await ReadRowsAsync(
                 request.DatabaseName, historyStart, periodEnd, cancellationToken);
 
-            var options = new Dictionary<string, MutableOption>(StringComparer.Ordinal);
-            foreach (PayrollGroupRow row in rows.Where(row => row.Kind != PayrollDocumentKind.Unknown))
-            {
-                (string key, string label) = ExtractGroup(row.ListTitle);
-                if (!options.TryGetValue(key, out MutableOption option))
-                {
-                    option = new MutableOption { Key = key, Label = label };
-                    options[key] = option;
-                }
-
-                option.HistoryCount += row.Count;
-                option.LastSeenAt = !option.LastSeenAt.HasValue || row.ListMonth > option.LastSeenAt.Value
-                    ? row.ListMonth
-                    : option.LastSeenAt;
-
-                bool currentPeriod = row.ListMonth.Year == request.PeriodYear && row.ListMonth.Month == request.PeriodMonth;
-                if (currentPeriod && row.Kind == PayrollDocumentKind.Payout)
-                {
-                    option.PayoutCount += row.Count;
-                }
-                else if (currentPeriod && row.Kind == PayrollDocumentKind.ContractBill)
-                {
-                    option.ContractBillCount += row.Count;
-                }
-            }
-
             return new PayrollGroupsResponse
             {
                 DatabaseName = request.DatabaseName,
                 PeriodYear = request.PeriodYear,
                 PeriodMonth = request.PeriodMonth,
                 MonthsBack = request.MonthsBack,
-                Groups = options.Values
-                    .OrderByDescending(option => option.PayoutCount + option.ContractBillCount)
-                    .ThenBy(option => option.Label, StringComparer.CurrentCultureIgnoreCase)
-                    .Select(option => new PayrollGroupOptionDto
-                    {
-                        Key = option.Key,
-                        Label = option.Label,
-                        PayoutCount = option.PayoutCount,
-                        ContractBillCount = option.ContractBillCount,
-                        HistoryCount = option.HistoryCount,
-                        LastSeenAt = option.LastSeenAt,
-                    })
-                    .ToList(),
+                Groups = BuildOptions(rows, request.PeriodYear, request.PeriodMonth),
             };
         }
+
+        /// <summary>Opcje grup do panelu billingu. Liczby w tej samej mierze co faktura (PayrollListMonthCounter):
+        /// wypłaty = różne osoby w miesiącu, rachunki = dokumenty; HistoryCount = suma miesięcznych wartości.</summary>
+        internal static List<PayrollGroupOptionDto> BuildOptions(IEnumerable<PayrollGroupRow> rows, int periodYear, int periodMonth)
+        {
+            var options = new Dictionary<string, MutableOption>(StringComparer.Ordinal);
+            var known = rows
+                .Where(row => row.Kind != PayrollDocumentKind.Unknown)
+                .Select(row => (Row: row, Group: ExtractGroup(row.ListTitle)))
+                .ToList();
+
+            foreach (var groupRows in known.GroupBy(item => item.Group.Key, StringComparer.Ordinal))
+            {
+                var option = new MutableOption { Key = groupRows.Key, Label = groupRows.First().Group.Label };
+                options[groupRows.Key] = option;
+                var onlyThisGroup = new HashSet<string>(StringComparer.Ordinal) { groupRows.Key };
+
+                foreach (var monthKind in groupRows.GroupBy(item => (item.Row.ListMonth, item.Row.Kind)))
+                {
+                    (DateTime listMonth, PayrollDocumentKind kind) = monthKind.Key;
+                    int measure = PayrollListMonthCounter.CountRows(
+                        monthKind.Select(item => ToCountRow(item.Row)), kind, onlyThisGroup);
+
+                    option.HistoryCount += measure;
+                    option.LastSeenAt = !option.LastSeenAt.HasValue || listMonth > option.LastSeenAt.Value
+                        ? listMonth
+                        : option.LastSeenAt;
+
+                    bool currentPeriod = listMonth.Year == periodYear && listMonth.Month == periodMonth;
+                    if (currentPeriod && kind == PayrollDocumentKind.Payout)
+                    {
+                        option.PayoutCount += measure;
+                    }
+                    else if (currentPeriod && kind == PayrollDocumentKind.ContractBill)
+                    {
+                        option.ContractBillCount += measure;
+                    }
+                }
+            }
+
+            return options.Values
+                .OrderByDescending(option => option.PayoutCount + option.ContractBillCount)
+                .ThenBy(option => option.Label, StringComparer.CurrentCultureIgnoreCase)
+                .Select(option => new PayrollGroupOptionDto
+                {
+                    Key = option.Key,
+                    Label = option.Label,
+                    PayoutCount = option.PayoutCount,
+                    ContractBillCount = option.ContractBillCount,
+                    HistoryCount = option.HistoryCount,
+                    LastSeenAt = option.LastSeenAt,
+                })
+                .ToList();
+        }
+
+        private static PayrollListMonthCounter.PayrollCountRow ToCountRow(PayrollGroupRow row)
+            => new PayrollListMonthCounter.PayrollCountRow(row.ListTitle, row.Kind, row.PersonId, row.Count);
 
         private static async Task<List<PayrollGroupRow>> ReadRowsAsync(
             string databaseName,
@@ -195,27 +202,7 @@ namespace NexoBridge.Services
             DateTime periodEnd,
             CancellationToken cancellationToken)
         {
-            if (!GratyfikantReadOnlyAccess.IsValidDatabaseName(databaseName))
-            {
-                throw new ArgumentException("Niepoprawna nazwa bazy Gratyfikanta.", nameof(databaseName));
-            }
-
-            GratyfikantReadOnlyAccess.GetCredentials(
-                message => new OfficeReportsConfigurationException(message),
-                out string server,
-                out string user,
-                out string password);
-
-            string connectionString = GratyfikantReadOnlyAccess.BuildConnectionString(
-                server, user, password, databaseName.Trim(), "NexoBridge-PayrollGroups");
-            await using var connection = new SqlConnection(connectionString);
-            await connection.OpenAsync(cancellationToken);
-            await GratyfikantReadOnlyAccess.EnsureReadOnlyLoginAsync(
-                connection,
-                user,
-                "grup list wynagrodzeń",
-                message => new OfficeReportsConfigurationException(message),
-                cancellationToken);
+            await using SqlConnection connection = await OpenReadOnlyConnectionAsync(databaseName, cancellationToken);
 
             await using var command = new SqlCommand(RowsSql, connection) { CommandTimeout = CommandTimeoutSeconds };
             command.Parameters.Add("@periodStart", SqlDbType.DateTime2).Value = periodStart;
@@ -232,14 +219,24 @@ namespace NexoBridge.Services
                         ? PayrollDocumentKind.ContractBill
                         : PayrollDocumentKind.Unknown;
                 long count = reader.GetInt64(reader.GetOrdinal("ItemCount"));
+                int personOrdinal = reader.GetOrdinal("PersonId");
                 rows.Add(new PayrollGroupRow(
                     reader.GetDateTime(reader.GetOrdinal("ListMonth")),
                     reader.IsDBNull(reader.GetOrdinal("ListTitle")) ? null : reader.GetString(reader.GetOrdinal("ListTitle")),
                     kind,
+                    reader.IsDBNull(personOrdinal) ? null : Convert.ToInt32(reader.GetValue(personOrdinal)),
                     checked((int)count)));
             }
             return rows;
         }
+
+        private static Task<SqlConnection> OpenReadOnlyConnectionAsync(string databaseName, CancellationToken cancellationToken)
+            => GratyfikantReadOnlyAccess.OpenReadOnlyConnectionAsync(
+                databaseName,
+                "NexoBridge-PayrollGroups",
+                "grup list wynagrodzeń",
+                message => new OfficeReportsConfigurationException(message),
+                cancellationToken);
 
         private static HashSet<string> NormalizeSelection(IEnumerable<string> values)
         {
@@ -253,16 +250,6 @@ namespace NexoBridge.Services
         {
             return string.Join(" ", (value ?? string.Empty)
                 .Split((char[])null, StringSplitOptions.RemoveEmptyEntries));
-        }
-
-        private static string NormalizeSql(string value)
-        {
-            return (value ?? string.Empty)
-                .Normalize(NormalizationForm.FormD)
-                .Where(c => CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
-                .Aggregate(new StringBuilder(), (builder, c) => builder.Append(c))
-                .ToString()
-                .ToUpperInvariant();
         }
     }
 }

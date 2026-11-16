@@ -387,47 +387,32 @@ namespace NexoBridge
 
                 try
                 {
-                    // Sferę (Gratyfikant) uruchamiamy tylko, gdy są pozycje z licznikiem - sam PPK liczy się zwykłym SELECT-em.
-                    if (counterLines.Count > 0)
+                    // Pozycje z licznikiem nexo liczymy SQL-em wg miesiąca listy (PayrollListMonthCounter) - bez Sfery,
+                    // tak jak PPK. Błąd (także nieznany licznik) = FAILED całego klienta, żeby pozycja nie znikała po
+                    // cichu z faktury; wynik częściowy nie jest zwracany.
+                    foreach (PayrollClientWorkerLineSpec lineSpec in counterLines)
                     {
-                        using (var silnik = new SferaEngine())
+                        try
                         {
-                            silnik.Uruchom(request.Username, request.Password, request.DatabaseName, ProductId.Gratyfikant);
-
-                            IFabrykaLicznikowObiektow counterFactory =
-                                SferaReflectionHelpers.GetRequiredService<IFabrykaLicznikowObiektow>(silnik.Sfera, DateTime.Today);
-
-                            foreach (PayrollClientWorkerLineSpec lineSpec in counterLines)
+                            PayrollFeeLineDto line = filterByGroups
+                                ? PayrollLineSpecExtractor.ComputeFilteredLine(
+                                    ToPendingSpec(lineSpec),
+                                    request.DatabaseName,
+                                    request.IncludedGroups,
+                                    request.PeriodStart,
+                                    request.PeriodEnd)
+                                : PayrollLineSpecExtractor.ComputeLine(
+                                    ToPendingSpec(lineSpec), request.DatabaseName, request.PeriodStart, request.PeriodEnd);
+                            if (line != null)
                             {
-                                try
-                                {
-                                    PayrollFeeLineDto line = filterByGroups
-                                        ? PayrollLineSpecExtractor.ComputeFilteredLine(
-                                            ToPendingSpec(lineSpec),
-                                            counterFactory,
-                                            request.DatabaseName,
-                                            request.IncludedGroups,
-                                            request.PeriodStart,
-                                            request.PeriodEnd)
-                                        : PayrollLineSpecExtractor.ComputeLine(
-                                            ToPendingSpec(lineSpec), counterFactory, request.PeriodStart, request.PeriodEnd);
-                                    if (line != null)
-                                    {
-                                        response.Lines.Add(line);
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    Console.Error.WriteLine($"[payroll-client-worker] Błąd pozycji '{lineSpec.Label}': {ex.GetBaseException().Message}");
-                                    // Przy aktywnym filtrze brak rozpoznania licznika nie może po cichu usunąć
-                                    // pozycji z faktury. Cały wynik klienta oznaczamy jako FAILED.
-                                    if (filterByGroups)
-                                    {
-                                        throw new InvalidOperationException(
-                                            $"Nie udało się policzyć filtrowanej pozycji '{lineSpec.Label}'.", ex);
-                                    }
-                                }
+                                response.Lines.Add(line);
                             }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[payroll-client-worker] Błąd pozycji '{lineSpec.Label}': {ex.GetBaseException().Message}");
+                            throw new InvalidOperationException(
+                                $"Nie udało się policzyć pozycji '{lineSpec.Label}': {ex.GetBaseException().Message}", ex);
                         }
                     }
 

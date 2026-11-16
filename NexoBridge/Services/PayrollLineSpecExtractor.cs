@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using InsERT.Moria.ModelDanych;
-using InsERT.Moria.OperacjeZewnetrzne;
 using NexoBridge.Models;
 using static NexoBridge.Services.SferaReflectionHelpers;
 
@@ -14,8 +13,9 @@ namespace NexoBridge.Services
     internal sealed record PayrollTierSpec(int From, int To, decimal? UnitNet, decimal? UnitGross, decimal? CollectiveNet, decimal? CollectiveGross);
 
     /// <summary>Jedna pozycja cennika kadrowo-płacowego - gotowa do policzenia w procesie potomnym klienta:
-    /// albo z podpiętym licznikiem obiektów (sesja Gratyfikanta, patrz PayrollLineSpecExtractor.ComputeLine),
-    /// albo pozycja PPK bez licznika (IsPpk - ilość z zapytania SQL, patrz PayrollPpkCounter).</summary>
+    /// albo z podpiętym licznikiem nexo (rozpoznawanym po GUID-zie, ilość z SQL wg miesiąca listy - patrz
+    /// PayrollListMonthCounter i PayrollLineSpecExtractor.ComputeLine), albo pozycja PPK bez licznika
+    /// (IsPpk - ilość z zapytania SQL, patrz PayrollPpkCounter).</summary>
     internal sealed record PendingPayrollLineSpec(string Label, Guid CounterGuid, List<PayrollTierSpec> Tiers, bool IsPpk = false);
 
     /// <summary>Wszystkie oczekujące pozycje kadrowo-płacowe jednego klienta biura, plus jego NIP/nazwa
@@ -26,11 +26,15 @@ namespace NexoBridge.Services
     /// Faza 4 planu billingu (naprawa 2026-09-22 - patrz ZNANY BŁĄD w historii BillingConfigurationService.cs):
     /// konfiguracja cennika (nazwa pozycji, GUID licznika, przedziały cenowe) żyje w sesji BIURA
     /// (KlientBiura.CennikUslug), ale realne dane do policzenia (rachunki, listy płac) żyją w OSOBNEJ,
-    /// własnej bazie Gratyfikant KAŻDEGO klienta - potwierdzone na żywych danych CSPAY.PL: te same
-    /// liczniki wywołane z sesji biura dały błędne wartości (1 i 6 zamiast 2 i 0), a wywołane z sesji
-    /// połączonej wprost z bazą klienta dały poprawne (2 i 0). Stąd rozdzielenie na dwie fazy:
-    /// ExtractPayrollSpec (tania, w sesji biura, bez wołania licznika) i ComputeLine (w osobnej sesji
-    /// Gratyfikanta per klient, patrz PayrollCountsService).
+    /// własnej bazie Gratyfikant KAŻDEGO klienta. Stąd rozdzielenie na dwie fazy:
+    /// ExtractPayrollSpec (tania, w sesji biura) i ComputeLine (w osobnym procesie per klient, patrz
+    /// PayrollCountsService).
+    ///
+    /// Od 2026-11 ilości liczymy własnym SQL-em wg MIESIĄCA LISTY płac/rachunków (PayrollListMonthCounter),
+    /// a nie licznikami obiektów nexo. Wypłaty: ten sam wynik co dotąd (osoby wg miesiąca listy), tylko bez Sfery.
+    /// Rachunki: zmiana z daty rachunku na miesiąc listy (rachunek zapłacony na początku następnego miesiąca lądował
+    /// na fakturze nie tego miesiąca co jego lista). Licznik z cennika służy już tylko do rozpoznania rodzaju pozycji
+    /// (po GUID-zie) - Sfera przy liczeniu nie jest potrzebna.
     /// </summary>
     internal static class PayrollLineSpecExtractor
     {
@@ -87,41 +91,29 @@ namespace NexoBridge.Services
             return new ClientPayrollSpec(nip, name, lineSpecs);
         }
 
-        /// <summary>Woła licznik obiektów w AKTUALNIE połączonej sesji (musi to być sesja Gratyfikanta
-        /// połączona z własną bazą KLIENTA, nie sesja biura) i przelicza wynik na kwotę wg przedziału
-        /// ilościowego. Zwraca null, jeśli licznik nie istnieje, zwrócił 0/ujemną ilość, albo żaden
-        /// przedział nie pasuje.</summary>
-        public static PayrollFeeLineDto ComputeLine(PendingPayrollLineSpec spec, IFabrykaLicznikowObiektow counterFactory, DateTime periodStart, DateTime periodEnd)
+        /// <summary>Liczy ilość pozycji z licznikiem nexo wg miesiąca listy płac/rachunków (zapytanie SQL w bazie
+        /// klienta, patrz PayrollListMonthCounter) i przelicza ją na kwotę wg przedziału ilościowego cennika.
+        /// Rodzaj pozycji wynika z GUID-a licznika; nieznany GUID rzuca wyjątek (klient dostaje FAILED, pozycja
+        /// nie znika po cichu z faktury). Zwraca null przy ilości 0 albo gdy żaden przedział nie pasuje.</summary>
+        public static PayrollFeeLineDto ComputeLine(PendingPayrollLineSpec spec, string databaseName, DateTime periodStart, DateTime periodEnd)
         {
-            ILicznikObiektow counter = counterFactory.Znajdz(spec.CounterGuid);
-            if (counter == null)
-            {
-                return null;
-            }
-
-            return BuildLine(spec, (int)Math.Round(counter.Zlicz(periodStart, periodEnd), MidpointRounding.AwayFromZero));
+            PayrollDocumentKind kind = PayrollListMonthCounter.ResolveKind(spec.CounterGuid);
+            return BuildLine(spec, PayrollListMonthCounter.Count(databaseName, kind, periodStart, periodEnd));
         }
 
         /// <summary>
-        /// Wariant dla klienta z polityką grupową: rodzaj standardowego licznika rozpoznajemy z SQL-a
-        /// udostępnianego przez samo Nexo, a ilość liczymy z rekordów wypłat/rachunków należących do
-        /// wybranych grup. Cena i przedziały nadal pochodzą z cennika klienta biura.
+        /// Wariant dla klienta z polityką grupową: ilość liczymy tą samą miarą co bez filtra (wypłaty = osoby,
+        /// rachunki = dokumenty, wg miesiąca listy), ale tylko z list należących do wybranych grup. Cena i
+        /// przedziały nadal pochodzą z cennika klienta biura.
         /// </summary>
         public static PayrollFeeLineDto ComputeFilteredLine(
             PendingPayrollLineSpec spec,
-            IFabrykaLicznikowObiektow counterFactory,
             string databaseName,
             IEnumerable<string> includedGroups,
             DateTime periodStart,
             DateTime periodEnd)
         {
-            ILicznikObiektow counter = counterFactory.Znajdz(spec.CounterGuid);
-            if (counter == null)
-            {
-                return null;
-            }
-
-            PayrollDocumentKind kind = PayrollGroupCounter.DetectCounterKind(counter);
+            PayrollDocumentKind kind = PayrollListMonthCounter.ResolveKind(spec.CounterGuid);
             int quantity = PayrollGroupCounter.CountFiltered(
                 databaseName, kind, includedGroups, periodStart, periodEnd);
             return BuildLine(spec, quantity);
@@ -180,9 +172,9 @@ namespace NexoBridge.Services
             return null;
         }
 
-        /// <summary>Okres [Od, Do) do przekazania do Zlicz() - koniec WYŁĄCZNIE pierwszy dzień
-        /// następnego miesiąca (nie ostatni dzień bieżącego), bo liczniki filtrują "dataOd &lt;= X &lt;
-        /// dataDo" (przedział otwarty z prawej) - potwierdzone przez ZliczSqlCommandString().</summary>
+        /// <summary>Okres [Od, Do) miesiąca rozliczenia - koniec WYŁĄCZNIE pierwszy dzień następnego miesiąca
+        /// (nie ostatni dzień bieżącego), bo zapytania filtrują "Od &lt;= X &lt; Do" (przedział otwarty z prawej).
+        /// Dla list płac X = ListyWynagrodzen.Miesiac (zawsze 1. dzień miesiąca).</summary>
         public static (DateTime Start, DateTime End) ResolvePeriodRange(int year, int month)
         {
             DateTime start = new DateTime(year, month, 1);
