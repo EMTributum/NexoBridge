@@ -63,11 +63,20 @@ namespace NexoBridge.Services
             object komentarzeManager = PobierzMenedzera("IKomentarzeNexo");
 
             // Rachmistrz nie ma dekretów (interfejs IDekrety nie istnieje w DLL-ach) - tylko KPiR, VAT i EP.
-            var menedzerowie = new Dictionary<string, dynamic> {
-                { "KPiR", PobierzMenedzera("IZapisyWKPiR") },
-                { "Vat", PobierzMenedzera("IZapisyWEwidencjiVAT") },
-                { "EP", PobierzMenedzera("IZapisyWEP") }
-            };
+            // Rewizor odwrotnie: dekret (DokumentKsiegowy, "DK") i zapis VAT; menedżerów KPiR/EP w ogóle nie
+            // tworzymy (w tej sesji nie mają sensu, a wołanie ich mogłoby rzucić).
+            var menedzerowie = new Dictionary<string, dynamic>();
+            if (job.IsRewizor)
+            {
+                menedzerowie["DK"] = PobierzMenedzera("IDokumentyKsiegowe");
+                menedzerowie["Vat"] = PobierzMenedzera("IZapisyWEwidencjiVAT");
+            }
+            else
+            {
+                menedzerowie["KPiR"] = PobierzMenedzera("IZapisyWKPiR");
+                menedzerowie["Vat"] = PobierzMenedzera("IZapisyWEwidencjiVAT");
+                menedzerowie["EP"] = PobierzMenedzera("IZapisyWEP");
+            }
 
             var listaWynikow = ((IEnumerable)rezultat).Cast<object>().ToList();
             var podpieteZalaczniki = new List<string>();
@@ -308,6 +317,17 @@ namespace NexoBridge.Services
                                 nrSystemowy,
                                 typWyniku,
                                 dokumentId);
+                        }
+                    }
+
+                    if (job.IsRewizor)
+                    {
+                        // Dekret i jego zapis VAT to ta sama faktura, a księgowa ogląda dokument księgowy - jak w
+                        // backfillu linkujemy tylko dekret. Zapis VAT zostaje wyłącznie jako awaryjny cel, gdy
+                        // dekretu nie udało się znaleźć.
+                        if (celeDoPowiazania.Any(c => string.Equals(c.ManagerKey, "DK", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            celeDoPowiazania.RemoveAll(c => !string.Equals(c.ManagerKey, "DK", StringComparison.OrdinalIgnoreCase));
                         }
                     }
 
@@ -1673,12 +1693,17 @@ namespace NexoBridge.Services
             };
         }
 
-        private string PobierzKluczMenedzeraDlaWyniku(string typWyniku)
+        private string PobierzKluczMenedzeraDlaWyniku(string typWyniku) => KluczMenedzeraDlaTypuWyniku(typWyniku);
+
+        // Typ wyniku dekretacji -> klucz menedżera: Rewizor zwraca WynikowyDokumentKsiegowy (dekret, "DK") i
+        // WynikowyZapisWEwidencjiVAT; Rachmistrz zapisy KPiR / VAT / EP.
+        internal static string KluczMenedzeraDlaTypuWyniku(string typWyniku)
         {
-            if (ZawieraTyp(typWyniku, "VAT")) return "Vat";
-            if (ZawieraTyp(typWyniku, "KPiR")) return "KPiR";
-            if (ZawieraTyp(typWyniku, "Dekret")) return "Nieznany"; // Rachmistrz nie ma dekretów (brak IDekrety)
-            if (ZawieraTyp(typWyniku, "EP")) return "EP";
+            if (TypZawiera(typWyniku, "DokumentKsiegowy")) return "DK";
+            if (TypZawiera(typWyniku, "VAT")) return "Vat";
+            if (TypZawiera(typWyniku, "KPiR")) return "KPiR";
+            if (TypZawiera(typWyniku, "Dekret")) return "Nieznany"; // Rachmistrz nie ma dekretów (brak IDekrety)
+            if (TypZawiera(typWyniku, "EP")) return "EP";
             return "Nieznany";
         }
 
@@ -1816,9 +1841,12 @@ namespace NexoBridge.Services
                 return ZnajdzEncjeVat(menedzerowie["Vat"], wynik, dokumentZrodlowy);
             }
 
-            if (ZawieraTyp(typ, "KPiR")) mgr = menedzerowie["KPiR"];
-            else if (ZawieraTyp(typ, "Dekret")) mgr = null; // Rachmistrz nie ma dekretów (brak IDekrety)
-            else if (ZawieraTyp(typ, "EP")) mgr = menedzerowie["EP"];
+            // W sesji Rewizora nie ma menedżerów KPiR/EP, w sesji Rachmistrza - DK (brak klucza = brak menedżera).
+            string kluczMenedzera = ZawieraTyp(typ, "DokumentKsiegowy") ? "DK"
+                : ZawieraTyp(typ, "KPiR") ? "KPiR"
+                : ZawieraTyp(typ, "EP") ? "EP"
+                : null; // m.in. "Dekret" - Rachmistrz nie ma dekretów (brak IDekrety)
+            if (kluczMenedzera != null && menedzerowie.ContainsKey(kluczMenedzera)) mgr = menedzerowie[kluczMenedzera];
 
             return ZnajdzFizycznaEncje(mgr, wynik.DokumentId);
         }
@@ -1980,7 +2008,9 @@ namespace NexoBridge.Services
             return powiazaneId.Contains(dokument.Id);
         }
 
-        private bool ZawieraTyp(string typ, string fragment)
+        private bool ZawieraTyp(string typ, string fragment) => TypZawiera(typ, fragment);
+
+        private static bool TypZawiera(string typ, string fragment)
         {
             return typ?.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0;
         }

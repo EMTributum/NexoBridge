@@ -160,12 +160,19 @@ namespace NexoBridge.Services
             await raportujPostep(92, "Weryfikacja numerów KSeF po dekretacji...");
 
             var listaWynikow = PobierzWynikoweOperacje(rezultat);
-            var menedzerowie = new Dictionary<string, dynamic>
+            // Rewizor: dekret ("DK") + zapis VAT, bez KPiR/EP; Rachmistrz: KPiR + VAT + EP (jak dotąd).
+            var menedzerowie = new Dictionary<string, dynamic>();
+            if (job.IsRewizor)
             {
-                { "KPiR", PobierzMenedzera("IZapisyWKPiR") },
-                { "Vat", PobierzMenedzera("IZapisyWEwidencjiVAT") },
-                { "EP", PobierzMenedzera("IZapisyWEP") }
-            };
+                menedzerowie["DK"] = PobierzMenedzera("IDokumentyKsiegowe");
+                menedzerowie["Vat"] = PobierzMenedzera("IZapisyWEwidencjiVAT");
+            }
+            else
+            {
+                menedzerowie["KPiR"] = PobierzMenedzera("IZapisyWKPiR");
+                menedzerowie["Vat"] = PobierzMenedzera("IZapisyWEwidencjiVAT");
+                menedzerowie["EP"] = PobierzMenedzera("IZapisyWEP");
+            }
 
             int sprawdzone = 0;
             var problemy = new List<string>();
@@ -1096,10 +1103,13 @@ namespace NexoBridge.Services
             string typ = wynik?.GetType().Name ?? "";
             dynamic mgr = null;
 
-            if (ZawieraTyp(typ, "KPiR")) mgr = menedzerowie["KPiR"];
-            else if (ZawieraTyp(typ, "VAT")) mgr = menedzerowie["Vat"];
-            else if (ZawieraTyp(typ, "Dekret")) mgr = null; // Rachmistrz nie ma dekretów (brak IDekrety)
-            else if (ZawieraTyp(typ, "EP")) mgr = menedzerowie["EP"];
+            // Brak klucza = brak menedżera w tej sesji (Rewizor nie ma KPiR/EP, Rachmistrz - DK).
+            string kluczMenedzera = ZawieraTyp(typ, "DokumentKsiegowy") ? "DK"
+                : ZawieraTyp(typ, "KPiR") ? "KPiR"
+                : ZawieraTyp(typ, "VAT") ? "Vat"
+                : ZawieraTyp(typ, "EP") ? "EP"
+                : null; // m.in. "Dekret" - Rachmistrz nie ma dekretów (brak IDekrety)
+            if (kluczMenedzera != null && menedzerowie.ContainsKey(kluczMenedzera)) mgr = menedzerowie[kluczMenedzera];
 
             return ZnajdzFizycznaEncje(mgr, PobierzDokumentId(wynik));
         }

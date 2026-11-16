@@ -163,7 +163,7 @@ namespace NexoBridge.Services
                 manifest,
                 wybor.InternalDocuments,
                 "skippedInternalDocument",
-                "Dokument generowany wewnetrznie przez Rachmistrza (ZUS/bank/kasa/VAT/roznice kursowe itp.) - pozostawiony w Poczekalni do recznej dekretacji.");
+                "Dokument generowany wewnetrznie przez program ksiegowy (ZUS/bank/kasa/VAT/roznice kursowe itp.) - pozostawiony w Poczekalni do recznej dekretacji.");
         }
 
         public void AktualizujPoPoczekalni(List<DocumentProcessingReport> manifest, List<DokumentDoKsiegowania> oczekujace)

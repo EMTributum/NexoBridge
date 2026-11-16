@@ -75,7 +75,8 @@ namespace NexoBridge.Services
             _logger = logger;
         }
 
-        public Task<List<VatStatusVerificationResult>> SprawdzStatusyVatAsync(DateTime dataRozliczenia)
+        // tylkoZapisyVat: sesja Rewizora - bez zapisów KPiR/EP (nie istnieją w tym produkcie).
+        public Task<List<VatStatusVerificationResult>> SprawdzStatusyVatAsync(DateTime dataRozliczenia, bool tylkoZapisyVat = false)
         {
             DateTime dataOd = new DateTime(dataRozliczenia.Year, dataRozliczenia.Month, 1);
             DateTime dataDo = new DateTime(dataRozliczenia.Year, dataRozliczenia.Month, DateTime.DaysInMonth(dataRozliczenia.Year, dataRozliczenia.Month));
@@ -84,8 +85,11 @@ namespace NexoBridge.Services
             {
                 var records = new List<VatStatusVerificationRecord>();
                 records.AddRange(PobierzRekordy("VAT", "IZapisyWEwidencjiVAT", dataOd, dataDo));
-                records.AddRange(PobierzRekordy("KPiR", "IZapisyWKPiR", dataOd, dataDo));
-                records.AddRange(PobierzRekordy("EP", "IZapisyWEP", dataOd, dataDo));
+                if (!tylkoZapisyVat)
+                {
+                    records.AddRange(PobierzRekordy("KPiR", "IZapisyWKPiR", dataOd, dataDo));
+                    records.AddRange(PobierzRekordy("EP", "IZapisyWEP", dataOd, dataDo));
+                }
 
                 records = records
                     .Where(r => !string.IsNullOrWhiteSpace(r.InvoiceNumber) || !string.IsNullOrWhiteSpace(r.CounterpartyNip))

@@ -334,7 +334,7 @@ namespace NexoBridge.Services
                 // =========================================================
                 var duplicateProgress = progress.BeginSegment(JobProgressPlan.DuplicateAuditUnits);
                 await duplicateProgress.ReportAsync(10, "Sprawdzanie potencjalnych duplikatów faktur...");
-                finalReport.DuplicateInvoices = await _duplicateDetectionService.SprawdzDuplikatyAsync(dataRozliczenia);
+                finalReport.DuplicateInvoices = await _duplicateDetectionService.SprawdzDuplikatyAsync(dataRozliczenia, job.IsRewizor);
                 await duplicateProgress.CompleteAsync("Audyt potencjalnych duplikatów zakończony.");
 
                 // =========================================================
@@ -342,7 +342,7 @@ namespace NexoBridge.Services
                 // =========================================================
                 var vatStatusProgress = progress.BeginSegment(JobProgressPlan.VatStatusAuditUnits);
                 await vatStatusProgress.ReportAsync(10, "Sprawdzanie statusu VAT kontrahentów...");
-                finalReport.VatStatusVerifications = await _vatStatusVerificationService.SprawdzStatusyVatAsync(dataRozliczenia);
+                finalReport.VatStatusVerifications = await _vatStatusVerificationService.SprawdzStatusyVatAsync(dataRozliczenia, job.IsRewizor);
                 await vatStatusProgress.CompleteAsync("Audyt statusu VAT kontrahentów zakończony.");
 
                 // =========================================================

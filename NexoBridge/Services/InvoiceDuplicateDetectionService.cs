@@ -112,7 +112,9 @@ namespace NexoBridge.Services
             _logger = logger;
         }
 
-        public Task<List<PotentialInvoiceDuplicate>> SprawdzDuplikatyAsync(DateTime dataRozliczenia)
+        // tylkoZapisyVat: sesja Rewizora - zapisy KPiR/EP tam nie istnieją, a ich menedżery mogłyby rzucić
+        // i unieważnić cały audyt (wyjątek jest łapany niżej i zwraca pustą listę).
+        public Task<List<PotentialInvoiceDuplicate>> SprawdzDuplikatyAsync(DateTime dataRozliczenia, bool tylkoZapisyVat = false)
         {
             try
             {
@@ -121,8 +123,11 @@ namespace NexoBridge.Services
 
                 var records = new List<DuplicateInvoiceRecord>();
                 records.AddRange(PobierzRekordy("VAT", "IZapisyWEwidencjiVAT", dataOd, dataDo));
-                records.AddRange(PobierzRekordy("KPiR", "IZapisyWKPiR", dataOd, dataDo));
-                records.AddRange(PobierzRekordy("EP", "IZapisyWEP", dataOd, dataDo));
+                if (!tylkoZapisyVat)
+                {
+                    records.AddRange(PobierzRekordy("KPiR", "IZapisyWKPiR", dataOd, dataDo));
+                    records.AddRange(PobierzRekordy("EP", "IZapisyWEP", dataOd, dataDo));
+                }
 
                 records = records
                     .GroupBy(KluczRekordu)

@@ -122,8 +122,9 @@ namespace NexoBridge.Infrastructure
             }
             else
             {
-                // Sesja importu to zawsze produkt Rachmistrz, który przyjmuje tylko okresy KPiR/EP - okres ksiąg
-                // rachunkowych (Rewizor) setter po cichu ignoruje. Dla takich baz to stan sprzed poprawki, nie problem.
+                // Setter przyjmuje tylko okresy zgodne z produktem sesji: Rachmistrz - KPiR/EP, Rewizor - księgi
+                // rachunkowe (ten wariant jest w sesji Rewizora zwykłą ścieżką, "Aktywny" wyżej). Okres innej
+                // formy po cichu ignoruje - kontekst zostaje bez zmian, jak przed wprowadzeniem tego zakresu.
                 logger.LogInformation("[KONTEKST OKRESU] Okres {Okres} (FormaKsiegowosci={Forma}) nie pasuje do produktu sesji - kontekst bez zmian, jak dotychczas.",
                     Opisz(okres), (FormaKsiegowosci)okres.FormaKsiegowosci);
             }
