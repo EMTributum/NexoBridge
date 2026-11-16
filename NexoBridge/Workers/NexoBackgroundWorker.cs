@@ -127,7 +127,7 @@ namespace NexoBridge.Workers
                         var sferaProgress = progress.BeginSegment(JobProgressPlan.SferaStartupUnits);
 
                         // 1. Zalogowanie poświadczeniami użytkownika z aplikacji
-                        silnik.Uruchom(job.Username, job.Password, job.DatabaseName, sferaProgress.ReportSync);
+                        silnik.Uruchom(job.Username, job.Password, job.DatabaseName, BackfillService.ResolveProduct(job.Product), sferaProgress.ReportSync);
                         await sferaProgress.CompleteAsync("Połączono z bazą i zalogowano do Sfery.");
 
                         // 2. Tworzymy loggery dla WSZYSTKICH rozbitych serwisów (dodano 3 nowe)
@@ -169,7 +169,7 @@ namespace NexoBridge.Workers
                                 var auditEngine = new SferaEngine();
                                 try
                                 {
-                                    auditEngine.Uruchom(auditJob.Username, auditJob.Password, auditJob.DatabaseName, auditProgress);
+                                    auditEngine.Uruchom(auditJob.Username, auditJob.Password, auditJob.DatabaseName, BackfillService.ResolveProduct(auditJob.Product), auditProgress);
                                     return auditEngine;
                                 }
                                 catch

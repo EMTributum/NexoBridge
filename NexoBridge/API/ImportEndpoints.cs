@@ -30,6 +30,14 @@ namespace NexoBridge.API
                     return Results.BadRequest("Nieprawidłowy okres rozliczeniowy (miesiąc 1-12, rok 2000-2100).");
                 }
 
+                // Nieznany produkt = błąd klienta (literówka), a nie ciche logowanie do złego programu - stąd 400
+                // zamiast domyślnego Rachmistrza. Brak pola = Rachmistrz (dotychczasowe zlecenia).
+                if (!ImportJob.IsSupportedProduct(job.Product))
+                {
+                    Log.Warning("Odrzucono żądanie JSON - nieobsługiwany produkt '{Product}'.", job.Product);
+                    return Results.BadRequest("Nieobsługiwany produkt (dozwolone: Rachmistrz, Rewizor).");
+                }
+
                 if (job.ImportInvoices && (job.Files == null || job.Files.Count == 0))
                 {
                     Log.Warning("Odrzucono żądanie JSON - brak plików EPP przy aktywnej fladze importu.");
@@ -46,8 +54,8 @@ namespace NexoBridge.API
                 string typZlecenia = job.ImportInvoices ? "Import + Kalkulacje" : "Tylko Kalkulacje";
                 int ksefCount = job.InvoicesMetadata?.Count(m => !string.IsNullOrWhiteSpace(m.KsefNumber)) ?? 0;
                 int ksefCodeCount = job.InvoicesMetadata?.Count(m => !string.IsNullOrWhiteSpace(m.KsefCode)) ?? 0;
-                Log.Information("Zlecenie {JobId} dodane do kolejki (Baza: {Database}, Typ: {Typ}, Pliki EPP: {FileCount}, Załączniki PDF: {AttachmentCount}, Numery KSeF: {KsefCount}, Kody KSeF: {KsefCodeCount}, CalculateVat={CalculateVat}, CalculateVatUE={CalculateVatUE})",
-                    job.JobId, job.DatabaseName, typZlecenia, job.Files?.Count ?? 0, job.Attachments?.Count ?? 0, ksefCount, ksefCodeCount, job.CalculateVat, job.CalculateVatUE);
+                Log.Information("Zlecenie {JobId} dodane do kolejki (Baza: {Database}, Typ: {Typ}, Produkt: {Product}, Pliki EPP: {FileCount}, Załączniki PDF: {AttachmentCount}, Numery KSeF: {KsefCount}, Kody KSeF: {KsefCodeCount}, CalculateVat={CalculateVat}, CalculateVatUE={CalculateVatUE})",
+                    job.JobId, job.DatabaseName, typZlecenia, job.IsRewizor ? "Rewizor" : "Rachmistrz", job.Files?.Count ?? 0, job.Attachments?.Count ?? 0, ksefCount, ksefCodeCount, job.CalculateVat, job.CalculateVatUE);
 
                 return Results.Accepted(value: new { JobId = job.JobId, Message = "Zlecenie dodane do kolejki." });
             });

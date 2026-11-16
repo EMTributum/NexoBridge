@@ -14,6 +14,27 @@ namespace NexoBridge.Models
         public int BillingMonth { get; set; }
         public int BillingYear { get; set; }
 
+        // Program klienta, w którego sesji Sfery idzie import i dekretacja: "Rachmistrz" (domyślnie, także gdy pola
+        // brak - zachowanie sprzed Rewizora) albo "Rewizor" (spółki z pełnymi księgami). Walidacja w ImportEndpoints.
+        public string Product { get; set; }
+
+        // Sesja Rewizora zwraca dekret (DokumentKsiegowy) i zapis VAT; nie ma zapisów KPiR/EP.
+        [JsonIgnore]
+        public bool IsRewizor => IsRewizorProduct(Product);
+
+        public static bool IsRewizorProduct(string product)
+        {
+            return string.Equals(product?.Trim(), "Rewizor", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Puste (= Rachmistrz), "Rachmistrz" albo "Rewizor" - bez rozróżniania wielkości liter.</summary>
+        public static bool IsSupportedProduct(string product)
+        {
+            if (string.IsNullOrWhiteSpace(product)) return true;
+            string p = product.Trim();
+            return string.Equals(p, "Rachmistrz", StringComparison.OrdinalIgnoreCase) || IsRewizorProduct(p);
+        }
+
         // ==========================================
         // NOWE: Flagi sterujące procesem (Feature Flags)
         // ==========================================
