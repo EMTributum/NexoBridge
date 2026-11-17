@@ -40,10 +40,10 @@ namespace NexoBridge.Tests
         {
             var rows = new[]
             {
-                Row("LP 1/10/2026", PayrollDocumentKind.Payout, null, 3),
-                Row("LP 1/10/2026", PayrollDocumentKind.Payout, 5, 1),
+                Row("Robotnicy", PayrollDocumentKind.Payout, null, 3),
+                Row("Robotnicy", PayrollDocumentKind.Payout, 5, 1),
             };
-            Assert.Equal(1, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.Payout, Groups("__untagged__")));
+            Assert.Equal(1, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.Payout, Groups("Robotnicy")));
         }
 
         [Fact]
@@ -51,11 +51,11 @@ namespace NexoBridge.Tests
         {
             var rows = new[]
             {
-                Row("LP 1/10/2026", PayrollDocumentKind.Unknown, 1, 10),
-                Row("LP 1/10/2026", PayrollDocumentKind.Payout, 2, 1),
+                Row("Robotnicy", PayrollDocumentKind.Unknown, 1, 10),
+                Row("Robotnicy", PayrollDocumentKind.Payout, 2, 1),
             };
-            Assert.Equal(1, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.Payout, Groups("__untagged__")));
-            Assert.Equal(0, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.ContractBill, Groups("__untagged__")));
+            Assert.Equal(1, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.Payout, Groups("Robotnicy")));
+            Assert.Equal(0, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.ContractBill, Groups("Robotnicy")));
         }
 
         [Fact]
@@ -80,7 +80,7 @@ namespace NexoBridge.Tests
         [Fact]
         public void CountRows_PustyWyborGrupZwracaZero()
         {
-            var rows = new[] { Row("LP 1/10/2026", PayrollDocumentKind.Payout, 1, 1) };
+            var rows = new[] { Row("Robotnicy", PayrollDocumentKind.Payout, 1, 1) };
             Assert.Equal(0, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.Payout, new HashSet<string>()));
         }
 
@@ -113,8 +113,8 @@ namespace NexoBridge.Tests
         {
             var rows = new[]
             {
-                new PayrollGroupCounter.PayrollGroupRow(new DateTime(2026, 10, 1), "LR 1/10/2026", PayrollDocumentKind.ContractBill, null, 7),
-                new PayrollGroupCounter.PayrollGroupRow(new DateTime(2026, 9, 1), "LR 2/09/2026", PayrollDocumentKind.ContractBill, null, 8),
+                new PayrollGroupCounter.PayrollGroupRow(new DateTime(2026, 10, 1), "Lista rachunków", PayrollDocumentKind.ContractBill, null, 7),
+                new PayrollGroupCounter.PayrollGroupRow(new DateTime(2026, 9, 1), "Lista rachunków", PayrollDocumentKind.ContractBill, null, 8),
             };
             var opt = Assert.Single(PayrollGroupCounter.BuildOptions(rows, 2026, 10));
             Assert.Equal(7, opt.ContractBillCount);

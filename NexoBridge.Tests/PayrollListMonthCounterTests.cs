@@ -71,29 +71,29 @@ namespace NexoBridge.Tests
             // Ten sam pracownik (100005) na dwoch listach jednego miesiaca - jedna pozycja faktury (jak WWS: 25 dok. = 24 osoby).
             var rows = new[]
             {
-                Payout("LP 6/10/2026", 100005),
-                Payout("LP 8/10/2026", 100005),
-                Payout("LP 2/10/2026", 100006),
+                Payout("Robotnicy", 100005),
+                Payout("Administracja", 100005),
+                Payout("Robotnicy", 100006),
             };
 
-            Assert.Equal(2, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.Payout, Groups("__untagged__")));
+            Assert.Equal(2, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.Payout, Groups("Robotnicy", "Administracja")));
         }
 
         [Fact]
         public void CountRows_RachunkiLiczaDokumenty()
         {
-            var rows = new[] { Bill("LR 1/10/2026", 8), Bill("LR 2/10/2026", 8), Bill("LR 3/10/2026", 9) };
+            var rows = new[] { Bill("Lista rachunków", 8), Bill("Lista rachunków", 8), Bill("Lista rachunków", 9) };
 
-            Assert.Equal(25, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.ContractBill, Groups("__untagged__")));
+            Assert.Equal(25, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.ContractBill, Groups("Lista rachunków")));
         }
 
         [Fact]
         public void CountRows_LiczyTylkoRodzajPozycji()
         {
-            var rows = new[] { Payout("LP 1/10/2026", 1), Bill("LR 1/10/2026", 5) };
+            var rows = new[] { Payout("Robotnicy", 1), Bill("Robotnicy", 5) };
 
-            Assert.Equal(1, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.Payout, Groups("__untagged__")));
-            Assert.Equal(5, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.ContractBill, Groups("__untagged__")));
+            Assert.Equal(1, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.Payout, Groups("Robotnicy")));
+            Assert.Equal(5, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.ContractBill, Groups("Robotnicy")));
         }
 
         [Fact]
@@ -103,13 +103,15 @@ namespace NexoBridge.Tests
             {
                 Payout("LP 1/10/2026 (Dzial A)", 1),
                 Payout("LP 2/10/2026 (Dzial B)", 2),
-                Payout("LP 3/10/2026", 3),
+                Payout("Lista plac", 3),
+                Payout("", 8),
                 Bill("LR 1/10/2026 (Dzial A)", 4),
                 Bill("LR 2/10/2026 (Dzial B)", 6),
             };
 
             Assert.Equal(1, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.Payout, Groups("dzial a")));
             Assert.Equal(2, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.Payout, Groups("Dzial A", "Dzial B")));
+            Assert.Equal(1, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.Payout, Groups("Lista plac")));
             Assert.Equal(1, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.Payout, Groups("__untagged__")));
             Assert.Equal(4, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.ContractBill, Groups("Dzial A")));
             Assert.Equal(10, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.ContractBill, Groups("Dzial A", "Dzial B")));
@@ -151,7 +153,7 @@ namespace NexoBridge.Tests
                 GroupRow("2026-10-01", "LP 3/10/2026 (Dzial A)", PayrollDocumentKind.Payout, 4),
                 GroupRow("2026-10-01", "LP 3/10/2026 (Dzial A)", PayrollDocumentKind.Payout, 5),
                 GroupRow("2026-10-01", "LR 1/10/2026 (Dzial A)", PayrollDocumentKind.ContractBill, null, 4),
-                GroupRow("2026-10-01", "LP 4/10/2026", PayrollDocumentKind.Payout, 9),
+                GroupRow("2026-10-01", "", PayrollDocumentKind.Payout, 9),
             };
 
             var options = PayrollGroupCounter.BuildOptions(rows, 2026, 10);
@@ -179,6 +181,80 @@ namespace NexoBridge.Tests
             Assert.Equal(1, option.PayoutCount);      // biezacy miesiac: jedna osoba
             Assert.Equal(2, option.HistoryCount);     // wrzesien 1 osoba + pazdziernik 1 osoba
             Assert.Equal(new DateTime(2026, 10, 1), option.LastSeenAt);
+        }
+
+        // ---- rozpoznawanie grupy z tytulu listy ----
+
+        [Theory]
+        [InlineData("Robotnicy", "robotnicy", "Robotnicy")]
+        [InlineData("Lista rachunków", "lista rachunków", "Lista rachunków")]
+        [InlineData("Lista płac korekta", "lista płac korekta", "Lista płac korekta")]
+        [InlineData("Lista płac (trenerzy)", "trenerzy", "trenerzy")]
+        [InlineData("  Lista   płac ( Trenerzy  Młodzi ) ", "trenerzy młodzi", "Trenerzy Młodzi")]
+        [InlineData("wyrównanie wynagrodzenia za sierpień 2026-Kruszczyński", "wyrównanie wynagrodzenia za sierpień 2026-kruszczyński", "wyrównanie wynagrodzenia za sierpień 2026-Kruszczyński")]
+        public void ExtractGroup_BezNawiasuGrupaToCalyTytulANawiasToJegoZawartosc(string title, string key, string label)
+        {
+            Assert.Equal((key, label), PayrollGroupCounter.ExtractGroup(title));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        [InlineData("Lista płac ()")]
+        [InlineData("Lista płac (  )")]
+        public void ExtractGroup_PustyTytulLubPustyNawiasToBezOznaczenia(string title)
+        {
+            Assert.Equal((PayrollGroupCounter.UntaggedGroupKey, "Bez oznaczenia"), PayrollGroupCounter.ExtractGroup(title));
+        }
+
+        [Fact]
+        public void NormalizeGroupKey_RozneMyslnikiISpacjeWokolNichDajaTenSamKlucz()
+        {
+            string a = PayrollGroupCounter.NormalizeGroupKey("Prowizja Pawłyk - Handlowcy");
+            Assert.Equal("prowizja pawłyk-handlowcy", a);
+            Assert.Equal(a, PayrollGroupCounter.NormalizeGroupKey("prowizja Pawłyk-Handlowcy"));
+            Assert.Equal(a, PayrollGroupCounter.NormalizeGroupKey("PROWIZJA Pawłyk" + (char)0x2014 + "Handlowcy"));
+            Assert.Equal(a, PayrollGroupCounter.NormalizeGroupKey("Prowizja  Pawłyk " + (char)0x2013 + "   Handlowcy"));
+        }
+
+        [Fact]
+        public void NormalizeGroupKey_DlugiTytulJestSkracanyDo80ZnakowBezKoncowejSpacji()
+        {
+            string key = PayrollGroupCounter.NormalizeGroupKey(new string('a', 79) + " bbb");
+            Assert.Equal(new string('a', 79), key);
+        }
+
+        [Fact]
+        public void CountRows_TaSamaGrupaWRoznejPisowniLiczySieRazem()
+        {
+            var rows = new[]
+            {
+                Payout("Prowizja Pawłyk - Handlowcy", 1),
+                Payout("prowizja Pawłyk-Handlowcy", 2),
+                Payout("Robotnicy", 3),
+            };
+
+            Assert.Equal(2, PayrollListMonthCounter.CountRows(rows, PayrollDocumentKind.Payout, Groups("Prowizja Pawłyk-Handlowcy")));
+        }
+
+        [Fact]
+        public void BuildOptions_RoznaPisowniaTejSamejGrupyToJednaOpcjaZEtykietaZNajnowszegoMiesiaca()
+        {
+            var rows = new[]
+            {
+                GroupRow("2026-09-01", "Prowizja Pawłyk - Handlowcy", PayrollDocumentKind.Payout, 1),
+                GroupRow("2026-10-01", "prowizja Pawłyk-Handlowcy", PayrollDocumentKind.Payout, 2),
+                GroupRow("2026-10-01", "Robotnicy", PayrollDocumentKind.Payout, 3),
+            };
+
+            var options = PayrollGroupCounter.BuildOptions(rows, 2026, 10);
+
+            Assert.Equal(2, options.Count);
+            var prowizja = options.Single(o => o.Key == "prowizja pawłyk-handlowcy");
+            Assert.Equal("prowizja Pawłyk-Handlowcy", prowizja.Label);
+            Assert.Equal(1, prowizja.PayoutCount);
+            Assert.Equal(2, prowizja.HistoryCount);
         }
 
         // ---- filtr grup wymaga grupy i rozpoznanego rodzaju ----

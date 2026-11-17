@@ -19,7 +19,8 @@ namespace NexoBridge.Services
     }
 
     /// <summary>
-    /// Odczytuje grupę z końcowego nawiasu tytułu listy wynagrodzeń i liczy wypłaty/rachunki należące
+    /// Odczytuje grupę z tytułu listy wynagrodzeń (zawartość końcowego nawiasu, a bez nawiasu CAŁY tytuł listy;
+    /// "Bez oznaczenia" tylko dla pustego tytułu/nawiasu) i liczy wypłaty/rachunki należące
     /// do grup wybranych w panelu billingu - wg miesiąca listy i tą samą miarą co klient bez filtra
     /// (wypłaty = różne osoby, rachunki = dokumenty; patrz PayrollListMonthCounter), także w podglądzie grup
     /// (DiscoverAsync) - liczby w panelu zgadzają się z fakturą. Konfiguracja klienta
@@ -33,6 +34,12 @@ namespace NexoBridge.Services
         private static readonly Regex SuffixGroup = new Regex(
             @"\((?<group>[^()]*)\)\s*$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        // Myślniki (kategoria Unicode "Pd": łącznik, półpauza, pauza i pokrewne) wraz ze spacjami wokół - w kluczu grupy zawsze jako "-".
+        private static readonly Regex DashWithSpaces = new Regex(
+            @"\s*\p{Pd}\s*",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private const int MaxGroupKeyLength = 80;
+        private const string UntaggedGroupLabel = "Bez oznaczenia";
 
         // Wiersze (miesiąc listy, tytuł listy, rodzaj, pracownik dla wypłat, liczba dokumentów). Pracownik pozwala
         // liczyć wypłaty w OSOBACH (ten sam pracownik na dwóch listach to jedna wypłata - jak na fakturach), zarówno
@@ -69,6 +76,9 @@ namespace NexoBridge.Services
             public DateTime? LastSeenAt { get; set; }
         }
 
+        /// <summary>Klucz grupy: małe litery, scalone białe znaki, ujednolicone myślniki (-, –, —) i spacje wokół nich,
+        /// np. "Prowizja Pawłyk - Handlowcy" i "prowizja Pawłyk-Handlowcy" to ten sam klucz. Ta sama zasada musi
+        /// obowiązywać po stronie klasyfikatora (PayrollGroupPolicyRequest).</summary>
         public static string NormalizeGroupKey(string value)
         {
             if (string.Equals(value, UntaggedGroupKey, StringComparison.Ordinal))
@@ -76,22 +86,27 @@ namespace NexoBridge.Services
                 return UntaggedGroupKey;
             }
 
-            string collapsed = CollapseWhitespace(value).Normalize(NormalizationForm.FormKC).ToLowerInvariant();
-            return collapsed.Length <= 80 ? collapsed : collapsed.Substring(0, 80);
+            string collapsed = CollapseWhitespace((value ?? string.Empty).Normalize(NormalizationForm.FormKC));
+            string key = DashWithSpaces.Replace(collapsed, "-").ToLowerInvariant();
+            return key.Length <= MaxGroupKeyLength ? key : key.Substring(0, MaxGroupKeyLength).TrimEnd();
         }
 
+        /// <summary>Grupa listy: zawartość końcowego nawiasu tytułu (np. "Lista płac (trenerzy)" -> "trenerzy"),
+        /// a gdy nawiasu nie ma - CAŁY tytuł listy (np. "Robotnicy"). Pusty tytuł albo pusty nawias to "Bez oznaczenia".
+        /// Etykieta zachowuje pisownię z tytułu, klucz jest znormalizowany (NormalizeGroupKey).</summary>
         public static (string Key, string Label) ExtractGroup(string listTitle)
         {
-            Match match = SuffixGroup.Match(listTitle ?? string.Empty);
-            if (!match.Success)
+            string title = CollapseWhitespace(listTitle);
+            if (title.Length == 0)
             {
-                return (UntaggedGroupKey, "Bez oznaczenia");
+                return (UntaggedGroupKey, UntaggedGroupLabel);
             }
 
-            string label = CollapseWhitespace(match.Groups["group"].Value);
+            Match match = SuffixGroup.Match(title);
+            string label = match.Success ? CollapseWhitespace(match.Groups["group"].Value) : title;
             string key = NormalizeGroupKey(label);
             return string.IsNullOrWhiteSpace(key)
-                ? (UntaggedGroupKey, "Bez oznaczenia")
+                ? (UntaggedGroupKey, UntaggedGroupLabel)
                 : (key, label);
         }
 
@@ -151,7 +166,12 @@ namespace NexoBridge.Services
 
             foreach (var groupRows in known.GroupBy(item => item.Group.Key, StringComparer.Ordinal))
             {
-                var option = new MutableOption { Key = groupRows.Key, Label = groupRows.First().Group.Label };
+                // Etykieta = pisownia z najnowszego miesiąca (przy remisie porządek alfabetyczny - wynik nie zależy od kolejności wierszy z SQL).
+                string label = groupRows
+                    .OrderByDescending(item => item.Row.ListMonth)
+                    .ThenBy(item => item.Group.Label, StringComparer.Ordinal)
+                    .First().Group.Label;
+                var option = new MutableOption { Key = groupRows.Key, Label = label };
                 options[groupRows.Key] = option;
                 var onlyThisGroup = new HashSet<string>(StringComparer.Ordinal) { groupRows.Key };
 
