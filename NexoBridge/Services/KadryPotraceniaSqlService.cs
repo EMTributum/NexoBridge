@@ -406,7 +406,7 @@ namespace NexoBridge.Services
             var umowy = await QueryAsync(connection, $@"
                 SELECT u.Id, u.Pracownik_Id, u.Typ, u.JestRozwiazana, u.DataRozwiazania, u.PierwszyDzienObowiazywania, u.OstatniDzienObowiazywania,
                        u.OkresObowiazywania_DataPoczatkowa, u.OkresObowiazywania_DataKoncowa, u.Sygnatura_PelnaSygnatura,
-                       g.Kwota, g.UmowaDlaKtorejAneks_Id, g.UmowaGlowna_Id,
+                       g.Kwota, g.Szczegoly, g.UmowaDlaKtorejAneks_Id, g.UmowaGlowna_Id,
                        r.Nazwa AS CzasNazwa, tg.Nazwa AS RodzajNazwa, z.Nazwa AS Zawod
                 FROM {Schema}UmowyPracownicze u
                 JOIN {Schema}UmowyPracownicze_UmowaPracowniczaGr g ON g.Id = u.Id
@@ -586,6 +586,11 @@ namespace NexoBridge.Services
                     rec["umowa_data_rozwiazania"] = Bool(umowa["JestRozwiazana"]) ? DateText(Date(umowa["DataRozwiazania"])) : null;
                     rec["umowa_kwota"] = Dec(umowa["Kwota"]);
                     rec["zawod"] = Str(umowa["Zawod"]);
+                    // przedmiot umowy (treść) w jednej linii; stawka_typ to tylko podpowiedź: umowa cywilnoprawna, kwota <100 zł = godzinowa, >=100 zł = miesięczna
+                    string przedmiot = Str(umowa["Szczegoly"]);
+                    rec["umowa_przedmiot"] = przedmiot == null ? null : Regex.Replace(przedmiot, @"\s+", " ").Trim();
+                    decimal? kwotaZlecenia = Dec(umowa["Kwota"]);
+                    rec["umowa_stawka_typ"] = typ == 2 && kwotaZlecenia > 0 ? (kwotaZlecenia < 100 ? "GODZINOWA" : "MIESIECZNA") : null;
 
                     var chain = Chain(umowyPracownika, umowa);
                     var chainIds = chain.Select(c => Id(c, "Id")).ToHashSet();
@@ -722,6 +727,8 @@ namespace NexoBridge.Services
                 ["stanowisko"] = Get(rec, "stanowisko"),
                 ["jednostka_organizacyjna"] = Get(rec, "jednostka_organizacyjna"),
                 ["zawod"] = Get(rec, "zawod"),
+                ["przedmiot"] = Get(rec, "umowa_przedmiot"),
+                ["stawka_typ"] = Get(rec, "umowa_stawka_typ"),
                 ["podstawa_skladnik"] = Get(rec, "podstawa_skladnik"),
                 ["podstawa_wartosc"] = Get(rec, "podstawa_wartosc"),
                 ["umowa_kwota"] = Get(rec, "umowa_kwota"),
